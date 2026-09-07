@@ -69,6 +69,11 @@ keeps its own Chromium profile which the user logs into once per site. Friday's
 fetch reuses those sessions headlessly. The user's everyday Chrome is never
 touched and never needs a debugging port open.
 
+**A4 is the default paper; Letter is a switch.** The printer lives in Israel
+and reports `*A4` as its default. `--paper letter` covers printing while
+travelling in the US. Cell size, imposition, and the CSS page box are all
+derived from this one setting, so they cannot drift apart.
+
 **URLs are supplied by pasting at print time.** No capture daemon, no
 bookmarklet listener, no `add` subcommand. The run ends with a prompt.
 
@@ -102,22 +107,40 @@ importing it, so the dependency is injected and tests can pass a fake.
 | `clean.py` | Strip chrome, ads, footers; judge images | `lxml`, `beautifulsoup4` |
 | `render.py` | `Document` + house stylesheet → per-cell PDF | `weasyprint` |
 | `trim.py` | Classify the trailing cell; drop it, or squeeze to lose it | `pymupdf` |
-| `impose.py` | Tile four cells onto a Letter sheet | `pypdf` |
+| `impose.py` | Tile four cells onto a sheet of the selected paper | `pypdf` |
 | `printer.py` | Build and run the `lp` command | `subprocess` (stdlib) |
 | `cli.py` | Orchestration, selection prompt, preview, confirmation | `click` |
 
-### The quarter-Letter identity
+### The quarter-page identity
 
-Halving a rectangle inverts its aspect ratio; halving it twice restores it. US
-Letter quartered is 4.25in by 5.5in, and 8.5/11 equals 4.25/5.5 exactly —
-0.7727 either way.
+A quartered sheet has the same proportions as the whole sheet, on both papers
+the tool supports — so a cell is never a distorted version of a page.
 
-This is load-bearing. `render.py` typesets each document directly onto a
-4.25in by 5.5in page, and `impose.py` places four of them at **100% scale**.
+**A4 by design.** The A series is defined by a √2 aspect ratio, chosen
+precisely so that halving preserves shape. A4 (210×297mm) halves to A5, and
+again to **A6, 105×148.5mm** — a named size the target printer already lists
+among its `PageSize` options.
+
+**Letter by coincidence.** Halving a rectangle inverts its ratio and halving
+it twice restores it, so Letter quartered is 4.25in by 5.5in and 8.5/11
+equals 4.25/5.5 exactly, 0.7727 either way. The intermediate half-Letter, at
+0.647, is a different shape — Letter only lands correctly because it is
+halved twice.
+
+This is load-bearing either way. `render.py` typesets each document directly
+onto a cell-sized page, and `impose.py` places four of them at **100% scale**.
 Nothing is resampled, no margin is lost to an aspect mismatch, and a font
 specified at 9pt measures 9pt on the paper. It also means every page count in
 the system is a count of real cells rather than of logical pages awaiting an
 unknown scale factor, which keeps the trimming arithmetic honest.
+
+| Paper | Sheet | Cell | Text block at 9mm margins |
+|---|---|---|---|
+| **A4** (default) | 210 × 297 mm | A6, 105 × 148.5 mm | 87 × 130.5 mm |
+| Letter (`--paper letter`) | 8.5 × 11 in | 4.25 × 5.5 in | 3.55 × 4.8 in |
+
+Cell size is *derived* from the paper, never configured independently, so the
+two can never drift out of agreement.
 
 ## Data model
 
@@ -176,15 +199,18 @@ returns a `Document`, and changing nothing else.
 
 6. **Impose.** Every document's pages are concatenated, each padded to a whole
    cell boundary so the next document starts at the top of a fresh cell, then
-   tiled four to a Letter page in reading order — top-left, top-right,
+   tiled four to a sheet in reading order — top-left, top-right,
    bottom-left, bottom-right. Output page 1 is the front of sheet 1 and holds
    cells 1–4; output page 2 is its back and holds cells 5–8.
 
 7. **Preview and confirm.** The PDF opens in Preview.app. The terminal reports
    cells, sheets, trimmed pages, and image counts, then asks to print.
 
-8. **Print.** `lp -d Brother_MFC_L2700DW_series -o media=Letter
-   -o sides=two-sided-long-edge -o print-scaling=none`.
+8. **Print.** `lp -d Brother_MFC_L2700DW_series -o media=A4
+   -o sides=two-sided-long-edge -o print-scaling=none`. The media follows
+   `--paper`, defaulting to A4. The printer's own defaults are already `*A4`
+   and `*DuplexNoTumble` (long-edge), so the flags agree with the hardware
+   rather than fighting it.
 
 9. **Retire.** Only now does `mail.py` open a second, read-write connection.
    For each email document that reached the PDF: `+FLAGS \Seen`,
@@ -320,12 +346,12 @@ trash  = "auto"        # discover via the \Trash special-use attribute
 
 [print]
 printer = "Brother_MFC_L2700DW_series"
-media   = "Letter"
+paper   = "A4"          # or "Letter"; overridden per-run by --paper
 duplex  = "two-sided-long-edge"
 
 [layout]
-cell        = "4.25in x 5.5in"
-margin      = "0.35in"
+# The cell is always a quarter of the sheet, derived from print.paper.
+margin      = "9mm"
 font_size   = "9pt"
 line_height = 1.35
 
@@ -415,9 +441,11 @@ Resolved during implementation, not now:
   special-use attribute, with a config fallback.
 - Whether the Brother driver honours `print-scaling=none`. Verified with one
   test sheet before trusting it.
-- Font family and size. 9pt on 1.35 line-height over a 3.55in measure gives
-  roughly 55 characters per line and 28 lines per cell, which is a reasonable
-  starting point; one real print run calibrates it.
+- Font family and size. 9pt on 1.35 line-height over A6's 87mm measure gives
+  roughly 55 characters per line and 30 lines per cell, which is a reasonable
+  starting point; one real print run calibrates it. Quarter-Letter's 3.55in
+  measure is close enough that one setting should serve both papers, but that
+  assumption is worth checking on the first US print.
 - Whether `trafilatura` outperforms hand-written stripping on table-based
   email HTML, or only on web pages. Measured against the fixture corpus in
   phase 2.
