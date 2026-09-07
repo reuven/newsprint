@@ -15,6 +15,12 @@ def test_last_successful_run_is_none_when_empty(tmp_path: Path) -> None:
     assert runlog.last_successful_run(state_dir=tmp_path) is None
 
 
+def test_last_successful_run_is_none_when_the_state_dir_does_not_exist(
+    tmp_path: Path,
+) -> None:
+    assert runlog.last_successful_run(state_dir=tmp_path / "never-created") is None
+
+
 def test_last_successful_run_finds_the_newest_printed_run(tmp_path: Path) -> None:
     runlog.record(
         {"outcome": "printed", "at": "2026-08-28T15:00:00+00:00"}, state_dir=tmp_path
