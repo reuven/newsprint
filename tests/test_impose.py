@@ -97,3 +97,30 @@ def test_letter_paper_gives_letter_sheets(tmp_path: Path) -> None:
 def test_imposing_nothing_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="nothing to impose"):
         impose([], A4, tmp_path / "sheets.pdf")
+
+
+def test_readers_are_closed_after_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """impose() previously held one PdfReader open per document for the
+    whole write and never closed any of them explicitly, relying on
+    garbage collection to eventually release the file descriptor - cheap
+    insurance against the fd limit on a run with many newsletters."""
+    from shabbat_print import impose as impose_module
+
+    cells = numbered_cells(tmp_path / "cells.pdf", 4)
+    created: list = []
+    original = impose_module.PdfReader
+
+    def tracking(*args, **kwargs):
+        reader = original(*args, **kwargs)
+        created.append(reader)
+        return reader
+
+    monkeypatch.setattr(impose_module, "PdfReader", tracking)
+
+    out = tmp_path / "sheets.pdf"
+    impose_module.impose([cells], A4, out)
+
+    assert created
+    assert all(reader.stream.closed for reader in created)

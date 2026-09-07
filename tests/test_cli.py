@@ -340,6 +340,46 @@ def test_help_explains_that_no_retire_leaves_mail_starred() -> None:
     assert "starred" in result.output
 
 
+def test_a_url_sourced_document_prints_without_ever_calling_retire(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A document with no uid (a URL origin, not email) leaves `uids`
+    empty even when `trash` is set, so retirement must be skipped
+    entirely - the run simply ends after printing, without ever calling
+    retire_printed."""
+    from datetime import datetime
+
+    from shabbat_print.models import Document, Origin
+
+    document = Document(
+        origin=Origin(kind="url", identifier="https://example.com/article"),
+        publication="Test Weekly",
+        title="An Issue",
+        date=datetime(2026, 9, 5, tzinfo=UTC),
+        html="<div><p>The Federal Reserve declined to move rates this "
+        "month, which surprised almost nobody.</p></div>",
+    )
+    retired: list[list[int]] = []
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
+    monkeypatch.setattr(
+        "shabbat_print.cli.retire_printed",
+        lambda config, uids, trash: retired.append(uids),
+    )
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code == 0
+    assert "Spooled as Printer-1" in result.output
+    assert retired == []
+
+
 def test_a_print_failure_leaves_mail_untouched(monkeypatch, tmp_path: Path) -> None:
     from shabbat_print.printer import PrintError
 

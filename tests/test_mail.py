@@ -158,6 +158,15 @@ class EmptyFetchIMAP(FakeIMAP):
         return super().uid(command, *args)
 
 
+def test_exiting_a_mailbox_that_was_never_entered_is_a_no_op() -> None:
+    """__exit__ guards on self._imap being set, in case it is ever called
+    without a matching successful __enter__ - direct branch coverage for
+    that guard's False arm, which a normal `with` block never exercises
+    (Python only calls __exit__ after __enter__ succeeds)."""
+    box = mailbox(FakeIMAP("imap.example.com"))
+    box.__exit__(None, None, None)  # must not raise
+
+
 def test_using_the_mailbox_before_it_is_open_raises() -> None:
     box = mailbox(FakeIMAP("imap.example.com"))
     with pytest.raises(MailError, match="not open"):

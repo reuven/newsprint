@@ -17,7 +17,7 @@ fixtures:
 	uv run python scripts/make_fixtures.py
 
 test:
-	uv run pytest --cov=shabbat_print --cov-report=term-missing
+	uv run pytest --cov=shabbat_print --cov-report=term-missing --cov-branch
 
 lint:
 	uv run ruff format src tests scripts
