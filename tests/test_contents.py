@@ -100,24 +100,111 @@ def test_a_short_subject_is_included_on_the_line(config, tmp_path: Path) -> None
     assert "Money Stuff" in text
 
 
-def test_a_subject_that_does_not_fit_is_left_off_the_line(
+def test_truncate_to_width_returns_text_unchanged_when_it_already_fits() -> None:
+    from shabbat_print.contents import _truncate_to_width
+
+    assert _truncate_to_width("Short", max_width_pt=400.0, font_size_pt=9.0) == "Short"
+
+
+def test_truncate_to_width_falls_back_to_a_mid_word_cut_with_no_space() -> None:
+    """When not even the first word fits, there is no word boundary to
+    snap back to - the truncation falls back to a bare character cut
+    rather than losing the word (and its ellipsis) entirely."""
+    from shabbat_print.contents import _truncate_to_width
+
+    result = _truncate_to_width(
+        "Supercalifragilisticexpialidocious", max_width_pt=8.0, font_size_pt=9.0
+    )
+    assert result == "S…"
+
+
+def test_truncate_to_width_keeps_a_mid_word_cut_when_the_only_space_is_leading() -> (
+    None
+):
+    """A pathological but real edge case: if the only space in the fitted
+    text is a leading one (e.g. a subject with stray leading whitespace),
+    snapping "back to the last word boundary" would leave nothing at all
+    - the mid-word cut is kept instead of collapsing to an empty result."""
+    from shabbat_print.contents import _truncate_to_width
+
+    result = _truncate_to_width(" Extraordinarily", max_width_pt=10.0, font_size_pt=9.0)
+    assert result == " E…"
+
+
+def test_row_text_drops_the_subject_when_the_budget_is_too_small_to_fit_any(
     config, tmp_path: Path
 ) -> None:
-    """At 4-up the width is the scarce resource: a subject that would not
-    fit must be dropped rather than wrap the row onto a second line."""
+    """A budget that is positive but smaller than even one truncated
+    character plus the ellipsis must still fall back to the byline alone,
+    not a bare dangling ellipsis."""
+    from dataclasses import replace
+
     from shabbat_print.contents import _row_text
+    from shabbat_print.stamp import byline
+
+    built = _built(0, publication="Money Stuff")
+    name = byline(built.document.publication, built.document.author)
+    from shabbat_print.contents import _text_width_pt
+
+    # Just enough room for the byline and separator, but not one more
+    # character of a truncated subject.
+    budget = _text_width_pt(f"{name} — ", font_size_pt=9.0) + 2.0
+    built = replace(
+        built, document=replace(built.document, title="Supercalifragilistic")
+    )
+    text = _row_text(built, remaining_width_pt=budget, font_size_pt=9.0)
+    assert text == name
+    assert "…" not in text
+
+
+def test_a_long_subject_is_truncated_with_an_ellipsis(config, tmp_path: Path) -> None:
+    """The subject must always appear, truncated to fit one line - never
+    wrapped to two, and never dropped just because the whole thing does
+    not fit."""
+    from dataclasses import replace
+
+    from shabbat_print.contents import _row_text
+
+    built = _built(0, publication="Money Stuff")
+    built = replace(
+        built,
+        document=replace(
+            built.document,
+            title="Talking Interest Rates with Ricardo Caballero",
+        ),
+    )
+    text = _row_text(built, remaining_width_pt=120.0, font_size_pt=9.0)
+    assert built.document.title not in text  # the full title does not fit
+    assert "Money Stuff" in text
+    assert text.endswith("…")
+    # A genuine prefix of the real title, not an unrelated truncation.
+    subject_part = text.split(" — ", 1)[1]
+    assert built.document.title.startswith(subject_part.removesuffix("…").rstrip())
+
+
+def test_an_extremely_narrow_budget_drops_the_subject_entirely(
+    config, tmp_path: Path
+) -> None:
+    """If there is no room for even one truncated character, the subject
+    is dropped rather than rendered as a bare ellipsis dangling off the
+    byline - the number's own column is never touched either way."""
+    from shabbat_print.contents import _row_text
+    from shabbat_print.stamp import byline
 
     built = [_built(0, publication="Money Stuff")][0]
     text = _row_text(built, remaining_width_pt=1.0, font_size_pt=9.0)
     assert built.document.title not in text
-    assert "Money Stuff" in text
+    assert "…" not in text
+    assert text == byline(built.document.publication, built.document.author)
 
 
-def test_a_document_whose_full_line_does_not_fit_appears_without_its_subject(
+def test_a_document_whose_subject_does_not_fully_fit_is_truncated_not_dropped(
     config, tmp_path: Path
 ) -> None:
     """End-to-end: a genuinely long subject line must not appear verbatim
-    in the rendered contents page - only the byline should."""
+    in the rendered contents page, but a truncated, ellipsis-terminated
+    prefix of it must still appear - the byline alone is no longer
+    considered an acceptable substitute."""
     long_title = "A Subject Line So Long It Cannot Possibly Fit Next To The Name " * 3
     built = [_built(0, cells=3), _built(1, cells=3)]
     document = built[1].document
@@ -130,6 +217,43 @@ def test_a_document_whose_full_line_does_not_fit_appears_without_its_subject(
     text = page_text(result.pdf, 0)
     assert long_title not in text
     assert "Newsletter 01" in text
+    # A genuine, word-boundary-truncated prefix of the real subject.
+    assert "A Subject Line So" in text
+    assert "…" in text
+
+
+def test_a_long_subject_never_wraps_the_row_in_a_real_render(
+    config, tmp_path: Path
+) -> None:
+    """Verify against the actual rendered PDF, not the width estimate: a
+    row with a long, realistic subject must occupy exactly one text line,
+    the same as a row with no subject at all - never two."""
+    built = [
+        _built(0, publication="Paul Krugman"),
+        _built(1, publication="William D. Cohan"),
+    ]
+    from dataclasses import replace
+
+    built[0] = replace(
+        built[0],
+        document=replace(
+            built[0].document,
+            title="Talking Interest Rates with Ricardo Caballero, and Whether "
+            "U.S. Bonds Are Still the Ultimate Safe Asset in a Turbulent Year",
+        ),
+    )
+    built[1] = replace(
+        built[1],
+        document=replace(built[1].document, title="WarnerMount Arb Smoke Signals"),
+    )
+    result, converged = build_contents(built, config, PACKET_DATE, tmp_path)
+    assert converged
+    assert result is not None
+    text = page_text(result.pdf, 0)
+    lines = [line for line in text.splitlines() if line.strip()]
+    # Header (masthead-equivalent line) + summary line + one line per
+    # newsletter - never more, which is what a wrapped row would add.
+    assert len(lines) == 2 + len(built)
 
 
 def test_non_convergence_within_the_cap_reports_rather_than_hangs(

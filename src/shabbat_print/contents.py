@@ -39,15 +39,18 @@ _BODY_FONT = "tiro"  # PyMuPDF's built-in Times-like serif: the closest
 # base-14 stand-in for render.py's Charter/Georgia body font.
 _NUMBER_GAP_PT = 6.0
 _SUBJECT_SEPARATOR = " — "  # em dash
+_ELLIPSIS = "…"
 # Times is narrower than Charter/Georgia at the same point size, so a width
 # estimate taken from PyMuPDF's "tiro" alone under-predicts how much room a
 # subject actually needs once WeasyPrint sets it in the real body font -
-# every entry then "fits" the estimate but several visibly wrap onto a
-# second line in the rendered PDF, exactly what a two-line row is supposed
-# to avoid. Verified against the acceptance run's real 17-newsletter packet:
-# scoring against 75% of the estimated remaining width removes every
-# wrapped row while still keeping short subjects ("Day Off",
-# "Weaponized Interdependence") on the line.
+# text sized to exactly fill the estimate then visibly wraps onto a second
+# line in the rendered PDF, exactly what a one-line row is supposed to
+# avoid. Verified against the acceptance run's real 17-newsletter packet,
+# and re-verified end to end (test_a_long_subject_never_wraps_the_row_in_a_
+# real_render) once every row started carrying a subject rather than only
+# the ones whose subject happened to fit outright: scoring against 75% of
+# the estimated remaining width keeps every row - including a subject
+# truncated to fill that budget exactly - on one line.
 _SUBJECT_FIT_SAFETY = 0.75
 
 
@@ -62,14 +65,70 @@ def _starting_cells(built: Sequence[Built], contents_cells: int) -> list[int]:
     return starts
 
 
+def _text_width_pt(text: str, font_size_pt: float) -> float:
+    return pymupdf.get_text_length(text, fontname=_BODY_FONT, fontsize=font_size_pt)
+
+
+def _truncate_to_width(text: str, max_width_pt: float, font_size_pt: float) -> str:
+    """Truncate text with a trailing ellipsis so it fits max_width_pt.
+
+    Snapped back to the last full word that fits, not cut mid-word - "A
+    Subject Line So…" reads as a real title clipped for space; "A Subject
+    Line So Lon…" reads as a bug. Falls back to a mid-word cut only when
+    not even one whole word fits in the budget.
+
+    Returns the empty string if not even one character plus the ellipsis
+    fits - the caller's cue to drop the subject entirely rather than
+    render a bare ellipsis with nothing in front of it.
+    """
+    if _text_width_pt(text, font_size_pt) <= max_width_pt:
+        return text
+    lo, hi = 0, len(text)
+    best = ""
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = text[:mid].rstrip() + _ELLIPSIS
+        if _text_width_pt(candidate, font_size_pt) <= max_width_pt:
+            best = candidate
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    if best == _ELLIPSIS or not best:
+        return ""
+    fitted = best.removesuffix(_ELLIPSIS).rstrip()
+    if " " in fitted:
+        word_boundary = fitted.rsplit(" ", 1)[0]
+        if word_boundary:
+            return f"{word_boundary}{_ELLIPSIS}"
+    return best
+
+
 def _row_text(item: Built, remaining_width_pt: float, font_size_pt: float) -> str:
+    """Byline, plus as much of the subject as fits on one line.
+
+    The number column is separate and untouched by any of this - the
+    starting-cell number a reader navigates by is never truncated. The
+    subject is truncated with an ellipsis rather than dropped outright
+    whenever the full "name — subject" does not fit, since a reader can
+    still recognise a truncated headline but gets nothing at all from a
+    bare byline; it is dropped only in the extreme case where not even
+    one truncated character of it would fit next to the name.
+    """
     name = byline(item.document.publication, item.document.author)
-    candidate = f"{name}{_SUBJECT_SEPARATOR}{item.document.title}"
-    fits = (
-        pymupdf.get_text_length(candidate, fontname=_BODY_FONT, fontsize=font_size_pt)
-        <= remaining_width_pt
+    full = f"{name}{_SUBJECT_SEPARATOR}{item.document.title}"
+    if _text_width_pt(full, font_size_pt) <= remaining_width_pt:
+        return full
+    subject_budget_pt = remaining_width_pt - _text_width_pt(
+        f"{name}{_SUBJECT_SEPARATOR}", font_size_pt
     )
-    return candidate if fits else name
+    if subject_budget_pt <= 0:
+        return name
+    fitted_subject = _truncate_to_width(
+        item.document.title, subject_budget_pt, font_size_pt
+    )
+    if not fitted_subject:
+        return name
+    return f"{name}{_SUBJECT_SEPARATOR}{fitted_subject}"
 
 
 def _contents_document(
