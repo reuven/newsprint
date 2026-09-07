@@ -29,7 +29,6 @@ _TEMPLATE = Template("""<!DOCTYPE html>
 @page {
   size: ${width_mm}mm ${height_mm}mm;
   margin: ${margin_mm}mm;
-  @bottom-center { content: counter(page); font-size: 6pt; color: #555; }
 }
 html { font-size: ${font_size_pt}pt; }
 body { font-family: Charter, Georgia, "Times New Roman", serif;

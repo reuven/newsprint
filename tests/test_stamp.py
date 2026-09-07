@@ -1,0 +1,249 @@
+from datetime import UTC, date, datetime
+from pathlib import Path
+
+import pymupdf
+import pytest
+
+from shabbat_print.config import LayoutConfig
+from shabbat_print.geometry import A4, MM_PER_INCH, POINTS_PER_INCH
+from shabbat_print.models import Document, Origin, Verdict
+from shabbat_print.pdfutil import page_text, text_extent_mm
+from shabbat_print.pipeline import Built
+from shabbat_print.stamp import byline, format_packet_date, stamp_packet
+
+LAYOUT = LayoutConfig(margin_mm=9.0, font_size_pt=9.0, line_height=1.35)
+PACKET_DATE = date(2026, 9, 5)
+
+
+def _pdf(path: Path, pages: int) -> Path:
+    """A blank multi-page PDF, sized like an A4 cell - what stamp_packet
+    needs, since it stamps whatever pages a Built's .pdf already has."""
+    width, height = A4.cell.as_points()
+    with pymupdf.open() as document:
+        for index in range(pages):
+            page = document.new_page(width=width, height=height)
+            page.insert_text((20, 40), f"page {index + 1} body text", fontsize=9)
+        document.save(path)
+    return path
+
+
+def _document(
+    publication: str, author: str | None = None, title: str = "An Issue"
+) -> Document:
+    return Document(
+        origin=Origin(kind="email", identifier=f"<{publication}@example.com>"),
+        publication=publication,
+        title=title,
+        date=datetime(2026, 9, 5, tzinfo=UTC),
+        html="<p>content</p>",
+        author=author,
+    )
+
+
+def _built(
+    publication: str,
+    pages: int,
+    tmp_path: Path,
+    name: str,
+    author: str | None = None,
+) -> Built:
+    pdf = _pdf(tmp_path / f"{name}.pdf", pages)
+    return Built(
+        document=_document(publication, author=author),
+        pdf=pdf,
+        cells=pages,
+        verdict=Verdict.FULL,
+    )
+
+
+def test_footer_segments_appear_with_correct_values(tmp_path: Path) -> None:
+    built = [_built("Money Stuff", 1, tmp_path, "a", author="Matt Levine")]
+    stamped = stamp_packet(built, PACKET_DATE, A4, LAYOUT, tmp_path / "out")
+    text = page_text(stamped[0], 0)
+    assert "Money Stuff" in text
+    assert "Matt Levine" in text
+    assert "1/1" in text
+    assert "1" in text
+    assert "5 Sep 2026" in text
+
+
+def test_packet_numbers_run_continuously_across_documents(tmp_path: Path) -> None:
+    """The property CSS could not express: a 3-cell document followed by a
+    2-cell one yields packet numbers 1,2,3 then 4,5."""
+    built = [
+        _built("First Weekly", 3, tmp_path, "a"),
+        _built("Second Weekly", 2, tmp_path, "b"),
+    ]
+    stamped = stamp_packet(built, PACKET_DATE, A4, LAYOUT, tmp_path / "out")
+    first_texts = [page_text(stamped[0], i) for i in range(3)]
+    second_texts = [page_text(stamped[1], i) for i in range(2)]
+
+    for expected, text in zip([1, 2, 3], first_texts, strict=True):
+        assert f"{expected} · 5 Sep 2026" in text
+    for expected, text in zip([4, 5], second_texts, strict=True):
+        assert f"{expected} · 5 Sep 2026" in text
+
+
+def test_in_newsletter_numbers_restart_per_document(tmp_path: Path) -> None:
+    built = [
+        _built("First Weekly", 3, tmp_path, "a"),
+        _built("Second Weekly", 2, tmp_path, "b"),
+    ]
+    stamped = stamp_packet(built, PACKET_DATE, A4, LAYOUT, tmp_path / "out")
+    first_texts = [page_text(stamped[0], i) for i in range(3)]
+    second_texts = [page_text(stamped[1], i) for i in range(2)]
+
+    assert "1/3" in first_texts[0]
+    assert "2/3" in first_texts[1]
+    assert "3/3" in first_texts[2]
+    assert "1/2" in second_texts[0]
+    assert "2/2" in second_texts[1]
+
+
+@pytest.mark.parametrize(
+    ("publication", "author"),
+    [
+        ("Axios Macro", "Axios Macro"),
+        ("The Bulwark", "The Bulwark Podcast"),
+        ("The Bulwark Podcast", "The Bulwark"),
+    ],
+)
+def test_author_omitted_when_it_duplicates_the_publication(
+    tmp_path: Path, publication: str, author: str
+) -> None:
+    built = [_built(publication, 1, tmp_path, "a", author=author)]
+    # stamp_packet must produce a stamped page at all, using this byline -
+    # the direct assertion below is what proves the byline itself collapses,
+    # since publication and author overlap heavily enough here that checking
+    # the rendered text couldn't distinguish "included" from "duplicated".
+    stamp_packet(built, PACKET_DATE, A4, LAYOUT, tmp_path / "out")
+    assert byline(publication, author) == publication
+
+
+def test_byline_combines_distinct_publication_and_author() -> None:
+    assert byline("Money Stuff", "Matt Levine") == "Money Stuff · Matt Levine"
+
+
+def test_byline_with_no_author_is_bare_publication() -> None:
+    assert byline("Money Stuff", None) == "Money Stuff"
+
+
+def test_long_publication_name_truncates_while_numbers_stay_intact(
+    tmp_path: Path,
+) -> None:
+    long_name = "The Extraordinarily Long Newsletter Name That Will Not Fit " * 3
+    built = [_built(long_name, 1, tmp_path, "a", author="Some Author Name")]
+    stamped = stamp_packet(built, PACKET_DATE, A4, LAYOUT, tmp_path / "out")
+    text = page_text(stamped[0], 0)
+    assert "..." in text
+    assert "1/1" in text
+    assert "1 · 5 Sep 2026" in text
+    # The numbers must not themselves be truncated.
+    assert "5 Sep 2026" in text
+
+
+def test_footer_baseline_is_inside_the_bottom_margin_band(tmp_path: Path) -> None:
+    built = [_built("Money Stuff", 1, tmp_path, "a", author="Matt Levine")]
+    stamped = stamp_packet(built, PACKET_DATE, A4, LAYOUT, tmp_path / "out")
+    scale = POINTS_PER_INCH / MM_PER_INCH
+    margin_pt = LAYOUT.margin_mm * scale
+    with pymupdf.open(stamped[0]) as document:
+        page = document[0]
+        footer_boundary = page.rect.height - margin_pt
+        blocks = [b for b in page.get_text("blocks") if "5 Sep 2026" in b[4]]
+    assert blocks
+    # The footer block's top must sit at or below the boundary that
+    # text_extent_mm uses to exclude footer content - i.e. strictly inside
+    # the margin band, so it provably cannot overlap body text.
+    assert blocks[0][1] >= footer_boundary
+
+
+def test_stamped_footer_does_not_corrupt_text_extent(tmp_path: Path) -> None:
+    """Stamping runs after trim, so the footer must not be mistaken for
+    body content by text_extent_mm, which excludes anything in the margin
+    band by position."""
+    built = [_built("Money Stuff", 1, tmp_path, "a", author="Matt Levine")]
+    stamped = stamp_packet(built, PACKET_DATE, A4, LAYOUT, tmp_path / "out")
+    extent = text_extent_mm(stamped[0], 0, LAYOUT.margin_mm)
+    usable_mm = A4.cell.height_mm - 2 * LAYOUT.margin_mm
+    assert extent < usable_mm  # the footer text itself is excluded
+
+
+def test_date_uses_the_month_table_not_strftime(tmp_path: Path) -> None:
+    """%b is locale-dependent (see mail._IMAP_MONTHS's docstring for the bug
+    a Hebrew locale already caused once). format_packet_date must keep
+    working the same way regardless of what the month table says, proving
+    it is the source of truth rather than strftime."""
+    import shabbat_print.stamp as stamp_module
+
+    original = stamp_module._MONTHS
+    try:
+        stamp_module._MONTHS = ("Jan-x",) + original[1:]
+        assert format_packet_date(date(2026, 1, 5)) == "5 Jan-x 2026"
+    finally:
+        stamp_module._MONTHS = original
+
+
+def test_format_packet_date_matches_expected_english_abbreviation() -> None:
+    assert format_packet_date(date(2026, 9, 5)) == "5 Sep 2026"
+
+
+def test_truncate_of_a_short_string_is_unchanged() -> None:
+    from shabbat_print.stamp import _truncate
+
+    assert _truncate("Money Stuff", max_width_pt=200.0) == "Money Stuff"
+
+
+def test_truncate_of_an_empty_string_is_unchanged() -> None:
+    """Defensive: byline() never actually returns "", since Document.
+    publication is always set - but _truncate must not crash if a future
+    caller passes one, since nothing in its type signature rules it out."""
+    from shabbat_print.stamp import _truncate
+
+    assert _truncate("", max_width_pt=200.0) == ""
+
+
+def test_truncate_with_no_room_even_for_the_ellipsis_yields_nothing() -> None:
+    """A budget narrower than the ellipsis itself must not crash or return
+    a lone, meaningless ellipsis - it degrades to nothing."""
+    from shabbat_print.stamp import _truncate
+
+    assert _truncate("Money Stuff", max_width_pt=0.5) == ""
+
+
+def test_date_is_correct_under_a_non_english_locale() -> None:
+    """The bug this guards against is real, not hypothetical: strftime('%b')
+    under a Hebrew locale produced 'ספט׳' where IMAP - and now this footer -
+    needs 'Sep' (see mail._IMAP_MONTHS). Switch LC_TIME for real and prove
+    format_packet_date is unaffected, because it never calls strftime('%b')
+    at all."""
+    import locale
+
+    original = locale.setlocale(locale.LC_TIME)
+    try:
+        locale.setlocale(locale.LC_TIME, "he_IL.UTF-8")
+    except locale.Error:
+        pytest.skip("he_IL.UTF-8 locale not installed on this machine")
+    try:
+        # Prove the locale switch actually took effect and would have
+        # broken a strftime('%b')-based implementation.
+        assert date(2026, 9, 5).strftime("%b") != "Sep"
+        assert format_packet_date(date(2026, 9, 5)) == "5 Sep 2026"
+    finally:
+        locale.setlocale(locale.LC_TIME, original)
+
+
+def test_draw_footer_skips_a_segment_that_truncates_to_nothing() -> None:
+    """When the left segment has no room at all, _draw_footer must not
+    insert an empty string - only skip it, leaving the numbers alone."""
+    import pymupdf
+
+    from shabbat_print.stamp import _draw_footer
+
+    width, height = A4.cell.as_points()
+    with pymupdf.open() as document:
+        page = document.new_page(width=width, height=height)
+        _draw_footer(page, A4, LAYOUT, left="", centre="1/1", right="1 · 5 Sep 2026")
+        text = page.get_text()
+    assert "1/1" in text
+    assert "1 · 5 Sep 2026" in text

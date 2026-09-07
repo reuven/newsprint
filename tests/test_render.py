@@ -112,6 +112,20 @@ def test_text_extent_counts_a_trailing_numeric_content_block(
     )
 
 
+def test_no_page_number_is_emitted_in_the_footer(config, tmp_path: Path) -> None:
+    """F1 moved the footer to stamp.py; render.py's CSS must no longer draw
+    a bare page-number counter in @bottom-center, or the packet footer
+    stamped later would collide with it."""
+    pdf = render(document(PROSE * 40), config, out_dir=tmp_path)
+    assert page_count(pdf) > 1
+    # The old counter rendered a bare "1" (just the page number, on its
+    # own) in the bottom margin; with no @bottom-center rule at all, the
+    # only text on the page is the masthead, heading and body.
+    text = page_text(pdf, 0).replace("\n", " ")
+    words = text.split(" ")
+    assert "1" not in words
+
+
 def test_dollar_signs_in_content_survive(config, tmp_path: Path) -> None:
     """The template substitutes with string.Template; $ in the content must
     not be treated as a placeholder."""
