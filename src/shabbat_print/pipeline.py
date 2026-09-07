@@ -62,8 +62,15 @@ def build(
                 pdf,
                 config.printing.paper,
                 config.layout,
-                rerender=lambda compression: render_fn(
-                    cleaned, config, compression=compression, out_dir=document_dir
+                # Bind cleaned/document_dir as defaults rather than relying on
+                # the closure: fit() calls rerender synchronously within this
+                # same loop iteration, so the late-binding B023 warning is a
+                # false positive here, but binding explicitly documents that
+                # and keeps the lint clean.
+                rerender=lambda compression, cleaned=cleaned, document_dir=document_dir: (
+                    render_fn(
+                        cleaned, config, compression=compression, out_dir=document_dir
+                    )
                 ),
             )
             built.append(

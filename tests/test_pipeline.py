@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -23,7 +23,7 @@ def document(html: str, identifier: str = "<a@example.com>") -> Document:
         origin=Origin(kind="email", identifier=identifier, uid=1),
         publication="Test Weekly",
         title="An Issue",
-        date=datetime(2026, 9, 5, tzinfo=timezone.utc),
+        date=datetime(2026, 9, 5, tzinfo=UTC),
         html=html,
     )
 
@@ -62,7 +62,9 @@ def _explode(*args, **kwargs):
     raise RuntimeError("boom")
 
 
-def test_an_empty_document_is_a_failure_not_a_blank_page(config, tmp_path: Path) -> None:
+def test_an_empty_document_is_a_failure_not_a_blank_page(
+    config, tmp_path: Path
+) -> None:
     """A newsletter that cleans down to nothing must not print an empty cell."""
     built, failed = build([document("")], config, tmp_path)
     assert built == []
