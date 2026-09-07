@@ -355,3 +355,90 @@ def test_a_sentence_starting_with_like_or_share_survives(line: str) -> None:
 )
 def test_round_3_footer_phrases_are_definite_chrome(line: str) -> None:
     assert is_definite_chrome_line(line) is True
+
+
+# Round 3b, item 1: "READ TO ME" is a Bulwark variant of "READ IN APP" -
+# the same audio/app-affordance CTA shape, requested by name. "LISTEN NOW"
+# is added alongside it: a small family investigation (measured against
+# the full 268-fixture corpus) found it always appears as a bare,
+# standalone line immediately after a "Listen now (NN mins) | ..."
+# metadata line, in five other publications' fixtures
+# (datascienceeducation, johnfdickerson, pragmaticengineer, serioustrouble,
+# thepythonshow), with zero collisions with real content across the whole
+# corpus. Both are literals, not a broader regex - see the module comment
+# by _FULL_LINE_CHROME's definition for why a wider family pattern
+# ("read"/"listen" + "now"/"to me"/"in app"/"aloud") was considered and
+# declined.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "READ TO ME",
+        "read to me",
+        "Read To Me",
+        "LISTEN NOW",
+        "Listen now",
+        "listen now",
+    ],
+)
+def test_full_line_chrome_phrases_round_3b(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+# The load-bearing distinction for the "listen now" addition: a real,
+# plausible sentence that merely contains those two words, or is close in
+# shape, must not collapse to the bare phrase and must survive. None of
+# these is the entire line "listen now" or "read to me" once collapsed
+# and case-folded.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Listen to me for a moment before you decide anything.",
+        "Read this to me tomorrow, would you?",
+        "You can read it in the app if you'd rather.",
+        "Listen now (18 mins) | Season 11, Episode 8",
+    ],
+)
+def test_a_sentence_resembling_the_audio_app_family_survives(line: str) -> None:
+    assert is_full_line_chrome(line) is False
+
+
+# Round 3b, item 2: a publisher's own pipe/middot/bullet-separated
+# navigation row - "View in browser | nytimes.com" - where "View in
+# browser" is already a known whole-line chrome phrase and "nytimes.com"
+# is a bare domain (see _BARE_DOMAIN's own comment). Every one of the
+# three delimiters clean.py's docstring names is checked, and the row
+# survives collapsing internal whitespace differently (no spaces at all,
+# vs. spaces on both sides of the delimiter) the way a real rendered line
+# might.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "View in browser|nytimes.com",
+        "View in browser | nytimes.com",
+        "View in browser · nytimes.com",
+        "View in browser • bulwark.com",
+        "Unsubscribe|nytimes.com",
+    ],
+)
+def test_a_delimiter_separated_navigation_row_is_chrome(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+# The load-bearing safety property: EVERY segment must independently
+# qualify, or nothing is removed. A pipe in a real sentence, a nav row
+# with one genuine content segment among the chrome, an empty trailing
+# segment, and an engagement-stats row that superficially looks similar
+# (the live corpus's real "a month ago · 99 likes · 11 comments · Renee
+# DiResta" line) must all survive.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "View in browser | The Fed considers new rate hikes this week",
+        "Cost: $10 | Free shipping available",
+        "View in browser | ",
+        "a month ago · 99 likes · 11 comments · Renee DiResta",
+        "U.S. | Real Content",
+    ],
+)
+def test_a_mixed_or_non_chrome_delimited_row_survives(line: str) -> None:
+    assert is_full_line_chrome(line) is False

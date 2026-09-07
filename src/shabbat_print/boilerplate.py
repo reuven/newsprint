@@ -198,8 +198,88 @@ _FULL_LINE_CHROME: frozenset[str] = frozenset(
         "read in app",
         "view in browser",
         "share the bulwark",
+        # Round 3b, item 1: "READ TO ME" is a Bulwark variant of "READ IN
+        # APP" - the same audio/app-affordance CTA shape, requested by
+        # name. "LISTEN NOW" is added alongside it after a small family
+        # investigation: measured against the full 268-fixture corpus, it
+        # always appears as a bare, standalone line immediately after a
+        # "Listen now (NN mins) | ..." metadata line, in five other
+        # publications' fixtures (datascienceeducation, johnfdickerson,
+        # pragmaticengineer, serioustrouble, thepythonshow), with zero
+        # collisions with real content anywhere in the corpus (172 total
+        # matches of a broader trial pattern, every one of them either
+        # "READ IN APP", "READ TO ME", or a bare "Listen now" line).
+        #
+        # A genuinely general family pattern - "read"/"listen" combined
+        # with "now"/"to me"/"in app"/"aloud" - was tried and declined:
+        # only these three specific combinations have fixture evidence,
+        # and at least one untested combination is a real risk rather than
+        # a hypothetical one. "Listen to me." is a plausible complete
+        # sentence in first-person prose (an imperative, the same shape as
+        # a real closing line), not just a CTA, and nothing in the corpus
+        # rules that collision out. Literals only, matching this
+        # frozenset's existing style.
+        "read to me",
+        "listen now",
     }
 )
+
+# Round 3b, item 2: a publisher's own pipe/middot/bullet-separated
+# navigation row, e.g. the NYT's "View in browser | nytimes.com". This is
+# rendered as several inline siblings (a link, a bare "|" span, a second
+# link) sitting on one visual line with no <br> between them, so it is
+# invisible to _strip_line_chrome's per-node candidate walk the same way a
+# lone "View in browser" sharing a line with real prose is (see that
+# module's _is_standalone_line) - but the *containing* block-level
+# element's own merged text (its get_text(" ", strip=True), already
+# offered whole to is_full_line_chrome by the existing candidate loop -
+# see clean.py's docstring) is exactly "View in browser | nytimes.com".
+# No new mechanism is needed in clean.py: extending what counts as a
+# whole-line chrome match here is enough.
+_NAV_DELIMITER = re.compile(r"[|·•]")
+
+# A bare domain - "nytimes.com", "bulwark.com" - with no scheme and no
+# path: one or more dot-separated labels ending in a plausible top-level
+# domain of at least two letters, and nothing else (fullmatch, the same
+# anchoring _ADDRESS_LINE and _URL_ONLY already use). This is what keeps
+# an abbreviation that happens to contain dots ("U.S.", "e.g.") from
+# matching - both lack a final two-letter-or-longer label after their
+# last dot.
+_BARE_DOMAIN = re.compile(
+    r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}",
+    re.IGNORECASE,
+)
+
+
+def _is_bare_domain(segment: str) -> bool:
+    return bool(_BARE_DOMAIN.fullmatch(segment))
+
+
+def _is_delimited_chrome_row(text: str) -> bool:
+    """True when `text` splits on '|', '·' or '•' into two or more
+    non-blank segments, EVERY one of which is independently a known
+    whole-line chrome match (recursing into is_full_line_chrome itself -
+    "View in browser", "Unsubscribe", a postal address, ...) or a bare
+    domain. Requiring every segment to qualify, not just one, is the
+    safety margin this function exists to provide: a real sentence that
+    happens to contain a pipe, or a nav row with one genuine content
+    segment among the chrome, is never all-chrome on a per-segment basis,
+    so it survives untouched. Measured against the fixture corpus: 341
+    existing lines contain one of these three delimiters, and none of
+    them newly matches - including a genuine engagement-stats row
+    ("a month ago · 99 likes · 11 comments · Renee DiResta") that
+    superficially looks like the same shape but has no segment that is
+    itself known chrome.
+    """
+    if not _NAV_DELIMITER.search(text):
+        return False
+    segments = [segment.strip() for segment in _NAV_DELIMITER.split(text)]
+    if len(segments) < 2 or any(not segment for segment in segments):
+        return False
+    return all(
+        is_full_line_chrome(segment) or _is_bare_domain(segment) for segment in segments
+    )
+
 
 # "You received this email because ..." always continues with a
 # newsletter-specific reason (who you signed up for, which list you are
@@ -250,6 +330,9 @@ def is_full_line_chrome(text: str) -> bool:
     address is never reachable through the ratio path no matter what else
     this pass removes from around it. It needs the same kind of
     independent, explicit match "Unsubscribe" already has.
+
+    Also matches a delimiter-separated navigation row (round 3b, item 2) -
+    see _is_delimited_chrome_row for the rule and its safety argument.
     """
     collapsed = _normalize_full_line(text)
     if not collapsed:
@@ -261,7 +344,9 @@ def is_full_line_chrome(text: str) -> bool:
         return True
     if _GET_THE_APP_LINE.match(normalized):
         return True
-    return bool(_ADDRESS_LINE.fullmatch(collapsed))
+    if _ADDRESS_LINE.fullmatch(collapsed):
+        return True
+    return _is_delimited_chrome_row(collapsed)
 
 
 def content_ratio(text: str) -> float:

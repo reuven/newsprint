@@ -525,6 +525,84 @@ def test_a_bare_text_node_sharing_a_line_with_real_content_survives() -> None:
     assert "Unsubscribe" in cleaned.html
 
 
+def test_a_delimiter_separated_nav_row_across_inline_siblings_is_removed() -> None:
+    """Round 3b, item 2: the real NYT structure - "View in browser" and
+    "nytimes.com" as two separate <a> tags either side of a bare "|"
+    <span>, all three sitting on one visual line with no <br> between
+    them, inside one wrapping <div>. Neither <a> is individually
+    'standalone' (each shares its line with the others), so the existing
+    per-node candidate walk in _strip_line_chrome never offers "View in
+    browser" alone to is_full_line_chrome - but the wrapping <div> IS a
+    block-level candidate, and its own get_text(" ", strip=True) is
+    exactly "View in browser | nytimes.com", which the extended
+    is_full_line_chrome now matches. Decomposing that one <div> removes
+    all three inline children together.
+
+    Deliberately placed mid-document, nested one level inside a container
+    it shares with a second real paragraph - the same shape as the live
+    NYT fixture, where the nav row sits well past the opening headline
+    and teaser. This is load-bearing, not decorative: with the nav row
+    first and at the top level (tried first, and reverted after it was
+    caught passing even with the boilerplate.py change reverted), the
+    PRE-EXISTING ratio-based leading-run and top-level block passes
+    already remove it on their own - "view in browser" is already a
+    PHRASES substring, so its content_ratio alone is 0.0 - which would
+    silently pass this test without exercising the new mechanism at all.
+    Nesting it below real content and beside a second real paragraph
+    keeps its containing block's overall ratio high (so the block-level
+    pass spares it) and keeps it off both the leading and trailing runs
+    (both stop at the real prose on either side of it first), so only the
+    new is_full_line_chrome extension can remove it here."""
+    html = (
+        "<html><body><div>"
+        "<h1>Headline</h1>"
+        "<p>Real opening paragraph with enough content to read as genuine "
+        "prose about the subject at hand, not a caption or a label.</p>"
+        "<div>"
+        '<div><a href="https://nl.nytimes.com/x">View in browser</a>'
+        '<span style="margin:0 10px">|</span>'
+        '<a href="https://nl.nytimes.com/y">nytimes.com</a></div>'
+        "<p>A second real paragraph with plenty of its own substance, "
+        "reading as genuine article prose rather than a link label.</p>"
+        "</div>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "View in browser" not in cleaned.html
+    assert "nytimes.com" not in cleaned.html
+    assert "genuine prose" in cleaned.html
+    assert "second real paragraph" in cleaned.html
+
+
+def test_a_mixed_nav_row_with_one_real_content_segment_survives() -> None:
+    """The safety property, exercised end to end: a nav row with one
+    known-chrome segment ("View in browser") and one segment of real text
+    (a headline, not a domain and not a known chrome phrase) must survive
+    whole - requiring every segment to qualify is what keeps a genuine
+    link among the chrome from being swept away with it. Same mid-document
+    nesting as the removal test above, so this exercises the same
+    candidate path and isn't spared for an unrelated, positional reason."""
+    html = (
+        "<html><body><div>"
+        "<h1>Headline</h1>"
+        "<p>Real opening paragraph with enough content to read as genuine "
+        "prose about the subject at hand, not a caption or a label.</p>"
+        "<div>"
+        '<div><a href="https://example.com/x">View in browser</a>'
+        '<span style="margin:0 10px">|</span>'
+        "<span>The Fed considers new rate hikes this week</span></div>"
+        "<p>A second real paragraph with plenty of its own substance, "
+        "reading as genuine article prose rather than a link label.</p>"
+        "</div>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "View in browser" in cleaned.html
+    assert "The Fed considers new rate hikes this week" in cleaned.html
+    assert "genuine prose" in cleaned.html
+    assert "second real paragraph" in cleaned.html
+
+
 def test_removing_a_line_cleans_up_an_emptied_parent() -> None:
     """Removing a line must not leave an empty parent element behind that
     renders as a blank gap on the printed page."""
