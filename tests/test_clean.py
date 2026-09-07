@@ -599,7 +599,7 @@ def test_cleaning_every_fixture_never_raises() -> None:
     # cannot fail on the defect it claims to guard against. If the
     # fixture corpus is regenerated and these particular newsletters
     # vanish, replace the pins rather than deleting the check.
-    dickerson = "johnfdickerson-substack-com.eml"
+    dickerson = "johnfdickerson-substack-com-oldest.eml"
     mandarin = "realtimemandarin-lessons-substack-com.eml"
     assert dickerson in cleaned_by_name, "fixture corpus changed: re-pin this test"
     assert mandarin in cleaned_by_name, "fixture corpus changed: re-pin this test"
