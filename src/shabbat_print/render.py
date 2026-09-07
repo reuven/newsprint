@@ -29,7 +29,7 @@ html { font-size: ${font_size_pt}pt; }
 body { font-family: Charter, Georgia, "Times New Roman", serif;
        line-height: $line_height; margin: 0; hyphens: auto; text-align: justify; }
 .masthead { font-family: -apple-system, "Helvetica Neue", Helvetica, sans-serif;
-            font-size: 0.70rem; letter-spacing: 0.06em;
+            font-size: 0.70rem; text-transform: uppercase; letter-spacing: 0.06em;
             border-bottom: 0.5pt solid #000; padding-bottom: 2pt; margin-bottom: 6pt; }
 h1 { font-size: 1.15rem; line-height: 1.2; margin: 0 0 6pt; }
 h2, h3, h4 { font-size: 1rem; margin: 8pt 0 3pt; }

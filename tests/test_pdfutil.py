@@ -19,4 +19,4 @@ def test_text_extent_of_a_blank_page_is_zero(tmp_path: Path) -> None:
     document.save(path)
     document.close()
 
-    assert text_extent_mm(path, 0) == 0.0
+    assert text_extent_mm(path, 0, margin_mm=9.0) == 0.0

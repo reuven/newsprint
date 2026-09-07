@@ -45,7 +45,10 @@ def test_title_and_publication_appear(config, tmp_path: Path) -> None:
     pdf = render(document(PROSE), config, out_dir=tmp_path)
     text = page_text(pdf, 0)
     assert "Private Credit Gets Complicated" in text
-    assert "Money Stuff" in text.replace("\n", " ")
+    # The masthead is deliberately rendered in uppercase (text-transform,
+    # paired with letter-spacing), so compare case-insensitively rather
+    # than bending production behaviour to fit the test.
+    assert "money stuff" in text.replace("\n", " ").lower()
 
 
 def test_content_appears(config, tmp_path: Path) -> None:
@@ -87,12 +90,26 @@ def test_letter_paper_gives_a_letter_cell(tmp_path: Path) -> None:
 
 def test_text_extent_of_a_short_page_is_small(config, tmp_path: Path) -> None:
     pdf = render(document(PROSE), config, out_dir=tmp_path)
-    assert text_extent_mm(pdf, 0) < A4.cell.height_mm / 2
+    assert text_extent_mm(pdf, 0, config.layout.margin_mm) < A4.cell.height_mm / 2
 
 
 def test_text_extent_of_a_full_page_is_large(config, tmp_path: Path) -> None:
     pdf = render(document(PROSE * 40), config, out_dir=tmp_path)
-    assert text_extent_mm(pdf, 0) > A4.cell.height_mm / 2
+    assert text_extent_mm(pdf, 0, config.layout.margin_mm) > A4.cell.height_mm / 2
+
+
+def test_text_extent_counts_a_trailing_numeric_content_block(
+    config, tmp_path: Path
+) -> None:
+    """A numeral that is genuine content (a year, here) must not be mistaken
+    for the footer's page-number counter and excluded from the extent."""
+    without_numeral = render(document(PROSE), config, out_dir=tmp_path / "without")
+    with_numeral = render(
+        document(PROSE + "<p>2026</p>"), config, out_dir=tmp_path / "with"
+    )
+    assert text_extent_mm(with_numeral, 0, config.layout.margin_mm) > text_extent_mm(
+        without_numeral, 0, config.layout.margin_mm
+    )
 
 
 def test_dollar_signs_in_content_survive(config, tmp_path: Path) -> None:
