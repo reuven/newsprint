@@ -224,3 +224,55 @@ def test_enter_raises_when_select_fails() -> None:
     fake = SelectFailsIMAP("imap.example.com")
     with pytest.raises(MailError, match="INBOX/toprint"), mailbox(fake):
         pass
+
+
+def test_retire_marks_read_unstars_then_moves() -> None:
+    fake = FakeIMAP("imap.example.com")
+    with mailbox(fake) as box:
+        result = box.retire([7], "INBOX/Trash")
+    assert result.retired == (7,)
+    assert result.failed == ()
+
+    uid_calls = [call for call in fake.calls if call[0] == "uid"]
+    assert uid_calls == [
+        ("uid", "STORE", "7", "+FLAGS", "(\\Seen)"),
+        ("uid", "STORE", "7", "-FLAGS", "(\\Flagged)"),
+        ("uid", "MOVE", "7", "INBOX/Trash"),
+    ]
+
+
+def test_retire_reopens_the_folder_writable() -> None:
+    fake = FakeIMAP("imap.example.com")
+    with mailbox(fake) as box:
+        box.retire([7], "INBOX/Trash")
+    assert fake.selected == ("INBOX/toprint", False)
+
+
+def test_retire_reports_failures_without_stopping() -> None:
+    fake = FakeIMAP("imap.example.com")
+
+    original = fake.uid
+
+    def failing(command, *args):
+        if command == "MOVE" and args[0] == "8":
+            fake.calls.append(("uid", command, *args))
+            return ("NO", [b"mailbox full"])
+        return original(command, *args)
+
+    fake.uid = failing
+    with mailbox(fake) as box:
+        result = box.retire([7, 8, 9], "INBOX/Trash")
+    assert result.retired == (7, 9)
+    assert result.failed == (8,)
+
+
+def test_retire_with_no_uids_touches_nothing() -> None:
+    fake = FakeIMAP("imap.example.com")
+    with mailbox(fake) as box:
+        result = box.retire([], "INBOX/Trash")
+    assert result.retired == ()
+    assert result.failed == ()
+    assert not [call for call in fake.calls if call[0] == "uid"]
+
+    # The folder was never reopened writable, so nothing could have changed.
+    assert fake.selected == ("INBOX/toprint", True)

@@ -8,7 +8,8 @@ job has reached the print queue.
 
 import imaplib
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import date
 from types import TracebackType
 from typing import Self
@@ -53,6 +54,12 @@ def password_for(host: str, user: str) -> str:
             f"Store it once with:  keyring set {host} {user}"
         )
     return secret
+
+
+@dataclass(frozen=True, slots=True)
+class RetireResult:
+    retired: tuple[int, ...]
+    failed: tuple[int, ...]
 
 
 class Mailbox:
@@ -132,3 +139,33 @@ class Mailbox:
             if match:
                 return match.group(1).decode()
         raise MailError("no folder advertises the \\Trash special-use attribute")
+
+    def retire(self, uids: Sequence[int], trash_folder: str) -> RetireResult:
+        """Mark read, unstar, and move to Trash.
+
+        Called only after a job has reached the print queue, and only for the
+        messages whose content actually reached it.
+        """
+        if not uids:
+            return RetireResult(retired=(), failed=())
+
+        connection = self._connection
+        connection.select(self._folder, readonly=False)
+
+        retired: list[int] = []
+        failed: list[int] = []
+        for uid in uids:
+            identifier = str(uid)
+            steps = (
+                ("STORE", identifier, "+FLAGS", "(\\Seen)"),
+                ("STORE", identifier, "-FLAGS", "(\\Flagged)"),
+                ("MOVE", identifier, trash_folder),
+            )
+            for step in steps:
+                status, _ = connection.uid(*step)
+                if status != "OK":
+                    failed.append(uid)
+                    break
+            else:
+                retired.append(uid)
+        return RetireResult(retired=tuple(retired), failed=tuple(failed))
