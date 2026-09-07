@@ -319,6 +319,252 @@ def test_trailing_run_dropped_elements_are_reported() -> None:
     assert any("unsubscribe" in block.text.lower() for block in cleaned.blocks_dropped)
 
 
+def test_leading_chrome_run_is_removed() -> None:
+    """F1: the leading-run rule mirrors the trailing one. 'Forwarded this
+    email?' sits at the very start of several real newsletters, ahead of
+    any content and nested inside a container the block-level pass cannot
+    see into (the same nested-container shape G1 fixed for the trailing
+    side)."""
+    html = (
+        "<html><body>"
+        "<div><p>Also visible top-level content, just here so the real "
+        "test group below is not the body's only child.</p></div>"
+        "<div>"
+        "<p>Forwarded this email? Subscribe here for more</p>"
+        "<h1>Headline</h1>"
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Forwarded this email" not in cleaned.html
+    assert "Headline" in cleaned.html
+    assert "genuine prose" in cleaned.html
+
+
+def test_leading_run_never_reaches_past_a_genuine_first_paragraph() -> None:
+    """The leading rule's whole safety case: nothing after the first real
+    content element is ever touched, however chrome-shaped it looks."""
+    html = (
+        "<html><body><div>"
+        "<h1>Headline</h1>"
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        "<p>Read more below</p>"
+        "<p>Another real closing paragraph with plenty of substance to "
+        "read as genuine article prose rather than a link label.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Headline" in cleaned.html
+    assert "Read more below" in cleaned.html
+    assert "Another real closing paragraph" in cleaned.html
+
+
+def test_leading_run_stops_at_a_heading_even_mid_run() -> None:
+    html = (
+        "<html><body><div>"
+        "<p>Unsubscribe</p>"
+        "<h2>Don't Call it a Cult</h2>"
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Don't Call it a Cult" in cleaned.html
+    assert "Unsubscribe" not in cleaned.html
+
+
+def test_leading_run_guard_never_empties_a_nonempty_document() -> None:
+    from bs4 import BeautifulSoup
+
+    from shabbat_print.clean import _strip_leading_chrome_run
+
+    html = "<div><p>Unsubscribe</p><p>&copy; 2026 Test Co</p></div>"
+    soup = BeautifulSoup(f"<html><body>{html}</body></html>", "lxml")
+    root = soup.body
+    dropped = _strip_leading_chrome_run(root)
+    assert dropped == ()
+    assert "Unsubscribe" in root.get_text()
+    assert "Test Co" in root.get_text()
+
+
+def test_leading_run_dropped_elements_are_reported() -> None:
+    html = (
+        "<html><body><div>"
+        "<p>Unsubscribe</p>"
+        "<h1>Headline</h1>"
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert any("unsubscribe" in block.text.lower() for block in cleaned.blocks_dropped)
+
+
+# Round 2, F3: a definite-phrase line can be removed anywhere, not just at
+# the leading or trailing edge - the position most of these phrases were
+# actually found at in the live queue was the *middle* of the document,
+# where neither directional rule can reach.
+def test_mid_document_chrome_line_is_removed() -> None:
+    html = (
+        "<html><body><div>"
+        "<h1>Headline</h1>"
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        "<p>A MESSAGE FROM OUR SPONSOR</p>"
+        "<p>Another real paragraph with plenty of substance to read as "
+        "genuine article prose rather than a link label or a caption.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "A MESSAGE FROM OUR SPONSOR" not in cleaned.html
+    assert "genuine prose" in cleaned.html
+    assert "Another real paragraph" in cleaned.html
+
+
+def test_a_bare_inline_chrome_link_that_stands_alone_is_removed() -> None:
+    """F2's confirmed finding: a bare <a>Unsubscribe</a> that is a sibling
+    of block content (not embedded in a sentence) is invisible to
+    _iter_text_elements - see the round-2 report's trace. F3 must reach it
+    even though the trailing/leading passes structurally cannot."""
+    html = (
+        "<html><body><div>"
+        "<h1>Headline</h1>"
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        "<table><tr><td><span>Get the Bulwark app</span></td></tr></table>"
+        "<div>Copyright notice and a street address line here.</div>"
+        '<a href="https://example.com/u">Unsubscribe</a>'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Unsubscribe" not in cleaned.html
+    assert "Get the Bulwark app" not in cleaned.html
+    assert "genuine prose" in cleaned.html
+
+
+def test_an_inline_chrome_word_embedded_in_a_real_sentence_survives() -> None:
+    """The adversarial case F3 exists to avoid: 'unsubscribe' as one word
+    inside a real sentence, not a line by itself, must not be touched -
+    matches the existing leaf-level protection in
+    test_leaf_tags_are_kept_whole_not_fragmented, now also checked against
+    the new whole-document line pass."""
+    html = (
+        "<html><body><div><p>The chapter closes on a long, thoughtful note "
+        "about markets and memory, and if it moved you at all, there is an "
+        '<a href="https://example.com/u">unsubscribe</a> link somewhere '
+        "below, which almost nobody ever clicks.</p></div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "unsubscribe" in cleaned.html
+    assert "markets and memory" in cleaned.html
+
+
+def test_standalone_line_check_of_a_detached_tag_is_false() -> None:
+    """_strip_line_chrome always checks a candidate's `parent` is not None
+    before calling this, so a genuinely parentless node never reaches it
+    in practice - but the guard is real defense, not a stray branch, so it
+    is exercised directly here rather than left untested."""
+    from bs4 import BeautifulSoup
+
+    from shabbat_print.clean import _is_standalone_line
+
+    soup = BeautifulSoup("<a>Unsubscribe</a>", "lxml")
+    tag = soup.a
+    tag.extract()
+    assert tag.parent is None
+    assert _is_standalone_line(tag) is False
+
+
+def test_a_bare_address_text_node_between_br_tags_is_removed() -> None:
+    """F2's second confirmed finding, from the live queue: a footer block
+    like '© 2026<br>Substack Inc.<br>548 Market Street...<br><a>Unsubscribe
+    </a>' has its address as a bare, untagged text node sandwiched between
+    two <br> tags, sharing a <p> with real sibling content ('© 2026',
+    'Substack Inc.'). content_ratio treats the whole block as content
+    (0.18, over CHROME_RATIO) because 'Substack Inc.' ends in a period and
+    defeats the short-line fallback - and it can never be reached by
+    position either, since it survives well inside the trailing run's
+    stopping point. The address itself has no wrapping tag for
+    _strip_line_chrome's tag-only walk to find, so it must also examine
+    bare text nodes, using <br> (not just its parent's tag boundary) to
+    tell 'its own line' apart from a real sibling on a different line."""
+    html = (
+        "<html><body><div>"
+        "<h1>Headline</h1>"
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        "<p>© 2026<span>Some Publisher Inc.</span><br>"
+        "548 Market Street PMB 72296, San Francisco, CA 94104<br>"
+        '<a href="https://example.com/u">Unsubscribe</a></p>'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "548 Market Street" not in cleaned.html
+    assert "Unsubscribe" not in cleaned.html
+    assert "genuine prose" in cleaned.html
+
+
+def test_a_bare_text_node_sharing_a_line_with_real_content_survives() -> None:
+    """The adversarial case for the bare-text-node walk: even though the
+    bare text node's own value is an exact phrase match ('Unsubscribe'),
+    it shares its actual rendered line (the same <br>-delimited run,
+    rather than its parent's whole child list) with a real sentence
+    continuing right after it with no line break in between, so it must
+    not be pulled out."""
+    html = (
+        "<html><body><div><p>Please read on.<br>Unsubscribe"
+        "<span> is not the only way to leave a mailing list, our editor "
+        "explained in detail near the end of the letter.</span></p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "is not the only way to leave a mailing list" in cleaned.html
+    assert "Unsubscribe" in cleaned.html
+
+
+def test_removing_a_line_cleans_up_an_emptied_parent() -> None:
+    """Removing a line must not leave an empty parent element behind that
+    renders as a blank gap on the printed page."""
+    html = (
+        "<html><body><div>"
+        "<h1>Headline</h1>"
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        '<div class="sponsor-wrap"><p>A MESSAGE FROM OUR SPONSOR</p></div>'
+        "<p>Another real paragraph with plenty of substance to read as "
+        "genuine article prose rather than a link label or a caption.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "sponsor-wrap" not in cleaned.html
+
+
+def test_two_separate_matches_together_empty_their_shared_wrapper() -> None:
+    """The wrapper's own combined text ('Restack Unsubscribe') is not
+    itself a phrase match, so it survives its own candidacy check and is
+    only removed once both of its children have been peeled off one at a
+    time - exercising the cascade as an actual loop, not a one-step
+    shortcut where the outermost matching tag already is the wrapper."""
+    html = (
+        "<html><body><div>"
+        "<h1>Headline</h1>"
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        '<div class="chrome-wrap"><p>Restack</p><p>Unsubscribe</p></div>'
+        "<p>Another real paragraph with plenty of substance to read as "
+        "genuine article prose rather than a link label or a caption.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "chrome-wrap" not in cleaned.html
+    assert "Restack" not in cleaned.html
+    assert "Unsubscribe" not in cleaned.html
+    assert "genuine prose" in cleaned.html
+    assert "Another real paragraph" in cleaned.html
+
+
 def test_other_document_fields_are_preserved() -> None:
     cleaned = clean_document(document(NEWSLETTER))
     assert cleaned.title == "An Issue"

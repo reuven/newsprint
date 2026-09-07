@@ -4,6 +4,7 @@ from shabbat_print.boilerplate import (
     content_ratio,
     is_boilerplate_line,
     is_definite_chrome_line,
+    is_full_line_chrome,
 )
 
 PROSE = "Private credit is having a moment, and not entirely a good one."
@@ -191,3 +192,107 @@ def test_need_help_brand_partnerships_and_watch_now_were_tried_and_reverted() ->
         )
         is False
     )
+
+
+# Round 2, F3: a line-level check distinct from is_definite_chrome_line.
+# is_definite_chrome_line matches a PHRASES entry as a SUBSTRING anywhere in
+# the line - safe for scoring a block's overall ratio (one bad line among
+# several good ones just lowers the score), but never safe for deleting a
+# specific line outright, since a real sentence can quote or contain one of
+# those words. is_full_line_chrome instead requires the phrase to BE the
+# whole line (after collapsing internal whitespace to single spaces and
+# case-folding), which is what makes it safe to apply anywhere in a
+# document rather than only where a block or a leading/trailing run
+# happens to expose it.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Forwarded this email?",
+        "forwarded this email?",
+        "Forwarded this email? Subscribe here for more",
+        "Restack",
+        "restack",
+        "A MESSAGE FROM OUR SPONSOR",
+        "a message from our sponsor",
+        "Unsubscribe",
+        "unsubscribe",
+        "Get the Bulwark app",
+        "Get the NYT app",
+        (
+            "You received this email because you signed up for David French "
+            "from The New York Times."
+        ),
+        "You received this email because you are on our list.",
+    ],
+)
+def test_full_line_chrome_phrases(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "",
+        "   ",
+        PROSE,
+        (
+            "The chapter closes on a long note, and there is an unsubscribe "
+            "link somewhere below, which almost nobody ever clicks."
+        ),
+        "Get the picture",
+        "Get the sense of how this played out",
+        "Get the app",
+        "You received a warm welcome from the whole team.",
+        "Restacking the shelves took all afternoon.",
+    ],
+)
+def test_full_line_chrome_rejects_a_substring_or_unrelated_line(line: str) -> None:
+    """The two adversarial cases this exists to guard: 'unsubscribe' quoted
+    inside a real sentence, and the declined general 'get the ...' pattern
+    (no trailing 'app') that the earlier wave found matches real prose
+    ('get the picture', 'get the sense')."""
+    assert is_full_line_chrome(line) is False
+
+
+def test_full_line_chrome_collapses_internal_line_breaks() -> None:
+    """The 'Forwarded this email?' button renders as three visual lines
+    ('Forwarded this email?' / 'Subscribe here' / 'for more') inside one
+    element; collapsed with a single space this is exactly the second
+    known phrase."""
+    assert (
+        is_full_line_chrome("Forwarded this email?\nSubscribe here\nfor more") is True
+    )
+
+
+# F2's live-queue trace found one surviving case is_full_line_chrome's
+# original phrase list did not cover: a footer block whose text is
+# "© 2026\nSubstack Inc.\n548 Market Street PMB 72296, San Francisco, CA
+# 94104\nUnsubscribe" scores content_ratio 0.159 - just over CHROME_RATIO
+# (0.15) - because "Substack Inc." ends in a period, which defeats
+# is_boilerplate_line's short-line fallback (it reads as a "sentence").
+# Once _strip_line_chrome removes the standalone "Unsubscribe" line, the
+# ratio of what remains rises even further (removing a zero-content line
+# only raises the surviving fraction), so the address is never reachable
+# through the ratio path at all - it needs its own explicit, whole-line
+# match, the same way "Unsubscribe" already has one. Reuses the existing,
+# already-vetted _ADDRESS_LINE pattern (anchored with fullmatch, proven
+# safe against an address quoted mid-sentence) rather than inventing a new
+# heuristic.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "548 Market Street PMB 72296, San Francisco, CA 94104",
+        "1255 22nd St NW #18958, Washington, DC 20037",
+        "PMB 72296, San Francisco, CA 94104",
+    ],
+)
+def test_full_line_chrome_matches_a_postal_address(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+def test_full_line_chrome_does_not_match_an_address_quoted_in_a_sentence() -> None:
+    line = (
+        "She used to live at 1600 Pennsylvania Ave NW, Washington, DC 20500 "
+        "before the campaign ended."
+    )
+    assert is_full_line_chrome(line) is False

@@ -139,6 +139,89 @@ def is_boilerplate_line(line: str) -> bool:
     return len(stripped) < SHORT_LINE and not stripped.endswith(_SENTENCE_END)
 
 
+# Round 2, F3: phrases that are unambiguously chrome only when they
+# constitute an ENTIRE line - as opposed to PHRASES above, which is matched
+# as a substring anywhere in a line. Substring matching is safe only for
+# the ratio-based scoring content_ratio does (one bad line among several
+# good ones just lowers a block's score, never deletes anything); it is
+# not safe for deleting a specific line outright, since a real sentence can
+# quote or contain one of those words ("...an unsubscribe link somewhere
+# below..."). A full-line match is a different, stronger claim - see
+# clean.py's _strip_line_chrome, which is the only caller allowed to act on
+# it by deleting the matching element outright, anywhere in the document.
+_FULL_LINE_CHROME: frozenset[str] = frozenset(
+    {
+        "forwarded this email?",
+        "forwarded this email? subscribe here for more",
+        "restack",
+        "a message from our sponsor",
+        "unsubscribe",
+    }
+)
+
+# "You received this email because ..." always continues with a
+# newsletter-specific reason (who you signed up for, which list you are
+# on), so it cannot be a fixed phrase - but the opening words alone are
+# distinctive enough of bulk-mail disclosure language that no genuine
+# editorial sentence plausibly starts this way. (The shorter substring
+# "you received this" is already in PHRASES above for ratio scoring; this
+# is deliberately the longer, more specific opening, since a prefix match
+# is a stronger commitment than a substring match and this is the one
+# used to delete a whole line.)
+_FULL_LINE_CHROME_PREFIXES: tuple[str, ...] = ("you received this email because",)
+
+# "Get the Bulwark app" - the user's own report names one publication, but
+# the shape "Get the <name> app" is a general CTA-button pattern, not
+# something a real sentence would independently produce as its own whole
+# line. A broader "get the ..." pattern (no required "app" ending) was
+# tried in the previous wave and found real false positives in the fixture
+# corpus ("get the picture", "get the sense"); anchoring on the "... app"
+# ending keeps the generalization past the one named publication without
+# reintroducing that risk.
+_GET_THE_APP_LINE = re.compile(r"^get the [\w' .-]+ app$", re.IGNORECASE)
+
+
+def _normalize_full_line(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def is_full_line_chrome(text: str) -> bool:
+    """True when `text`, taken as one whole rendered line (its internal
+    line breaks collapsed to single spaces), is unambiguously chrome
+    regardless of where in the document it sits.
+
+    Unlike is_definite_chrome_line, which matches a PHRASES entry as a
+    substring anywhere in the line, this requires the phrase to BE the
+    whole line: "Unsubscribe" alone is chrome, but "...there is an
+    unsubscribe link somewhere below..." is not, and this function says
+    False for the latter - the exact adversarial case this project's
+    history warns about.
+
+    Also matches a bare postal address (reusing the same _ADDRESS_LINE
+    pattern is_definite_chrome_line already uses, anchored with fullmatch
+    and already proven safe against an address quoted mid-sentence). This
+    closes a gap the F2 trace found live: a footer block reading "© 2026 /
+    Substack Inc. / <address> / Unsubscribe" scores content_ratio just
+    over CHROME_RATIO because "Substack Inc." ends in a period and so
+    reads as a "sentence" under the short-line fallback - and removing the
+    standalone "Unsubscribe" line only raises that ratio further, so the
+    address is never reachable through the ratio path no matter what else
+    this pass removes from around it. It needs the same kind of
+    independent, explicit match "Unsubscribe" already has.
+    """
+    collapsed = _normalize_full_line(text)
+    if not collapsed:
+        return False
+    normalized = collapsed.casefold()
+    if normalized in _FULL_LINE_CHROME:
+        return True
+    if any(normalized.startswith(prefix) for prefix in _FULL_LINE_CHROME_PREFIXES):
+        return True
+    if _GET_THE_APP_LINE.match(normalized):
+        return True
+    return bool(_ADDRESS_LINE.fullmatch(collapsed))
+
+
 def content_ratio(text: str) -> float:
     """Fraction of non-blank characters that look like real content."""
     lines = [line.strip() for line in text.splitlines() if line.strip()]
