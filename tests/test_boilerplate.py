@@ -296,3 +296,45 @@ def test_full_line_chrome_does_not_match_an_address_quoted_in_a_sentence() -> No
         "before the campaign ended."
     )
     assert is_full_line_chrome(line) is False
+
+
+# Round 3, section A: whole-line exact matches, extending the F3 list.
+# "Like" and "Comment" were declined in round 2 as PHRASES substring
+# entries, correctly - the live queue has real article sentences containing
+# those words. is_full_line_chrome is a different, stronger claim (the
+# whole line, not a substring), so these are safe here even though they
+# were not safe there.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Share",
+        "share",
+        "Like",
+        "Comment",
+        "Share Now",
+        "READ IN APP",
+        "View in browser",
+        "Share The Bulwark",
+    ],
+)
+def test_full_line_chrome_phrases_round_3(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+# The load-bearing distinction for section A: these are real article
+# sentences from the live queue that a substring match on "Like"/"Share"
+# would destroy. is_full_line_chrome must say False for all of them,
+# because none of them is, in its entirety, one of the bare words above -
+# each has more text sharing the same line.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Like most of America, Dry Powder will be…",
+        "Like it or not, we now live in a world in which the weapon…",
+        "Like, right now.",
+        "Share this newsletter with someone who prefers truth, honesty…",
+    ],
+)
+def test_a_sentence_starting_with_like_or_share_survives(line: str) -> None:
+    assert is_full_line_chrome(line) is False
+

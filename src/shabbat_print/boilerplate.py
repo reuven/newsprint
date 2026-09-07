@@ -156,6 +156,25 @@ _FULL_LINE_CHROME: frozenset[str] = frozenset(
         "restack",
         "a message from our sponsor",
         "unsubscribe",
+        # Round 3, section A. "Like" and "Comment" were declined in round 2
+        # as PHRASES substring entries - the live queue contains real
+        # article sentences ("Like most of America, Dry Powder will be...",
+        # "Like it or not, we now live in a world...", "Like, right now.",
+        # "Share this newsletter with someone who prefers truth...") that a
+        # substring match would destroy. This is a different, stronger
+        # claim: matched only when one of these words IS the whole
+        # rendered line (see is_full_line_chrome's docstring and
+        # _strip_line_chrome's _is_standalone_line guard), which none of
+        # those sentences ever are - a sentence beginning with "Like" or
+        # "Share" always has more text on the same line. See
+        # test_a_sentence_starting_with_like_or_share_survives.
+        "share",
+        "like",
+        "comment",
+        "share now",
+        "read in app",
+        "view in browser",
+        "share the bulwark",
     }
 )
 
