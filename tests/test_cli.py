@@ -485,6 +485,46 @@ def test_an_imap_readonly_error_from_retire_is_reported_not_crashed(
     assert "not writable" in result.output
 
 
+def test_a_retire_connection_failure_after_printing_is_reported_not_crashed(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The second connection - a fresh imaplib.IMAP4_SSL(host), opened
+    minutes after the first, immediately after the printer has already
+    accepted the job - can fail with a raw OSError (socket.gaierror on a
+    DNS blip, ssl.SSLError on a dropped VPN) that neither MailError nor
+    imaplib.IMAP4.error covers. The run must report that printing
+    succeeded and mail was not retired, not let the OSError escape as a
+    bare traceback leaving the user unsure what happened."""
+
+    class _ExplodingMailbox:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            raise OSError("[Errno 8] nodename nor servname provided, or not known")
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _ExplodingMailbox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code != 0
+    assert not isinstance(result.exception, OSError)
+    assert "Spooled as Printer-1" in result.output
+    assert "Printed, but could not retire" in result.output
+
+
 def test_an_unconfigured_account_says_what_to_set(monkeypatch, tmp_path: Path) -> None:
     """With no config file at all, the error names the missing keys."""
     result = CliRunner().invoke(main, ["--config", str(tmp_path / "absent.toml")])

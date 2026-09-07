@@ -220,11 +220,16 @@ def main(
     if trash and uids:
         try:
             result = retire_printed(config, uids, trash)
-        except (MailError, imaplib.IMAP4.error) as error:
+        except (MailError, imaplib.IMAP4.error, OSError) as error:
             # The job is already spooled: password_for(), Mailbox.__enter__(),
             # or imaplib's own readonly guard on the write-mode SELECT can
             # all still raise here, after printing has already succeeded.
-            # Report exactly what happened rather than let it escape as a
+            # OSError covers the second connection itself failing to open -
+            # imaplib.IMAP4_SSL(host) raises a raw OSError (socket.gaierror
+            # on a DNS blip, ssl.SSLError on a dropped VPN both being
+            # subclasses of it), minutes after the first connection and
+            # right after the printer has already accepted the job. Report
+            # exactly what happened rather than let it escape as a
             # traceback that leaves the user unsure whether their mail was
             # touched.
             runlog.record({"outcome": "retire-failed", "error": str(error)})
