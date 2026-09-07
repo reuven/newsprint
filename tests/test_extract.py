@@ -257,21 +257,27 @@ def test_unsupported_charset_falls_back_to_utf8() -> None:
     assert "<pre>" in html
 
 
-def test_part_with_no_payload_returns_empty_string() -> None:
-    # Create a message with a part that has no payload when decoded
-    # This tests the payload is None case in _decode
-    raw = (
-        b"From: Someone <someone@example.com>\n"
-        b"Subject: Content-Transfer-Encoding\n"
-        b"Date: Sat, 6 Sep 2026 06:00:00 +0000\n"
-        b'Content-Type: text/plain; charset="utf-8"\n'
-        b"Content-Transfer-Encoding: base64\n"
-        b"\n"
-    )
-    # A message with base64 encoding but no actual content
-    html = extract(raw).html
-    # Should handle gracefully and return wrapped empty content
-    assert "<pre>" in html
+def test_decode_with_none_payload_returns_empty_string() -> None:
+    """_decode() returns empty string when part.get_payload(decode=True) is None.
+
+    This occurs when a Message has a sub-message as payload (multipart container
+    at the part level), which causes get_payload(decode=True) to return None.
+    While extract() filters multipart containers, _decode() must handle this
+    defensively for robustness.
+    """
+    from email.message import Message
+
+    from shabbat_print.extract import _decode
+
+    # Create a part with a sub-message as payload (simulating a multipart at
+    # the part level), which makes get_payload(decode=True) return None
+    part = Message()
+    part["Content-Type"] = "text/plain"
+    sub_message = Message()
+    sub_message.set_payload("nested content")
+    part.set_payload([sub_message])
+
+    assert _decode(part) == ""
 
 
 @pytest.mark.skipif(not FIXTURES.exists(), reason="run `make fixtures` first")

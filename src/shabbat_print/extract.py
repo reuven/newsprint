@@ -57,7 +57,9 @@ def _body_html(message: Message) -> str:
     return "<html><body></body></html>"
 
 
-def _publication(message: Message, address: str, names: Mapping[str, str]) -> str:
+def _publication(
+    message: Message, address: str, display: str, names: Mapping[str, str]
+) -> str:
     if address in names:
         return names[address]
 
@@ -67,7 +69,6 @@ def _publication(message: Message, address: str, names: Mapping[str, str]) -> st
         if label:
             return label
 
-    display, _ = email.utils.parseaddr(_header(message, "From"))
     if display:
         return display
 
@@ -103,7 +104,7 @@ def extract(
             identifier=_header(message, "Message-ID", default=address),
             uid=uid,
         ),
-        publication=_publication(message, address, names or {}),
+        publication=_publication(message, address, display, names or {}),
         title=_header(message, "Subject", default="(no subject)"),
         author=display or None,
         date=_date(message),
