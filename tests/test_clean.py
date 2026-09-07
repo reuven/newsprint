@@ -109,6 +109,19 @@ def test_an_all_chrome_document_comes_back_empty() -> None:
     assert clean_document(document(html)).html.strip() == ""
 
 
+def test_leaf_tags_are_kept_whole_not_fragmented() -> None:
+    """A paragraph must not be torn apart looking for its worst line."""
+    html = (
+        "<html><body><div><p>The chapter closes on a long, thoughtful note "
+        "about markets and memory, and if it moved you at all, there is an "
+        '<a href="https://example.com/u">unsubscribe</a> link somewhere '
+        "below, which almost nobody ever clicks.</p></div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "unsubscribe" in cleaned.html
+    assert "markets and memory" in cleaned.html
+
+
 def test_other_document_fields_are_preserved() -> None:
     cleaned = clean_document(document(NEWSLETTER))
     assert cleaned.title == "An Issue"
