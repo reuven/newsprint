@@ -9,6 +9,7 @@ import imaplib
 import subprocess
 import tempfile
 import textwrap
+from datetime import UTC, datetime
 from pathlib import Path
 
 import click
@@ -21,12 +22,14 @@ from .config import (
     load_config,
     load_publication_names,
 )
+from .contents import build_contents
 from .extract import extract
 from .impose import impose
 from .mail import Mailbox, MailError, RetireResult, password_for
 from .models import Document, Verdict
-from .pipeline import build
+from .pipeline import Built, Failure, build_one
 from .printer import PrintError, spool
+from .stamp import stamp_packet
 
 
 def fetch_queue(config: Config) -> tuple[list[Document], str | None]:
@@ -148,7 +151,19 @@ def main(
 
     click.echo(f"Building {len(documents)} newsletters:")
     work_dir = Path(tempfile.mkdtemp(prefix="shabbat-print-"))
-    built, failed = build(documents, config, work_dir)
+    built: list[Built] = []
+    failed: list[Failure] = []
+    with click.progressbar(
+        documents,
+        label="Building",
+        item_show_func=lambda document: document.publication if document else None,
+    ) as bar:
+        for index, document in enumerate(bar):
+            result = build_one(document, index, config, work_dir)
+            if isinstance(result, Built):
+                built.append(result)
+            else:
+                failed.append(result)
 
     for item in built:
         note = {
@@ -173,9 +188,32 @@ def main(
         click.echo("Nothing could be built.", err=True)
         return
 
+    packet_date = datetime.now(UTC).date()
+    contents_built, contents_converged = build_contents(
+        built, config, packet_date, work_dir / "contents"
+    )
+    if contents_built is not None:
+        packet_built = [contents_built, *built]
+    else:
+        packet_built = list(built)
+    if not contents_converged:
+        click.echo(
+            "  Contents: could not compute reliable starting cell numbers "
+            "after 3 attempts - omitting the contents page.",
+            err=True,
+        )
+
+    stamped = stamp_packet(
+        packet_built,
+        packet_date,
+        config.printing.paper,
+        config.layout,
+        work_dir / "stamped",
+    )
+
     sheets_pdf = work_dir / "sheets.pdf"
-    sides = impose([item.pdf for item in built], config.printing.paper, sheets_pdf)
-    cells = sum(item.cells for item in built)
+    sides = impose(stamped, config.printing.paper, sheets_pdf)
+    cells = sum(item.cells for item in packet_built)
     click.echo(
         f"\n  {cells} cells - {sides} sheet sides on {config.printing.paper.name}"
     )

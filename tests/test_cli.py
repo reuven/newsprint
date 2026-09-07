@@ -949,6 +949,73 @@ def test_preview_falls_back_to_xdg_open_when_open_is_missing(
     assert attempted[1][0] == "xdg-open"
 
 
+def test_the_progress_bar_leaves_no_artefacts_in_captured_output(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """click.progressbar hides its bar rendering when the output is not a
+    terminal - which is always true under CliRunner - so the existing
+    string-matching assertions elsewhere in this file must keep working
+    undisturbed by carriage returns, fill characters, or brackets from the
+    bar itself."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--dry-run", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+    )
+    assert result.exit_code == 0
+    assert "\r" not in result.output
+    assert "[" not in result.output
+    assert "#" not in result.output
+
+
+def test_a_failing_document_among_others_is_still_reported_not_swallowed(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The progress bar wraps the per-document build loop; a Failure in the
+    middle of that loop must still surface exactly as it did before, not
+    get lost because the bar consumed the iteration."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue",
+        lambda config: ([_queued(), _empty()], "INBOX/Trash"),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--dry-run", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+    )
+    assert result.exit_code == 0
+    assert "SKIPPED" in result.output
+    assert "Empty Weekly" in result.output
+    assert "Test Weekly" in result.output  # the document that did succeed
+
+
+def test_contents_non_convergence_is_reported_not_silently_shipped(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A contents page nobody can trust is worse than none: when
+    build_contents cannot settle on a fixed point, main() must say so and
+    still finish the run without a contents page, rather than crash or
+    silently print numbers that might be wrong."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.build_contents",
+        lambda built, config, date, out_dir: (None, False),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--dry-run", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+    )
+    assert result.exit_code == 0
+    assert "could not compute reliable starting cell numbers" in result.output
+    assert "omitting the contents page" in result.output
+
+
 def test_a_successful_run_opens_the_pdf_in_preview(monkeypatch, tmp_path: Path) -> None:
     """Without --no-preview, main() must open the built PDF - but the open
     call itself is faked, so no real window is ever spawned during tests."""
