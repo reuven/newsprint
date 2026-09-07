@@ -61,7 +61,7 @@ def test_splits_a_bare_thunderbird_separator(tmp_path: Path) -> None:
 
 
 def test_a_body_line_beginning_with_From_does_not_split(tmp_path: Path) -> None:
-    """"From " mid-body is not a separator: no blank line before it, and the
+    """ "From " mid-body is not a separator: no blank line before it, and the
     next line is not a header."""
     body = (
         b"From sender@example.com Fri Sep  5 10:00:00 2026\r\n"
@@ -98,6 +98,99 @@ def test_empty_file_yields_nothing(tmp_path: Path) -> None:
     assert list(split_mbox(_write(tmp_path, b""))) == []
 
 
+def test_unix_line_endings(tmp_path: Path) -> None:
+    """Unix-style line endings with \\n\\n blank line."""
+    unix_msg = (
+        b"From sender@example.com Fri Sep  5 10:00:00 2026\n"
+        b"From: sender@example.com\n"
+        b"Subject: Unix\n"
+        b"\n"
+        b"Body of the unix message.\n"
+        b"\n"
+    )
+    unix_msg2 = (
+        b"From other@example.com Sat Sep  6 11:00:00 2026\n"
+        b"From: other@example.com\n"
+        b"Subject: Unix2\n"
+        b"\n"
+        b"Body of the second unix message.\n"
+        b"\n"
+    )
+    messages = list(split_mbox(_write(tmp_path, unix_msg, unix_msg2)))
+    assert len(messages) == 2
+    assert b"Subject: Unix" in messages[0]
+    assert b"Subject: Unix2" in messages[1]
+
+
+def test_no_separator_with_content_raises_error(tmp_path: Path) -> None:
+    """Data exists but no valid separators found - should raise error."""
+    bad_mbox = b"This is just content with no From separator\n"
+    with pytest.raises(MboxIntegrityError, match="no message separator found"):
+        list(split_mbox(_write(tmp_path, bad_mbox)))
+
+
+def test_from_line_with_no_header_after_does_not_split(tmp_path: Path) -> None:
+    """A From line followed by non-header content should not split."""
+    content = (
+        b"From sender@example.com Fri Sep  5 10:00:00 2026\r\n"
+        b"From: sender@example.com\r\n"
+        b"Subject: First\r\n"
+        b"\r\n"
+        b"Body text.\r\n"
+        b"From this is not a separator because no header follows\r\n"
+        b"More body text.\r\n"
+        b"\r\n"
+    )
+    messages = list(split_mbox(_write(tmp_path, content)))
+    assert len(messages) == 1
+    assert b"Subject: First" in messages[0]
+
+
+def test_multiple_messages_with_varied_separators(tmp_path: Path) -> None:
+    """Test splitting multiple messages with various separator styles."""
+    # First message normal, second with bare separator, third normal
+    content = (
+        b"From first@example.com Fri Sep  5 10:00:00 2026\r\n"
+        b"From: first@example.com\r\n"
+        b"Subject: First\r\n"
+        b"\r\n"
+        b"Body text one.\r\n"
+        b"\r\n"
+        b"From \r\n"
+        b"From: second@example.com\r\n"
+        b"Subject: Bare\r\n"
+        b"\r\n"
+        b"Body text two.\r\n"
+        b"\r\n"
+        b"From third@example.com Mon Sep  7 12:00:00 2026\r\n"
+        b"From: third@example.com\r\n"
+        b"Subject: Third\r\n"
+        b"\r\n"
+        b"Body text three.\r\n"
+        b"\r\n"
+    )
+    messages = list(split_mbox(_write(tmp_path, content)))
+    assert len(messages) == 3
+    assert b"Subject: First" in messages[0]
+    assert b"Subject: Bare" in messages[1]
+    assert b"Subject: Third" in messages[2]
+
+
+def test_from_at_eof_without_newline(tmp_path: Path) -> None:
+    """From line at end of file with no newline after it."""
+    content = (
+        b"From sender@example.com Fri Sep  5 10:00:00 2026\r\n"
+        b"From: sender@example.com\r\n"
+        b"Subject: First\r\n"
+        b"\r\n"
+        b"Body text.\r\n"
+        b"\r\nFrom end-of-file"  # No newline after From line
+    )
+    messages = list(split_mbox(_write(tmp_path, content)))
+    # The From without a newline after it won't have a header, so should be 1 message
+    assert len(messages) == 1
+
+
 def test_no_thunderbird_profile_means_none(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -118,3 +211,17 @@ def test_a_cached_folder_is_found_whatever_the_profile_is_called(
     target.write_bytes(NORMAL)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     assert find_thunderbird_mbox() == target
+
+
+REAL_MBOX = find_thunderbird_mbox()
+
+
+@pytest.mark.skipif(REAL_MBOX is None, reason="no local Thunderbird mbox")
+def test_real_mbox_parses_completely() -> None:
+    """The guard that matters, run against a large real folder.
+
+    Skipped on any machine without a local Thunderbird profile, which is most
+    of them.
+    """
+    parsed = sum(len(message) for message in split_mbox(REAL_MBOX))
+    assert parsed == REAL_MBOX.stat().st_size
