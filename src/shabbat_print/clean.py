@@ -574,6 +574,117 @@ def _strip_duplicate_title_block(
     return dropped
 
 
+# Round 3, section E: elements that render as nothing but still occupy
+# block space - a spacer/image-placeholder cell left empty once its own
+# image is stripped, or a publisher's own invisible preheader padding
+# (used to control the preview snippet an inbox shows). Unlike every
+# other check in this module, get_text(strip=True) is not enough to
+# detect either: bs4's strip only removes characters Python's
+# str.isspace() recognises. That covers ASCII whitespace and a few
+# Unicode space characters (NBSP, FIGURE SPACE, NARROW NO-BREAK SPACE),
+# but not the zero-width and other format characters - soft hyphen,
+# combining grapheme joiner, zero-width space/joiner/non-joiner, word
+# joiner, BOM - that real preheader padding is actually built from, so
+# those survive get_text(strip=True) as if they were real text.
+# content_ratio then scores a padding div as a substantial "line" no
+# PHRASES entry recognises, and _is_protected_heading's short-line
+# exception - built to spare a genuine short subtitle - protects it
+# outright, the same way it protects "So far, so good". Once
+# _strip_presentational_attrs removes the style="display:none" that hid
+# it from an email client, an untouched padding div like this renders as
+# a tall blank gap on the printed page.
+_INVISIBLE_CHARS = (
+    "\u00a0"  # NO-BREAK SPACE
+    "\u00ad"  # SOFT HYPHEN
+    "\u034f"  # COMBINING GRAPHEME JOINER
+    "\u180e"  # MONGOLIAN VOWEL SEPARATOR
+    "\u200b"  # ZERO WIDTH SPACE
+    "\u200c"  # ZERO WIDTH NON-JOINER
+    "\u200d"  # ZERO WIDTH JOINER
+    "\u2007"  # FIGURE SPACE
+    "\u202f"  # NARROW NO-BREAK SPACE
+    "\u2060"  # WORD JOINER
+    "\ufeff"  # ZERO WIDTH NO-BREAK SPACE / BOM
+)
+
+
+def _has_visible_text(tag: Tag) -> bool:
+    """True when `tag` should be kept because it has meaningful text.
+
+    An element with literally no text at all - the empty <td> a spacer
+    or an already-image-stripped placeholder leaves behind - is never
+    kept. Beyond that, ordinary whitespace is deliberately left alone
+    even when it is a tag's *entire* content, however much of it there
+    is: it has real rendered width and can be there on purpose - most
+    concretely, syntax-highlighted code wraps each token in its own
+    <span>, including the single space between them
+    ("<span>pip</span><span> </span><span>install</span>"), and treating
+    that lone space as invisible glues the two words together on the
+    printed page. This was tried the other way first (stripping ordinary
+    whitespace the same as the invisible characters) and the fixture
+    corpus caught it directly: mostly-python-ghost-io-oldest.eml's
+    "pip install gh-profiler" code sample lost its spaces and ran the
+    words together. Only when the whitespace-and-invisible-stripped text
+    is empty AND the raw text contains at least one genuinely invisible
+    character - proof this is padding, not deliberate spacing, since
+    ordinary code and prose never contain a soft hyphen or a zero-width
+    joiner on their own - is the element pruned. Real preheader padding
+    always satisfies this: it interleaves ordinary spaces with invisible
+    characters, so it is never mistaken for plain spacing.
+    """
+    text = tag.get_text()
+    if not text:
+        return False
+    if re.sub(rf"[\s{re.escape(_INVISIBLE_CHARS)}]+", "", text):
+        return True
+    return not any(char in _INVISIBLE_CHARS for char in text)
+
+
+def _prune_invisible_elements(root: Tag) -> int:
+    """Remove any element with no visible text, anywhere in the document.
+
+    Unlike every other pass in this module, this one is not a judgement
+    call: an element with no visible text at all cannot be article
+    content, headline, dateline, or byline, so there is no threshold and
+    no heading guard to apply - the guard exists to protect short
+    genuine text from being *mis-scored*, and there is no text here to
+    mis-score. <br> and <hr> are the sole exceptions: both are
+    legitimately textless and carry real meaning (a line break, a rule),
+    so they are never removed for having no text.
+
+    Runs last, after every other pass, so it prunes whatever those passes
+    left behind rather than racing them - removing an empty cell earlier
+    could only ever help a later pass's ratio arithmetic in the same
+    direction pruning does anyway.
+
+    A single pass is enough, with no repeat-until-stable loop needed to
+    cascade an emptied child up through its layout wrappers (a <td> that
+    loses its only image, then its <tr>, then its <tbody>, then its
+    <table>): find_all(True) visits a tag before its own descendants (an
+    ancestor cannot appear later in document order than a tag inside it),
+    and get_text() is always recursive, so a container's own visibility
+    already reflects the *eventual* state of everything inside it, not
+    just what has been individually decomposed so far - a <table> whose
+    only content is one empty <td> reads as having no visible text from
+    the very first check, before that <td> has been visited at all, and
+    decomposing the <table> right there takes the whole empty subtree
+    with it in one call. Confirmed directly (not just reasoned about):
+    calling .decompose() on a tag whose ancestor was already decomposed
+    earlier in the same pass, or calling get_text() on one, is harmless -
+    both simply see no text - so a later, redundant visit to an
+    already-gone descendant in this same pass's tag list can never raise
+    or double-count.
+    """
+    removed = 0
+    for tag in root.find_all(True):
+        if tag.name in ("br", "hr"):
+            continue
+        if not _has_visible_text(tag):
+            tag.decompose()
+            removed += 1
+    return removed
+
+
 def _strip_presentational_attrs(root: Tag) -> None:
     """Drop inherited sender layout attributes from every retained tag."""
     for tag in (root, *root.find_all(True)):
@@ -612,6 +723,14 @@ def clean_document(document: Document) -> Document:
     dropped_duplicate_title = _strip_duplicate_title_block(root, document)
     dropped_trailing = _strip_trailing_chrome_run(root)
     dropped_blocks = _strip_chrome_blocks(root)
+    # Round 3, section E: runs last, after every judgement-based pass
+    # above, and prunes what none of them could even see - an element
+    # with no visible text is never a judgement call. Also runs before
+    # _strip_presentational_attrs so the style="display:none" that hid a
+    # padding div from an email client is still present when pruning
+    # decides whether to remove it, though the decision itself does not
+    # depend on that attribute.
+    _prune_invisible_elements(root)
     _strip_presentational_attrs(root)
 
     return replace(

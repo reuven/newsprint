@@ -772,3 +772,140 @@ def test_cleaning_every_fixture_never_raises() -> None:
         "Listen now (8 mins) | 与运动员首次合作效果惊人"
         in cleaned_by_name[mandarin].html
     )
+
+
+# Round 3, section E: elements with no visible text - a spacer/image-
+# placeholder cell left empty once its image is stripped, or a
+# publisher's own invisible preheader padding, used to control the
+# preview snippet an inbox shows. Both occupy block space on the printed
+# page (a tall blank gap, in the padding case) despite having nothing to
+# show. get_text(strip=True) is not enough to detect either: bs4's strip
+# only removes characters Python's str.isspace() recognises, which misses
+# zero-width and other format characters (soft hyphen, zero-width space/
+# joiner/non-joiner, word joiner, BOM) that real preheader padding is
+# built from.
+def test_an_element_with_only_invisible_characters_is_removed() -> None:
+    html = (
+        "<html><body><div>"
+        '<div class="pad"> ‍ ‍</div>'
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "pad" not in cleaned.html
+    assert "Real paragraph" in cleaned.html
+
+
+def test_an_element_with_a_single_ordinary_character_survives() -> None:
+    html = (
+        "<html><body><div>"
+        '<div class="mark">X</div>'
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert '<div class="mark">X</div>' in cleaned.html
+
+
+def test_a_syntax_highlighted_space_span_survives() -> None:
+    """The regression this project's own fixture corpus caught: syntax
+    highlighting wraps each token in its own <span>, including the bare
+    space between two of them. A first draft of section E treated
+    ordinary whitespace the same as an invisible character and pruned
+    that span, gluing "pip" and "install" together in
+    mostly-python-ghost-io-oldest.eml. A lone space has real rendered
+    width and must survive, however short it is and however "invisible"
+    it might look to a naive check."""
+    html = (
+        "<html><body><div>"
+        '<p><span style="color:navy">pip</span><span> </span>'
+        '<span style="color:navy">install</span> gh-profiler and enough '
+        "surrounding real prose to read as genuine article content.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "<span> </span>" in cleaned.html
+    assert "pipinstall" not in cleaned.html
+
+
+def test_a_genuinely_empty_spacer_element_is_removed() -> None:
+    """The spacer table is nested inside a block that also holds real
+    prose (the way a layout table sits beside real content in the same
+    cell in practice), so the pre-existing top-level "block has no text at
+    all" cleanup in _strip_chrome_blocks - which only ever looks at
+    root.children as a whole, never inside them - cannot be what accounts
+    for this: content_root's own descent also cannot quietly drop it,
+    since two real top-level siblings keep it from collapsing past this
+    level. Only the new pass, walking every element rather than only
+    leaves or top-level blocks, can reach it."""
+    html = (
+        "<html><body><div>"
+        "<div>"
+        '<table><tbody><tr><td class="spacer"></td></tr></tbody></table>'
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        "</div>"
+        "<div><p>Another real paragraph with plenty of substance to read "
+        "as genuine article prose rather than a link label or a caption.</p>"
+        "</div>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "spacer" not in cleaned.html
+    assert "<table" not in cleaned.html
+    assert "Real paragraph" in cleaned.html
+    assert "Another real paragraph" in cleaned.html
+
+
+def test_emptying_a_cell_cascades_up_through_its_layout_wrappers() -> None:
+    """An image-only <td> left empty once its image is stripped must take
+    its now-empty <tr>, <tbody> and <table> with it - the cascade the
+    empty-parent cleanup in _strip_line_chrome already relies on for the
+    same reason. A single pass is enough: get_text() is recursive, so the
+    <table>'s own visibility already reflects its <td>'s, and decomposing
+    the <table> takes the whole empty chain with it in one call."""
+    html = (
+        "<html><body><div>"
+        "<div>"
+        '<table><tbody><tr><td><img src="https://example.com/spacer.gif">'
+        "</td></tr></tbody></table>"
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        "</div>"
+        "<div><p>Another real paragraph with plenty of substance to read "
+        "as genuine article prose rather than a link label or a caption.</p>"
+        "</div>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "<table" not in cleaned.html
+    assert "<tr" not in cleaned.html
+    assert "Real paragraph" in cleaned.html
+
+
+def test_br_and_hr_are_never_removed_for_having_no_text() -> None:
+    """<hr> is nested inside a block that also holds real prose, rather
+    than sitting as its own top-level element - a bare top-level <hr> is
+    already decomposed by the pre-existing, unrelated "block has no text
+    at all" branch in _strip_chrome_blocks, which is not what this test
+    is about; nested here, only the new pass ever visits it at all, and
+    it must leave it alone."""
+    html = (
+        "<html><body><div>"
+        "<div><p>Real paragraph with enough content to read as genuine "
+        "prose about the subject at hand, not a caption.<br>"
+        "A second line after a real line break.</p>"
+        "<hr>"
+        "<p>More real prose continues here at proper length after the "
+        "rule, still reading as genuine article content throughout.</p>"
+        "</div>"
+        "<div><p>Another real paragraph with plenty of substance to read "
+        "as genuine article prose rather than a link label or a caption.</p>"
+        "</div>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "<br" in cleaned.html
+    assert "<hr" in cleaned.html
