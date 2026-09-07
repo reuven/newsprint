@@ -92,21 +92,34 @@ def _merged(path: Path) -> dict[str, dict[str, Any]]:
 def load_config(
     path: Path = DEFAULT_CONFIG_PATH, paper_override: str | None = None
 ) -> Config:
-    data = _merged(path)
-    paper_name = (
-        paper_override if paper_override is not None else data["print"]["paper"]
-    )
-    return Config(
-        mail=MailConfig(**data["mail"]),
-        printing=PrintConfig(
-            printer=data["print"]["printer"],
-            paper=paper_by_name(paper_name),
-            duplex=data["print"]["duplex"],
-        ),
-        layout=LayoutConfig(**data["layout"]),
-        fallback_days=data["window"]["fallback_days"],
-        path=path,
-    )
+    """Load and validate config.toml, raising only ConfigError.
+
+    Malformed TOML (tomllib.TOMLDecodeError), an unknown paper name
+    (ValueError from paper_by_name), and a mistyped key in [mail] or
+    [layout] (TypeError from an unexpected dataclass keyword) are all real
+    possibilities in a hand-edited file. Wrapping them here means cli.py's
+    single `except (MailError, ConfigError)` handler can catch every config
+    problem the same way, instead of the load itself needing its own
+    special case to avoid an unhandled traceback.
+    """
+    try:
+        data = _merged(path)
+        paper_name = (
+            paper_override if paper_override is not None else data["print"]["paper"]
+        )
+        return Config(
+            mail=MailConfig(**data["mail"]),
+            printing=PrintConfig(
+                printer=data["print"]["printer"],
+                paper=paper_by_name(paper_name),
+                duplex=data["print"]["duplex"],
+            ),
+            layout=LayoutConfig(**data["layout"]),
+            fallback_days=data["window"]["fallback_days"],
+            path=path,
+        )
+    except (ValueError, TypeError, tomllib.TOMLDecodeError) as error:
+        raise ConfigError(f"{path}: {error}") from error
 
 
 DEFAULT_PUBLICATIONS_PATH = (

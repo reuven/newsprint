@@ -5,6 +5,7 @@ only after a job has reached the print queue, and only for the messages whose
 content actually reached it.
 """
 
+import imaplib
 import subprocess
 import tempfile
 import textwrap
@@ -29,7 +30,13 @@ from .printer import PrintError, spool
 
 
 def fetch_queue(config: Config) -> tuple[list[Document], str | None]:
-    """Fetch the starred messages, read-only, and discover the Trash folder."""
+    """Fetch the starred messages, read-only, and resolve the Trash folder.
+
+    config.mail.trash lets a user name the Trash folder literally, for a
+    server without the SPECIAL-USE extension trash_folder() depends on to
+    discover it automatically - without an escape hatch, such a server
+    would abort every run. "auto", the default, keeps discovering it.
+    """
     config.require_mail()
     password = password_for(config.mail.host, config.mail.user)
     names = load_publication_names()
@@ -41,8 +48,30 @@ def fetch_queue(config: Config) -> tuple[list[Document], str | None]:
     ) as box:
         uids = box.search_flagged()
         documents = [extract(box.fetch(uid), uid=uid, names=names) for uid in uids]
-        trash = box.trash_folder() if uids else None
+        trash = None
+        if uids:
+            trash = (
+                box.trash_folder() if config.mail.trash == "auto" else config.mail.trash
+            )
     return documents, trash
+
+
+def _open_preview(pdf: Path) -> None:
+    """Best-effort: open the PDF for a look before printing.
+
+    subprocess.run(..., check=False) only suppresses a non-zero exit code;
+    it still raises OSError (FileNotFoundError in practice) when the
+    command itself does not exist, which crashed every run on any
+    non-macOS host despite check=False. `open` is macOS-only; `xdg-open`
+    is its Linux equivalent. If neither exists, the PDF's own path -
+    already echoed above this call - is enough to open it by hand.
+    """
+    for opener in (["open", "-a", "Preview"], ["xdg-open"]):
+        try:
+            subprocess.run([*opener, str(pdf)], check=False)
+            return
+        except OSError:
+            continue
 
 
 def retire_printed(config: Config, uids: list[int], trash: str) -> RetireResult:
@@ -96,9 +125,8 @@ def main(
     no_preview: bool,
 ) -> None:
     """Print this week's starred newsletters, four to a side, duplex."""
-    config = load_config(config_path, paper_override=paper)
-
     try:
+        config = load_config(config_path, paper_override=paper)
         documents, trash = fetch_queue(config)
     except (MailError, ConfigError) as error:
         raise click.ClickException(str(error)) from error
@@ -139,7 +167,7 @@ def main(
     click.echo(f"  {sheets_pdf}")
 
     if not no_preview:
-        subprocess.run(["open", "-a", "Preview", str(sheets_pdf)], check=False)
+        _open_preview(sheets_pdf)
 
     if dry_run:
         click.echo("\nDry run: nothing printed, nothing retired.")
@@ -186,5 +214,18 @@ def main(
         return
 
     if trash and uids:
-        result = retire_printed(config, uids, trash)
+        try:
+            result = retire_printed(config, uids, trash)
+        except (MailError, imaplib.IMAP4.error) as error:
+            # The job is already spooled: password_for(), Mailbox.__enter__(),
+            # or imaplib's own readonly guard on the write-mode SELECT can
+            # all still raise here, after printing has already succeeded.
+            # Report exactly what happened rather than let it escape as a
+            # traceback that leaves the user unsure whether their mail was
+            # touched.
+            runlog.record({"outcome": "retire-failed", "error": str(error)})
+            raise click.ClickException(
+                f"Printed, but could not retire: {error}\n"
+                f"Mail may be partly modified; check {trash} by hand."
+            ) from error
         click.echo(f"Retired {len(result.retired)} message(s) to {trash}.")

@@ -336,6 +336,83 @@ def test_a_print_failure_leaves_mail_untouched(monkeypatch, tmp_path: Path) -> N
     assert retired == []
 
 
+def test_a_bad_config_file_is_reported_cleanly_not_as_a_traceback(
+    tmp_path: Path,
+) -> None:
+    """load_config() used to sit outside cli.py's (MailError, ConfigError)
+    handler, so a bad value anywhere in config.toml surfaced as a bare,
+    unhandled exception instead of the same clean error message every
+    other config or mail problem gets."""
+    path = tmp_path / "config.toml"
+    path.write_text('[print]\npaper = "foolscap"\n')
+
+    result = CliRunner().invoke(main, ["--config", str(path)])
+    assert result.exit_code != 0
+    assert not isinstance(result.exception, ValueError)
+    assert "unknown paper" in result.output
+
+
+def test_a_retire_failure_after_printing_is_reported_not_crashed(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """retire_printed() can raise - password_for() or Mailbox.__enter__()
+    failing, or the folder reporting READ-ONLY - after the job has
+    already reached the print queue. The user must get a clear error
+    naming what happened, not a raw traceback leaving them unsure whether
+    their mail was touched."""
+    from shabbat_print.mail import MailError
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
+
+    def exploding_retire(config, uids, trash):
+        raise MailError("could not reopen the folder writable")
+
+    monkeypatch.setattr("shabbat_print.cli.retire_printed", exploding_retire)
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code != 0
+    assert not isinstance(result.exception, MailError)
+    assert "Spooled as Printer-1" in result.output
+    assert "could not reopen the folder writable" in result.output
+
+
+def test_an_imap_readonly_error_from_retire_is_reported_not_crashed(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The other documented failure mode: imaplib itself raises
+    IMAP4.readonly when the server answers a writable SELECT with
+    READ-ONLY - a plain exception, not a MailError."""
+    import imaplib
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
+
+    def exploding_retire(config, uids, trash):
+        raise imaplib.IMAP4.readonly("INBOX/toprint is not writable")
+
+    monkeypatch.setattr("shabbat_print.cli.retire_printed", exploding_retire)
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code != 0
+    assert not isinstance(result.exception, imaplib.IMAP4.error)
+    assert "not writable" in result.output
+
+
 def test_an_unconfigured_account_says_what_to_set(monkeypatch, tmp_path: Path) -> None:
     """With no config file at all, the error names the missing keys."""
     result = CliRunner().invoke(main, ["--config", str(tmp_path / "absent.toml")])
@@ -441,6 +518,45 @@ def test_fetch_queue_skips_trash_lookup_when_nothing_is_flagged(
     assert trash is None
 
 
+def test_fetch_queue_honours_a_configured_literal_trash_folder(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """config.mail.trash was declared, advertised in config.example.toml,
+    and read nowhere: a server with no SPECIAL-USE support had no escape
+    hatch and aborted the run. A non-"auto" value must be honoured as a
+    literal folder name instead of ever calling trash_folder()."""
+
+    class _NoTrashLookupBox(_FakeBox):
+        def trash_folder(self) -> str:
+            raise AssertionError(
+                "trash_folder() must not be called when mail.trash is set"
+            )
+
+    path = tmp_path / "config.toml"
+    path.write_text(SAMPLE_CONFIG.rstrip() + '\ntrash = "Configured-Trash"\n')
+    config = load_config(path)
+
+    _FakeBox.instances.clear()
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _NoTrashLookupBox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+
+    _documents, trash = fetch_queue(config)
+    assert trash == "Configured-Trash"
+
+
+def test_fetch_queue_still_discovers_trash_when_configured_as_auto(
+    monkeypatch, mail_config
+) -> None:
+    """The default, "auto", must keep discovering via SPECIAL-USE."""
+    _FakeBox.instances.clear()
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _FakeBox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+
+    assert mail_config.mail.trash == "auto"
+    _documents, trash = fetch_queue(mail_config)
+    assert trash == "INBOX/Trash"
+
+
 def test_retire_printed_moves_messages_with_no_failures(
     monkeypatch, mail_config
 ) -> None:
@@ -512,6 +628,52 @@ def test_a_partial_retire_failure_is_reported_accurately(
     assert "Retired 1 message(s)" in result.output
     assert "Retired 2 message(s)" not in result.output
     assert "could not retire 1 message(s)" in result.output
+
+
+def test_preview_open_failure_does_not_crash_the_run(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """subprocess.run(..., check=False) only suppresses a non-zero exit
+    code; it still raises OSError when the command itself does not exist,
+    which crashed every run on any non-macOS host. A host with neither
+    `open` nor `xdg-open` must not crash: the PDF's own path is already
+    echoed, which is enough to open it by hand."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+
+    def missing(command, **kw):
+        raise FileNotFoundError(command[0])
+
+    monkeypatch.setattr("shabbat_print.cli.subprocess.run", missing)
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--config", str(tmp_path / "absent.toml")]
+    )
+    assert result.exit_code == 0
+
+
+def test_preview_falls_back_to_xdg_open_when_open_is_missing(
+    monkeypatch, tmp_path: Path
+) -> None:
+    attempted: list[list[str]] = []
+
+    def fake_run(command, **kw):
+        attempted.append(command)
+        if command[0] == "open":
+            raise FileNotFoundError("open")
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli.subprocess.run", fake_run)
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--config", str(tmp_path / "absent.toml")]
+    )
+    assert result.exit_code == 0
+    assert attempted[0][0] == "open"
+    assert attempted[1][0] == "xdg-open"
 
 
 def test_a_successful_run_opens_the_pdf_in_preview(monkeypatch, tmp_path: Path) -> None:

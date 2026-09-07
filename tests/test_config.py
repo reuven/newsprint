@@ -86,9 +86,37 @@ def test_paper_override_beats_the_file(tmp_path: Path) -> None:
 
 
 def test_unknown_paper_is_rejected(tmp_path: Path) -> None:
+    """load_config must wrap this as a ConfigError, not let the raw
+    ValueError from paper_by_name() escape - cli.py only catches
+    (MailError, ConfigError), so anything else becomes an unhandled
+    traceback in the user's terminal instead of a clean error message.
+    """
+    from shabbat_print.config import ConfigError
+
     path = tmp_path / "config.toml"
     path.write_text('[print]\npaper = "foolscap"\n')
-    with pytest.raises(ValueError, match="unknown paper"):
+    with pytest.raises(ConfigError, match="unknown paper"):
+        load_config(path)
+
+
+def test_a_mistyped_key_is_rejected_as_a_config_error(tmp_path: Path) -> None:
+    """MailConfig(**data["mail"]) raises a bare TypeError for an unknown
+    keyword; load_config must turn that into a ConfigError too."""
+    from shabbat_print.config import ConfigError
+
+    path = tmp_path / "config.toml"
+    path.write_text('[mail]\nhost = "imap.example.com"\nusr = "typo@example.com"\n')
+    with pytest.raises(ConfigError):
+        load_config(path)
+
+
+def test_malformed_toml_is_rejected_as_a_config_error(tmp_path: Path) -> None:
+    """tomllib.TOMLDecodeError must not escape as a bare exception either."""
+    from shabbat_print.config import ConfigError
+
+    path = tmp_path / "config.toml"
+    path.write_text("this is not = = valid toml")
+    with pytest.raises(ConfigError):
         load_config(path)
 
 
