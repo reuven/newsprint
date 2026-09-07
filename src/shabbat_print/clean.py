@@ -29,6 +29,15 @@ CHROME_RATIO = 0.15
 
 _IMAGES_DEFERRED = "images deferred to phase 7"
 
+# Sender layout attributes stripped from every retained tag. We supply our
+# own typography and page box, so inheriting a sender's fixed widths is
+# unnecessary as well as risky: a template built for a ~600px browser
+# column overflows a quarter-sheet cell's text block by roughly 2x, and
+# fixed widths paired with overflow:hidden are the mechanism behind text
+# clipped mid-word on the printed page. `class` is left alone - harmless
+# with no stylesheet attached, and useful for debugging.
+_PRESENTATIONAL_ATTRS = ("style", "width", "height", "bgcolor", "align")
+
 
 def _content_root(soup: BeautifulSoup) -> Tag:
     """Descend through single-child layout wrappers to the real content."""
@@ -67,6 +76,13 @@ def _strip_chrome_blocks(root: Tag) -> None:
             block.decompose()
 
 
+def _strip_presentational_attrs(root: Tag) -> None:
+    """Drop inherited sender layout attributes from every retained tag."""
+    for tag in (root, *root.find_all(True)):
+        for attr in _PRESENTATIONAL_ATTRS:
+            tag.attrs.pop(attr, None)
+
+
 def clean_document(document: Document) -> Document:
     soup = BeautifulSoup(document.html, "lxml")
     for tag_name in _NEVER_CONTENT:
@@ -76,6 +92,7 @@ def clean_document(document: Document) -> Document:
     root = _content_root(soup)
     kept, dropped = _strip_images(root)
     _strip_chrome_blocks(root)
+    _strip_presentational_attrs(root)
 
     return replace(
         document,

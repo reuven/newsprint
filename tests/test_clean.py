@@ -90,6 +90,23 @@ def test_images_are_dropped_and_recorded() -> None:
     }
 
 
+def test_style_attribute_is_stripped() -> None:
+    """Sender layout CSS must not leak into a page we typeset ourselves.
+
+    Fixed pixel widths from a sender's template (commonly ~600px, meant for
+    a browser window) overflow the printed cell and are the mechanism
+    behind clipped text when fixed-width, overflow-hidden layout survives
+    into the printed page.
+    """
+    html = (
+        '<html><body><div><p style="width:600px">Real prose that continues '
+        "for a good while here, well past the short-line cutoff.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "style=" not in cleaned.html
+
+
 def test_table_wrapped_content_is_found() -> None:
     """Email HTML nests content inside layout tables; the cleaner must descend."""
     html = (
