@@ -2,6 +2,17 @@
 
 The page box is exactly one cell, so `impose.py` can tile four of them at 100%
 scale. A font specified at 9pt therefore measures 9pt on the paper.
+
+G2: the masthead is a stack of quarter-pages' main navigation cue - the
+signal that a new newsletter has started - so it has to win against the
+article headline below it, not read as a subtitle to it. It is set bold,
+roughly level with the headline's own 1.15rem (not smaller, which is what a
+size bump alone would still have been), in its existing small caps with
+letter-spacing, under a single heavy rule. A heavy *reversed* bar was
+considered and rejected: small reversed type fills in on a mono laser
+printer and costs toner on every newsletter start, four times a page. The
+thin rule that used to sit *below* the masthead is gone too - one heavy
+rule reads more clearly than two.
 """
 
 import hashlib
@@ -34,8 +45,9 @@ html { font-size: ${font_size_pt}pt; }
 body { font-family: Charter, Georgia, "Times New Roman", serif;
        line-height: $line_height; margin: 0; hyphens: auto; text-align: justify; }
 .masthead { font-family: -apple-system, "Helvetica Neue", Helvetica, sans-serif;
-            font-size: 0.70rem; text-transform: uppercase; letter-spacing: 0.06em;
-            border-bottom: 0.5pt solid #000; padding-bottom: 2pt; margin-bottom: 6pt; }
+            font-size: 1rem; font-weight: bold; text-transform: uppercase;
+            letter-spacing: 0.06em;
+            border-top: 1.5pt solid #000; padding-top: 3pt; margin-bottom: 8pt; }
 h1 { font-size: 1.15rem; line-height: 1.2; margin: 0 0 6pt; }
 h2, h3, h4 { font-size: 1rem; margin: 8pt 0 3pt; }
 p { margin: 0 0 5pt; orphans: 2; widows: 2; }
@@ -56,15 +68,12 @@ def _stem(document: Document, compression: float) -> str:
     return f"{digest}-{compression:.2f}"
 
 
-def render(
-    document: Document,
-    config: Config,
-    compression: float = 1.0,
-    out_dir: Path | None = None,
-) -> Path:
-    """Render to a cell-sized PDF. `compression` scales the line height."""
+def _build_html(document: Document, config: Config, compression: float = 1.0) -> str:
+    """Fill in the page template. Split out from render() so tests can
+    inspect the generated markup and CSS directly, rather than only
+    through rendered PDF geometry."""
     cell = config.printing.paper.cell
-    html = _TEMPLATE.substitute(
+    return _TEMPLATE.substitute(
         width_mm=f"{cell.width_mm:g}",
         height_mm=f"{cell.height_mm:g}",
         margin_mm=f"{config.layout.margin_mm:g}",
@@ -75,6 +84,16 @@ def render(
         title=escape(document.title),
         content=document.html,
     )
+
+
+def render(
+    document: Document,
+    config: Config,
+    compression: float = 1.0,
+    out_dir: Path | None = None,
+) -> Path:
+    """Render to a cell-sized PDF. `compression` scales the line height."""
+    html = _build_html(document, config, compression)
     directory = out_dir if out_dir is not None else Path(tempfile.mkdtemp())
     directory.mkdir(parents=True, exist_ok=True)
     output = directory / f"{_stem(document, compression)}.pdf"

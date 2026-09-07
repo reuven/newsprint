@@ -135,3 +135,44 @@ def test_dollar_signs_in_content_survive(config, tmp_path: Path) -> None:
         out_dir=tmp_path,
     )
     assert "$500" in page_text(pdf, 0)
+
+
+def test_masthead_reads_as_a_section_break(config) -> None:
+    """G2: the masthead must read as a section break, not a subtitle - a
+    heavy rule above it, and the name set bold and roughly level with the
+    headline (not smaller than it). The old thin rule below the masthead
+    goes: one heavy rule above is clearer than two rules."""
+    from shabbat_print.render import _build_html
+
+    html = _build_html(document(PROSE), config, compression=1.0)
+    masthead_rule = _masthead_css(html)
+    assert "border-top" in masthead_rule
+    assert "border-bottom" not in masthead_rule
+    assert "font-weight: bold" in masthead_rule or "font-weight:bold" in masthead_rule
+    assert "1rem" in masthead_rule or "1.0rem" in masthead_rule
+    # Roughly level with the headline, not smaller than it: h1 stayed at
+    # 1.15rem, so the masthead (>= 1rem) must not be the smaller of the two.
+    assert "0.70rem" not in masthead_rule
+    assert "0.85rem" not in masthead_rule
+    # Still reads as a masthead, not ordinary running text.
+    assert "text-transform: uppercase" in masthead_rule
+    assert "letter-spacing" in masthead_rule
+
+
+def _masthead_css(html: str) -> str:
+    start = html.index(".masthead")
+    end = html.index("}", start)
+    return html[start : end + 1]
+
+
+def test_masthead_appears_only_once_per_newsletter(config, tmp_path: Path) -> None:
+    """The masthead is the newsletter's own navigation cue and must appear
+    once, on the first cell only - even when the article spans several
+    cells."""
+    pdf = render(document(PROSE * 40), config, out_dir=tmp_path)
+    assert page_count(pdf) > 1
+    first_page = page_text(pdf, 0).replace("\n", " ").lower()
+    assert "money stuff" in first_page
+    for index in range(1, page_count(pdf)):
+        later_page = page_text(pdf, index).replace("\n", " ").lower()
+        assert "money stuff" not in later_page
