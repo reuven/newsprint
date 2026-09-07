@@ -1,3 +1,4 @@
+import imaplib
 from datetime import date
 
 import pytest
@@ -334,6 +335,43 @@ def test_retire_reports_failures_without_stopping() -> None:
     uid_calls = [call for call in fake.calls if call[0] == "uid"]
     assert ("uid", "STORE", "8", "+FLAGS", "(\\Seen)") not in uid_calls
     assert ("uid", "STORE", "8", "-FLAGS", "(\\Flagged)") not in uid_calls
+
+
+def test_retire_raises_when_reopening_the_folder_writable_fails() -> None:
+    """retire() used to discard the status from select(readonly=False)
+    entirely - a non-OK status (e.g. a server refusing to reopen the
+    folder writable) passed silently and every subsequent MOVE/STORE call
+    would then fail confusingly, or worse, silently no-op."""
+
+    class _NotWritableIMAP(FakeIMAP):
+        def select(self, folder: str, readonly: bool = False):
+            self.calls.append(("select", folder, readonly))
+            if not readonly:
+                return ("NO", [b"cannot reopen writable"])
+            self.selected = (folder, readonly)
+            return ("OK", [b"2226"])
+
+    fake = _NotWritableIMAP("imap.example.com")
+    with mailbox(fake) as box, pytest.raises(MailError, match="writable"):
+        box.retire([7], "INBOX/Trash")
+
+
+def test_retire_raises_when_the_server_reports_read_only() -> None:
+    """imaplib itself raises IMAP4.readonly when a write-mode SELECT still
+    reports READ-ONLY - a plain Python exception, not merely a non-OK
+    status, and one retire() did not guard against at all."""
+
+    class _RaisesReadOnlyIMAP(FakeIMAP):
+        def select(self, folder: str, readonly: bool = False):
+            self.calls.append(("select", folder, readonly))
+            if not readonly:
+                raise imaplib.IMAP4.readonly(f"{folder} is not writable")
+            self.selected = (folder, readonly)
+            return ("OK", [b"2226"])
+
+    fake = _RaisesReadOnlyIMAP("imap.example.com")
+    with mailbox(fake) as box, pytest.raises(MailError, match="not writable"):
+        box.retire([7], "INBOX/Trash")
 
 
 def test_retire_with_no_uids_touches_nothing() -> None:

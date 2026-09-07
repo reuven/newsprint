@@ -1,5 +1,6 @@
 """Splitter tests, built around the two ways this has silently failed before."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -316,15 +317,27 @@ def test_a_cached_folder_is_found_whatever_the_profile_is_called(
     assert find_thunderbird_mbox() == target
 
 
-REAL_MBOX = find_thunderbird_mbox()
+# find_thunderbird_mbox() touches Path.home() and, if a profile exists,
+# reads the real mailbox it finds - unacceptable to run just from importing
+# this module during collection, on a contributor's own machine, whether or
+# not the test below is even selected. Opt in explicitly instead.
+_RUN_REAL_MBOX_TEST = os.environ.get("SHABBAT_PRINT_TEST_REAL_MBOX") == "1"
 
 
-@pytest.mark.skipif(REAL_MBOX is None, reason="no local Thunderbird mbox")
+@pytest.mark.skipif(
+    not _RUN_REAL_MBOX_TEST,
+    reason="set SHABBAT_PRINT_TEST_REAL_MBOX=1 to run against a real local "
+    "Thunderbird mbox",
+)
 def test_real_mbox_parses_completely() -> None:
     """The guard that matters, run against a large real folder.
 
-    Skipped on any machine without a local Thunderbird profile, which is most
-    of them.
+    Opt-in only, and the lookup happens here at test-run time rather than
+    at module import: skipped by default on every machine, including one
+    with a local Thunderbird profile.
     """
-    parsed = sum(len(message) for message in split_mbox(REAL_MBOX))
-    assert parsed == REAL_MBOX.stat().st_size
+    real_mbox = find_thunderbird_mbox()
+    if real_mbox is None:
+        pytest.skip("no local Thunderbird mbox")
+    parsed = sum(len(message) for message in split_mbox(real_mbox))
+    assert parsed == real_mbox.stat().st_size

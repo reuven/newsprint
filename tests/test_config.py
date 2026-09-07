@@ -110,6 +110,52 @@ def test_a_mistyped_key_is_rejected_as_a_config_error(tmp_path: Path) -> None:
         load_config(path)
 
 
+def test_an_unknown_print_key_is_rejected(tmp_path: Path) -> None:
+    """_merged() previously accepted unknown TOML in [print] silently -
+    PrintConfig is built by picking out three known keys by name, so a
+    typo like "prnter" just vanished with no error at all. Now it must be
+    rejected the same way an unknown [mail] or [layout] key is."""
+    from shabbat_print.config import ConfigError
+
+    path = tmp_path / "config.toml"
+    path.write_text('[print]\nprnter = "Office"\n')
+    with pytest.raises(ConfigError, match="prnter"):
+        load_config(path)
+
+
+def test_an_unknown_mail_key_names_the_key_clearly(tmp_path: Path) -> None:
+    """[mail] and [layout] raised a raw, unhelpful TypeError for an
+    unknown key ("unexpected keyword argument"); now it must be the same
+    clear ConfigError as every other section."""
+    from shabbat_print.config import ConfigError
+
+    path = tmp_path / "config.toml"
+    path.write_text('[mail]\nhost = "imap.example.com"\nusr = "typo@example.com"\n')
+    with pytest.raises(ConfigError, match="usr"):
+        load_config(path)
+
+
+def test_an_unknown_layout_key_is_rejected(tmp_path: Path) -> None:
+    from shabbat_print.config import ConfigError
+
+    path = tmp_path / "config.toml"
+    path.write_text("[layout]\nmargn_mm = 9.0\n")
+    with pytest.raises(ConfigError, match="margn_mm"):
+        load_config(path)
+
+
+def test_an_unknown_window_key_is_rejected(tmp_path: Path) -> None:
+    """[window] had the same silent-acceptance bug as [print]: its only
+    key is read by direct indexing (data["window"]["fallback_days"]),
+    never splatted into a dataclass, so nothing ever checked the rest."""
+    from shabbat_print.config import ConfigError
+
+    path = tmp_path / "config.toml"
+    path.write_text("[window]\nfallback_dyas = 7\n")
+    with pytest.raises(ConfigError, match="fallback_dyas"):
+        load_config(path)
+
+
 def test_malformed_toml_is_rejected_as_a_config_error(tmp_path: Path) -> None:
     """tomllib.TOMLDecodeError must not escape as a bare exception either."""
     from shabbat_print.config import ConfigError

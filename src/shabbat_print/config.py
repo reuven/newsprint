@@ -28,6 +28,27 @@ class ConfigError(Exception):
     """The configuration is missing something the run needs."""
 
 
+# The keys each section's dataclass actually accepts. Checked explicitly
+# against every section, uniformly - _merged() previously let [print]'s
+# unknown keys through in total silence (PrintConfig is built by picking out
+# known keys by name, so a typo just vanished), while an unknown [mail] or
+# [layout] key blew up with a raw, unhelpful TypeError. Both were wrong, in
+# different directions; this is the one behaviour applied everywhere.
+_SECTION_KEYS: dict[str, frozenset[str]] = {
+    "mail": frozenset({"host", "user", "folder", "trash"}),
+    "print": frozenset({"printer", "paper", "duplex"}),
+    "layout": frozenset({"margin_mm", "font_size_pt", "line_height"}),
+    "window": frozenset({"fallback_days"}),
+}
+
+
+def _reject_unknown_keys(data: dict[str, dict[str, Any]]) -> None:
+    for section, allowed in _SECTION_KEYS.items():
+        unknown = sorted(set(data.get(section, {})) - allowed)
+        if unknown:
+            raise ConfigError(f"unknown key(s) in [{section}]: {', '.join(unknown)}")
+
+
 @dataclass(frozen=True, slots=True)
 class MailConfig:
     host: str
@@ -95,15 +116,17 @@ def load_config(
     """Load and validate config.toml, raising only ConfigError.
 
     Malformed TOML (tomllib.TOMLDecodeError), an unknown paper name
-    (ValueError from paper_by_name), and a mistyped key in [mail] or
-    [layout] (TypeError from an unexpected dataclass keyword) are all real
-    possibilities in a hand-edited file. Wrapping them here means cli.py's
-    single `except (MailError, ConfigError)` handler can catch every config
+    (ValueError from paper_by_name), and a mistyped or unknown key in any
+    section (rejected explicitly by _reject_unknown_keys, uniformly across
+    [mail], [print], [layout], and [window]) are all real possibilities in
+    a hand-edited file. Wrapping them here means cli.py's single
+    `except (MailError, ConfigError)` handler can catch every config
     problem the same way, instead of the load itself needing its own
     special case to avoid an unhandled traceback.
     """
     try:
         data = _merged(path)
+        _reject_unknown_keys(data)
         paper_name = (
             paper_override if paper_override is not None else data["print"]["paper"]
         )

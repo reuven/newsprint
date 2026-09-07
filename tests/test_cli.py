@@ -300,6 +300,38 @@ def test_dry_run_wins_when_combined_with_no_retire(monkeypatch, tmp_path: Path) 
     assert spooled == []
 
 
+def test_paper_letter_propagates_end_to_end(monkeypatch, tmp_path: Path) -> None:
+    """--paper exists solely to propagate one setting through render, trim,
+    and impose without drift; nothing previously drove it end to end."""
+    import pymupdf
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--paper",
+            "letter",
+            "--dry-run",
+            "--no-preview",
+            "--config",
+            str(tmp_path / "absent.toml"),
+        ],
+    )
+    assert result.exit_code == 0
+    pdf_path = next(
+        line.strip()
+        for line in result.output.splitlines()
+        if line.strip().endswith("sheets.pdf")
+    )
+    with pymupdf.open(pdf_path) as document:
+        rect = document[0].rect
+    assert rect.width == pytest.approx(612.0, abs=1.0)
+    assert rect.height == pytest.approx(792.0, abs=1.0)
+
+
 def test_help_explains_that_no_retire_leaves_mail_starred() -> None:
     """The surprise a user would otherwise hit must be spelled out up front."""
     result = CliRunner().invoke(main, ["--help"])

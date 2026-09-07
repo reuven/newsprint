@@ -69,9 +69,18 @@ def test_several_documents_are_concatenated(tmp_path: Path) -> None:
 
 
 def test_a_partial_sheet_leaves_blank_cells(tmp_path: Path) -> None:
+    """The property the name promises: a 5th cell starts a new sheet with
+    only its top-left quadrant filled, not just that there are 2 sheets."""
     cells = numbered_cells(tmp_path / "cells.pdf", 5)
     out = tmp_path / "sheets.pdf"
     assert impose([cells], A4, out) == 2
+    with pymupdf.open(out) as document:
+        second = document[1]
+        assert quadrant_of(second, "PAGE 5") == ("top", "left")
+        for label in ("PAGE 6", "PAGE 7", "PAGE 8"):
+            assert not second.search_for(label), (
+                f"{label} must not appear on a sheet with only one real cell"
+            )
 
 
 def test_letter_paper_gives_letter_sheets(tmp_path: Path) -> None:
@@ -80,8 +89,9 @@ def test_letter_paper_gives_letter_sheets(tmp_path: Path) -> None:
     impose([cells], LETTER, out)
     with pymupdf.open(out) as document:
         rect = document[0].rect
-    expected_width, _ = LETTER.sheet.as_points()
+    expected_width, expected_height = LETTER.sheet.as_points()
     assert rect.width == pytest.approx(expected_width, abs=1.0)
+    assert rect.height == pytest.approx(expected_height, abs=1.0)
 
 
 def test_imposing_nothing_is_an_error(tmp_path: Path) -> None:

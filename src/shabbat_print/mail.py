@@ -178,7 +178,14 @@ class Mailbox:
             return RetireResult(retired=(), failed=())
 
         connection = self._connection
-        connection.select(self._folder, readonly=False)
+        try:
+            status, _ = connection.select(self._folder, readonly=False)
+        except imaplib.IMAP4.error as error:
+            raise MailError(
+                f"could not reopen {self._folder!r} writable: {error}"
+            ) from error
+        if status != "OK":
+            raise MailError(f"could not reopen {self._folder!r} writable: {status}")
 
         retired: list[int] = []
         failed: list[int] = []
