@@ -78,8 +78,22 @@ def retire_printed(config: Config, uids: list[int], trash: str) -> RetireResult:
 @click.option(
     "--dry-run", is_flag=True, help="Build the PDF but do not print or retire."
 )
+@click.option(
+    "--no-retire",
+    is_flag=True,
+    help=(
+        "Print, but do not retire: unlike --dry-run, this really prints. "
+        "The messages stay starred and will be reprinted on the next run."
+    ),
+)
 @click.option("--no-preview", is_flag=True, help="Skip opening the PDF in Preview.")
-def main(paper: str | None, config_path: Path, dry_run: bool, no_preview: bool) -> None:
+def main(
+    paper: str | None,
+    config_path: Path,
+    dry_run: bool,
+    no_retire: bool,
+    no_preview: bool,
+) -> None:
     """Print this week's starred newsletters, four to a side, duplex."""
     config = load_config(config_path, paper_override=paper)
 
@@ -153,12 +167,19 @@ def main(paper: str | None, config_path: Path, dry_run: bool, no_preview: bool) 
     click.echo(f"Spooled as {job}.")
     runlog.record(
         {
-            "outcome": "printed",
+            "outcome": "printed-kept" if no_retire else "printed",
             "job": job,
             "documents": [item.document.origin.identifier for item in built],
             "uids": uids,
         }
     )
+
+    if no_retire:
+        click.echo(
+            "Mail untouched: messages remain starred and will be reprinted "
+            "on the next run."
+        )
+        return
 
     if trash and uids:
         result = retire_printed(config, uids, trash)

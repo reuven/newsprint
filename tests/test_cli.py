@@ -208,6 +208,106 @@ def test_accepting_prints_then_retires_in_that_order(
     assert events == ["spool", "retire:[4]"]
 
 
+def test_no_retire_spools_but_never_calls_retire_printed(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """--no-retire must print for real, unlike --dry-run, but never touch
+    mail: the messages stay starred so they are reprinted next run."""
+    spooled: list[Path] = []
+    retired: list[list[int]] = []
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.spool",
+        lambda pdf, config: (spooled.append(pdf), "Printer-1")[1],
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.retire_printed",
+        lambda config, uids, trash: retired.append(uids),
+    )
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-retire", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+        input="y\n",
+    )
+    assert result.exit_code == 0
+    assert len(spooled) == 1  # unlike --dry-run, a real PDF was spooled
+    assert retired == []
+    assert "starred" in result.output
+    assert "next run" in result.output
+
+
+def test_no_retire_records_the_outcome_as_printed_kept(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The run log must not call this a completed 'printed' run, or a later
+    last_successful_run() would treat a rehearsal as the real thing."""
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
+    monkeypatch.setattr(
+        "shabbat_print.cli.retire_printed",
+        lambda config, uids, trash: pytest.fail("retire_printed must not be called"),
+    )
+
+    def fake_record(entry, **kw):
+        recorded.append(entry)
+        return tmp_path / "r"
+
+    monkeypatch.setattr("shabbat_print.runlog.record", fake_record)
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-retire", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+        input="y\n",
+    )
+    assert result.exit_code == 0
+    outcomes = [entry["outcome"] for entry in recorded]
+    assert "printed-kept" in outcomes
+    assert "printed" not in outcomes
+
+
+def test_dry_run_wins_when_combined_with_no_retire(monkeypatch, tmp_path: Path) -> None:
+    """--dry-run and --no-retire together are not an error; --dry-run is the
+    stricter of the two and wins, so nothing is printed at all."""
+    spooled: list[Path] = []
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.spool", lambda pdf, config: spooled.append(pdf)
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--dry-run",
+            "--no-retire",
+            "--no-preview",
+            "--config",
+            str(tmp_path / "absent.toml"),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Dry run" in result.output
+    assert spooled == []
+
+
+def test_help_explains_that_no_retire_leaves_mail_starred() -> None:
+    """The surprise a user would otherwise hit must be spelled out up front."""
+    result = CliRunner().invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "--no-retire" in result.output
+    assert "starred" in result.output
+
+
 def test_a_print_failure_leaves_mail_untouched(monkeypatch, tmp_path: Path) -> None:
     from shabbat_print.printer import PrintError
 
