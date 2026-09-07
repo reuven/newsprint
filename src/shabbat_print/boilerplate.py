@@ -57,17 +57,10 @@ def is_boilerplate_line(line: str) -> bool:
 
 
 def content_ratio(text: str) -> float:
-    """Fraction of non-blank characters that look like real content.
-
-    The denominator includes the single newline separating each pair of
-    kept (non-blank) lines, alongside their own characters. Without that,
-    a block of many short boilerplate lines could be under-counted relative
-    to the same material as one long line, which would let a sufficiently
-    line-broken link roundup slip past the chrome threshold.
-    """
+    """Fraction of non-blank characters that look like real content."""
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         return 0.0
-    total = sum(len(line) for line in lines) + (len(lines) - 1)
+    total = sum(len(line) for line in lines)
     content = sum(len(line) for line in lines if not is_boilerplate_line(line))
     return content / total

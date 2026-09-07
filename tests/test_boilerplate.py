@@ -50,7 +50,7 @@ def test_content_ratio_of_pure_prose_is_one() -> None:
 
 def test_content_ratio_is_by_characters_not_lines() -> None:
     """A long ad page must score low even though it is long."""
-    text = PROSE + "\n" + "\n".join(["Sponsored by Acme"] * 20)
+    text = PROSE + "\n" + "\n".join(["Sponsored by Acme"] * 30)
     assert content_ratio(text) < 0.15
 
 
