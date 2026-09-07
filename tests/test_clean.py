@@ -247,12 +247,22 @@ def test_cleaning_every_fixture_never_raises() -> None:
     # the same score as a link roundup, so no ratio threshold could ever
     # have spared it. These two are pinned, verified-absent-before-the-fix
     # examples drawn from this exact corpus: a standalone episode
-    # dateline, and a headline in Chinese. If the fixture corpus is
-    # regenerated and these particular newsletters vanish, replace the
-    # pins rather than deleting the check.
+    # dateline, and an episode dateline with a headline in Chinese. Both
+    # pins were confirmed by actually running the pre-fix cleaner
+    # (commit 529d163) against this corpus: each full line is absent from
+    # its pre-fix output and present in the current one. The mandarin pin
+    # must be the *full* line, not just the Chinese portion - the Chinese
+    # headline alone also appears pre-fix, in a separate hidden preview
+    # snippet elsewhere in the message, so a substring pin on it alone
+    # cannot fail on the defect it claims to guard against. If the
+    # fixture corpus is regenerated and these particular newsletters
+    # vanish, replace the pins rather than deleting the check.
     dickerson = "johnfdickerson-substack-com.eml"
     mandarin = "realtimemandarin-lessons-substack-com.eml"
     assert dickerson in cleaned_by_name, "fixture corpus changed: re-pin this test"
     assert mandarin in cleaned_by_name, "fixture corpus changed: re-pin this test"
     assert "Listen now (25 mins)" in cleaned_by_name[dickerson].html
-    assert "与运动员首次合作效果惊人" in cleaned_by_name[mandarin].html
+    assert (
+        "Listen now (8 mins) | 与运动员首次合作效果惊人"
+        in cleaned_by_name[mandarin].html
+    )
