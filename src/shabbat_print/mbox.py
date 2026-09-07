@@ -77,14 +77,23 @@ def split_mbox(path: Path) -> Iterator[bytes]:
             )
         return
 
+    # Thunderbird mbox always begins with a separator at byte 0. Content before it
+    # means the file is not what the parser believes it is, and refusing to silently
+    # lose data means we fail loudly rather than invent a repair.
+    if starts[0] != 0:
+        raise MboxIntegrityError(
+            f"{path}: {starts[0]} bytes of preamble before first separator"
+        )
+
     bounds = list(zip(starts, [*starts[1:], len(data)], strict=True))
-    parsed = starts[0]  # any preamble before the first separator
     messages = []
     for begin, end in bounds:
         chunk = data[begin:end]
-        parsed += len(chunk)
         messages.append(chunk)
 
+    # Verify all bytes are accounted for in the messages we yield. The guard
+    # measures actual output, not internal bookkeeping, to catch silently dropped data.
+    parsed = sum(len(message) for message in messages)
     if parsed != size:
         raise MboxIntegrityError(
             f"{path}: parsed {parsed} bytes but the file holds {size}"

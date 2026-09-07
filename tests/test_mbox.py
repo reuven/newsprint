@@ -176,6 +176,61 @@ def test_multiple_messages_with_varied_separators(tmp_path: Path) -> None:
     assert b"Subject: Third" in messages[2]
 
 
+def test_preamble_before_first_separator_raises_error(tmp_path: Path) -> None:
+    """File with preamble before first separator must raise."""
+    preamble = b"This is preamble text\n\n"  # Needs blank line before From
+    content = (
+        preamble
+        + b"From sender@example.com Fri Sep  5 10:00:00 2026\r\n"
+        b"From: sender@example.com\r\n"
+        b"Subject: Test\r\n"
+        b"\r\n"
+        b"Body text.\r\n"
+        b"\r\n"
+    )
+    with pytest.raises(MboxIntegrityError, match="preamble"):
+        list(split_mbox(_write(tmp_path, content)))
+
+
+def test_unix_lf_only_mid_body_from_does_not_split(tmp_path: Path) -> None:
+    """Unix LF-only: From line in body without blank line before it."""
+    body = (
+        b"From sender@example.com Fri Sep  5 10:00:00 2026\n"
+        b"From: sender@example.com\n"
+        b"Subject: Quoting\n"
+        b"\n"
+        b"She wrote:\n"
+        b"From now on we do it differently.\n"
+        b"And that was that.\n"
+        b"\n"
+    )
+    messages = list(split_mbox(_write(tmp_path, body)))
+    assert len(messages) == 1
+    assert b"Subject: Quoting" in messages[0]
+
+
+def test_unix_lf_only_separators_with_blank_lines(tmp_path: Path) -> None:
+    """Unix LF-only: proper separators with blank lines."""
+    content = (
+        b"From first@example.com Fri Sep  5 10:00:00 2026\n"
+        b"From: first@example.com\n"
+        b"Subject: First\n"
+        b"\n"
+        b"Body text one.\n"
+        b"\n"
+        b"From second@example.com Sat Sep  6 11:00:00 2026\n"
+        b"From: second@example.com\n"
+        b"Subject: Second\n"
+        b"\n"
+        b"Body text two.\n"
+        b"\n"
+    )
+    messages = list(split_mbox(_write(tmp_path, content)))
+    assert len(messages) == 2
+    assert b"Subject: First" in messages[0]
+    assert b"Subject: Second" in messages[1]
+
+
 def test_from_at_eof_without_newline(tmp_path: Path) -> None:
     """From line at end of file with no newline after it."""
     content = (
