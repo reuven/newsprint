@@ -112,6 +112,25 @@ def test_an_unknown_print_key_is_rejected(tmp_path: Path) -> None:
         load_config(path)
 
 
+def test_an_unknown_section_is_rejected(tmp_path: Path) -> None:
+    """_reject_unknown_keys only ever iterated its own known sections, so a
+    mistyped section header like [prnt] was never looked at: the section
+    just vanished and the run silently fell back to every default in
+    [print], including the printer. This is the same silent-typo failure
+    the key-level check already guards against, one level up - a bad
+    section name must be named, alongside the valid ones."""
+    from shabbat_print.config import ConfigError
+
+    path = tmp_path / "config.toml"
+    path.write_text('[prnt]\nprinter = "Office"\n')
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(path)
+    message = str(exc_info.value)
+    assert "prnt" in message
+    for valid_section in ("mail", "print", "layout", "window"):
+        assert valid_section in message
+
+
 def test_an_unknown_mail_key_names_the_key_clearly(tmp_path: Path) -> None:
     """[mail] and [layout] raised a raw, unhelpful TypeError for an
     unknown key ("unexpected keyword argument"); now it must be the same

@@ -43,6 +43,13 @@ _SECTION_KEYS: dict[str, frozenset[str]] = {
 
 
 def _reject_unknown_keys(data: dict[str, dict[str, Any]]) -> None:
+    unknown_sections = sorted(set(data) - set(_SECTION_KEYS))
+    if unknown_sections:
+        valid = ", ".join(sorted(_SECTION_KEYS))
+        raise ConfigError(
+            f"unknown section(s): {', '.join(unknown_sections)}. "
+            f"Valid sections are: {valid}"
+        )
     for section, allowed in _SECTION_KEYS.items():
         unknown = sorted(set(data.get(section, {})) - allowed)
         if unknown:
