@@ -203,7 +203,12 @@ def build_contents(
         starts = _starting_cells(built, assumed)
         total_cells = assumed + newsletters_cells
         document = _contents_document(built, starts, packet_date, total_cells, config)
-        pdf = render_fn(document, config, out_dir=out_dir / f"attempt-{attempt}")
+        pdf = render_fn(
+            document,
+            config,
+            out_dir=out_dir / f"attempt-{attempt}",
+            packet_title=config.packet.title,
+        )
         actual = page_count(pdf)
         if actual == assumed:
             return (

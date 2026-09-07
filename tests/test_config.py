@@ -30,6 +30,8 @@ def test_missing_file_yields_structural_defaults(tmp_path: Path) -> None:
     assert config.printing.paper is A4
     assert config.layout.margin_mm == pytest.approx(9.0)
     assert config.fallback_days == 7
+    assert config.packet.title == ""
+    assert config.packet.min_words == 250
 
 
 def test_no_personal_data_hides_in_the_defaults() -> None:
@@ -127,7 +129,7 @@ def test_an_unknown_section_is_rejected(tmp_path: Path) -> None:
         load_config(path)
     message = str(exc_info.value)
     assert "prnt" in message
-    for valid_section in ("mail", "print", "layout", "window"):
+    for valid_section in ("mail", "print", "layout", "window", "packet"):
         assert valid_section in message
 
 
@@ -162,6 +164,23 @@ def test_an_unknown_window_key_is_rejected(tmp_path: Path) -> None:
     path.write_text("[window]\nfallback_dyas = 7\n")
     with pytest.raises(ConfigError, match="fallback_dyas"):
         load_config(path)
+
+
+def test_an_unknown_packet_key_is_rejected(tmp_path: Path) -> None:
+    from shabbat_print.config import ConfigError
+
+    path = tmp_path / "config.toml"
+    path.write_text('[packet]\ntilte = "Oops"\n')
+    with pytest.raises(ConfigError, match="tilte"):
+        load_config(path)
+
+
+def test_packet_title_and_threshold_are_configurable(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('[packet]\ntitle = "Family Shabbat Reading"\nmin_words = 200\n')
+    config = load_config(path)
+    assert config.packet.title == "Family Shabbat Reading"
+    assert config.packet.min_words == 200
 
 
 def test_malformed_toml_is_rejected_as_a_config_error(tmp_path: Path) -> None:

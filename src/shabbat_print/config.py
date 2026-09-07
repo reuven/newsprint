@@ -21,6 +21,12 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "print": {"printer": "", "paper": "A4", "duplex": "two-sided-long-edge"},
     "layout": {"margin_mm": 9.0, "font_size_pt": 9.0, "line_height": 1.35},
     "window": {"fallback_days": 7},
+    # title empty: the contents page renders nothing above "CONTENTS ·"
+    # until the user sets one in their own config file. min_words: measured
+    # against a real live queue - a gap of nearly 400 words separates the
+    # largest teaser (124) from the smallest real article (514), so 250
+    # sits comfortably in the middle with no tuning required.
+    "packet": {"title": "", "min_words": 250},
 }
 
 
@@ -39,6 +45,7 @@ _SECTION_KEYS: dict[str, frozenset[str]] = {
     "print": frozenset({"printer", "paper", "duplex"}),
     "layout": frozenset({"margin_mm", "font_size_pt", "line_height"}),
     "window": frozenset({"fallback_days"}),
+    "packet": frozenset({"title", "min_words"}),
 }
 
 
@@ -79,11 +86,18 @@ class LayoutConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class PacketConfig:
+    title: str
+    min_words: int
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     mail: MailConfig
     printing: PrintConfig
     layout: LayoutConfig
     fallback_days: int
+    packet: PacketConfig
     path: Path
 
     def require_mail(self) -> None:
@@ -146,6 +160,7 @@ def load_config(
             ),
             layout=LayoutConfig(**data["layout"]),
             fallback_days=data["window"]["fallback_days"],
+            packet=PacketConfig(**data["packet"]),
             path=path,
         )
     except (ValueError, TypeError, tomllib.TOMLDecodeError) as error:

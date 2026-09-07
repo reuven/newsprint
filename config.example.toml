@@ -33,3 +33,12 @@ line_height = 1.35
 
 [window]
 fallback_days = 7                # how far back to look with no previous run
+
+[packet]
+title = ""                       # a title line above "CONTENTS ·" on the
+                                  # contents page, e.g. "Family Shabbat
+                                  # Reading" - empty renders nothing
+min_words = 250                  # newsletters whose cleaned body has fewer
+                                  # words than this are skipped as teasers
+                                  # (headline + link, no real article) and
+                                  # reported, not printed or retired

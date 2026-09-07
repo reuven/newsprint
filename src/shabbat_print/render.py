@@ -48,6 +48,9 @@ body { font-family: Charter, Georgia, "Times New Roman", serif;
             font-size: 1rem; font-weight: bold; text-transform: uppercase;
             letter-spacing: 0.06em;
             border-top: 1.5pt solid #000; padding-top: 3pt; margin-bottom: 8pt; }
+.packet-title { font-family: -apple-system, "Helvetica Neue", Helvetica, sans-serif;
+            font-size: 1.4rem; font-weight: 900; text-transform: uppercase;
+            letter-spacing: 0.02em; margin: 0 0 4pt; }
 h1 { font-size: 1.15rem; line-height: 1.2; margin: 0 0 6pt; }
 h2, h3, h4 { font-size: 1rem; margin: 8pt 0 3pt; }
 p { margin: 0 0 5pt; orphans: 2; widows: 2; }
@@ -57,7 +60,7 @@ a { color: inherit; text-decoration: none; }
 img { max-width: 100%; filter: grayscale(100%); }
 </style></head>
 <body>
-<div class="masthead">$publication &middot; $date</div>
+$packet_title_html<div class="masthead">$publication &middot; $date</div>
 <h1>$title</h1>
 $content
 </body></html>""")
@@ -68,11 +71,29 @@ def _stem(document: Document, compression: float) -> str:
     return f"{digest}-{compression:.2f}"
 
 
-def _build_html(document: Document, config: Config, compression: float = 1.0) -> str:
+def _build_html(
+    document: Document,
+    config: Config,
+    compression: float = 1.0,
+    packet_title: str = "",
+) -> str:
     """Fill in the page template. Split out from render() so tests can
     inspect the generated markup and CSS directly, rather than only
-    through rendered PDF geometry."""
+    through rendered PDF geometry.
+
+    packet_title is empty for every ordinary newsletter; only contents.py
+    passes one, so the packet's own title line renders once, on the
+    contents page, never on a newsletter cell. Empty means no element at
+    all rather than an empty one - no margin, no shift - so the tracked
+    default (empty, until a user sets one in their own config) changes
+    nothing about the page.
+    """
     cell = config.printing.paper.cell
+    packet_title_html = (
+        f'<div class="packet-title">{escape(packet_title)}</div>\n'
+        if packet_title
+        else ""
+    )
     return _TEMPLATE.substitute(
         width_mm=f"{cell.width_mm:g}",
         height_mm=f"{cell.height_mm:g}",
@@ -83,6 +104,7 @@ def _build_html(document: Document, config: Config, compression: float = 1.0) ->
         date=escape(document.date.strftime("%-d %B %Y")),
         title=escape(document.title),
         content=document.html,
+        packet_title_html=packet_title_html,
     )
 
 
@@ -91,9 +113,15 @@ def render(
     config: Config,
     compression: float = 1.0,
     out_dir: Path | None = None,
+    packet_title: str = "",
 ) -> Path:
-    """Render to a cell-sized PDF. `compression` scales the line height."""
-    html = _build_html(document, config, compression)
+    """Render to a cell-sized PDF. `compression` scales the line height.
+
+    packet_title is the packet's own title line, shown once above the
+    masthead - only contents.py ever passes one, so it appears solely on
+    the contents page.
+    """
+    html = _build_html(document, config, compression, packet_title)
     directory = out_dir if out_dir is not None else Path(tempfile.mkdtemp())
     directory.mkdir(parents=True, exist_ok=True)
     output = directory / f"{_stem(document, compression)}.pdf"

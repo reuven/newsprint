@@ -256,6 +256,30 @@ def test_a_long_subject_never_wraps_the_row_in_a_real_render(
     assert len(lines) == 2 + len(built)
 
 
+def test_the_packet_title_appears_on_the_contents_page(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('[packet]\ntitle = "Family Shabbat Reading"\n')
+    config = load_config(path)
+    built = [_built(0), _built(1)]
+    result, converged = build_contents(built, config, PACKET_DATE, tmp_path)
+    assert converged
+    assert result is not None
+    text = page_text(result.pdf, 0)
+    assert "family shabbat reading" in text.lower()
+
+
+def test_an_empty_packet_title_renders_nothing_on_the_contents_page(
+    config, tmp_path: Path
+) -> None:
+    """The tracked default is empty, so a run with no config carries no
+    title line at all - the same page as before H1."""
+    built = [_built(0), _built(1)]
+    result, converged = build_contents(built, config, PACKET_DATE, tmp_path)
+    assert converged
+    assert result is not None
+    assert config.packet.title == ""
+
+
 def test_non_convergence_within_the_cap_reports_rather_than_hangs(
     config, tmp_path: Path
 ) -> None:

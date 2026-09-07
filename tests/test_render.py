@@ -165,6 +165,46 @@ def _masthead_css(html: str) -> str:
     return html[start : end + 1]
 
 
+def test_no_packet_title_line_renders_by_default(config, tmp_path: Path) -> None:
+    """The tracked default is empty; an empty packet title must render
+    nothing, not a blank line - the whole open-source point of H1."""
+    pdf = render(document(PROSE), config, out_dir=tmp_path)
+    text = page_text(pdf, 0)
+    assert "packet-title" not in text
+
+
+def test_a_packet_title_renders_above_the_masthead(config, tmp_path: Path) -> None:
+    pdf = render(
+        document(PROSE),
+        config,
+        out_dir=tmp_path,
+        packet_title="Reuven's Shabbat reading",
+    )
+    text = page_text(pdf, 0)
+    assert "shabbat reading" in text.lower()
+
+
+def test_an_empty_packet_title_changes_nothing_in_the_generated_html(config) -> None:
+    """Passing packet_title="" (the default) must produce byte-identical
+    HTML to not passing it at all - nothing shifts."""
+    from shabbat_print.render import _build_html
+
+    without_kwarg = _build_html(document(PROSE), config)
+    with_empty = _build_html(document(PROSE), config, packet_title="")
+    assert without_kwarg == with_empty
+
+
+def test_the_packet_title_is_larger_and_bolder_than_the_masthead(config) -> None:
+    from shabbat_print.render import _build_html
+
+    html = _build_html(document(PROSE), config, packet_title="Family Reading")
+    start = html.index(".packet-title")
+    end = html.index("}", start)
+    packet_title_rule = html[start : end + 1]
+    assert "font-weight: 900" in packet_title_rule
+    assert "1.4rem" in packet_title_rule
+
+
 def test_masthead_appears_only_once_per_newsletter(config, tmp_path: Path) -> None:
     """The masthead is the newsletter's own navigation cue and must appear
     once, on the first cell only - even when the article spans several
