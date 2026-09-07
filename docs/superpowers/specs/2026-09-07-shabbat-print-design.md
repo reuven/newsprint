@@ -17,7 +17,7 @@ The manual process fails in five specific ways. The design addresses each:
 | Tedious and boring | Manual selection, one print dialog per message | One command |
 | Sometimes prints full size | The CUPS dialog's 4-up setting doesn't always take | The tool imposes 4-up itself; CUPS receives a finished page |
 | Money Stuff must print alone | Thunderbird's multi-message print path | Nothing goes through Thunderbird |
-| One footer line costs a whole sheet | Ads, link blocks, and unsubscribe boilerplate | Stripped structurally before rendering |
+| One footer line costs a whole sheet | Ads, link blocks, and unsubscribe boilerplate | Never rendered; plus a last-cell content check |
 | Non-starred issues are hard to include | No way to review what arrived | A numbered list of the week's unstarred mail |
 
 ## Non-goals
@@ -203,21 +203,44 @@ operations per message, and closes.
 Handled in two places, with different jobs.
 
 **Structural, in `clean.py`.** The reported symptom — a printout spilling onto
-another sheet because of "footers, advertisements, links" — is fixed by
-removing those elements before anything is rendered. Targets: the unsubscribe
-block, "view in browser" bars, sponsor and advertisement slots, social button
-rows, "you are receiving this because" boilerplate, mailing addresses,
-copyright lines, and preference-management links. Detected by a combination of
-link destination, element text against a phrase list, and position in the
-document (trailing blocks are much more likely to be boilerplate).
+another sheet because of "footers, advertisements, links" — is fixed by never
+rendering those elements in the first place. `clean.py` emits only what it
+judges to be article content, so in the common case a filler page cannot come
+into existence: there is nothing to put on it.
 
-**Post-hoc, in `trim.py`.** The safety net, for what the stripper missed. Drop
-the final cell when **both** hold: it carries fewer than 400 characters of
-text (a full cell holds roughly 1,500), and at least 70% of its non-blank
-lines match the boilerplate phrase list. Requiring both means a cell holding a
-short but genuine closing paragraph survives, because it fails the second
-test. Both thresholds are configurable; the defaults are calibrated against
-the fixture corpus in phase 2.
+Targets: the unsubscribe block, "view in browser" bars, sponsor and
+advertisement slots, social button rows, link roundups, sign-offs ("thanks for
+reading", "see you next week"), "you are receiving this because" boilerplate,
+mailing addresses, copyright lines, and preference-management links. Detected
+by a combination of link destination, element text against a phrase list, link
+density within the block, and position in the document — trailing blocks are
+far more likely to be boilerplate than leading ones.
+
+**Post-hoc, in `trim.py`.** The safety net, for chrome the stripper failed to
+recognise and therefore rendered inline.
+
+The rule is about what the text *is*, never how much of it there is. A last
+cell holding 1,200 characters of pure link roundup should go; one holding 200
+characters of a real closing paragraph should stay. So `trim.py` classifies
+each non-blank line on the final cell as boilerplate or content, and drops the
+cell when content accounts for **less than 15% of its characters**.
+
+A line is **boilerplate** when any of these holds:
+
+- it matches the boilerplate phrase list (the same list `clean.py` uses)
+- it is a bare URL, or link text with no surrounding prose
+- it is under 40 characters and does not end in sentence punctuation — the
+  shape of a link-roundup item or a navigation label
+
+Everything else is **content**. The 15% threshold is configurable and
+calibrated against the fixture corpus in phase 2.
+
+The error is deliberately asymmetric. Keeping a junk cell wastes a quarter of
+one side of one sheet; dropping a content cell silently destroys something the
+user wanted to read. So the test is *"is there any real content here?"* rather
+than *"is there mostly junk here?"*, and every trimmed cell is reported by name
+in the run summary with its content ratio, so a wrong drop is visible rather
+than invisible.
 
 ### Widow squeeze
 
@@ -229,9 +252,13 @@ content, so the fix is to make it fit instead.
 
 | Verdict | Test | Action |
 |---|---|---|
-| `FILLER` | under 400 chars **and** ≥70% boilerplate lines | drop the cell |
-| `WIDOW` | under 20% of cell height, not filler | squeeze |
+| `FILLER` | content is under 15% of the cell's characters | drop the cell |
+| `WIDOW` | not filler, but fills under 20% of the cell's height | squeeze |
 | `FULL` | anything else | leave alone |
+
+`FILLER` is tested first, and the two tests are independent: a long cell of
+pure advertising is `FILLER` despite being full, and a short cell of real
+prose is `WIDOW` despite being nearly empty.
 
 Squeezing calls `rerender(0.99)` and keeps the result only if the cell count
 actually drops. If it does not, it tries `rerender(0.98)`, and otherwise
