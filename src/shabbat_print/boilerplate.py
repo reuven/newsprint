@@ -44,14 +44,30 @@ _SENTENCE_END = (".", "!", "?", '"', "'", ")", ":", "”", "’")
 SHORT_LINE = 40
 
 
-def is_boilerplate_line(line: str) -> bool:
+def is_definite_chrome_line(line: str) -> bool:
+    """True only for a confident signal: a known phrase, or a bare URL.
+
+    Unlike is_boilerplate_line, this leaves out the short-line fallback -
+    "under 40 characters without sentence punctuation" - which is a weak
+    heuristic that also matches a bare headline, subtitle, masthead, or
+    dateline. Callers that need to tell a block of *definite* chrome apart
+    from something merely short (clean.py's heading guard, in particular)
+    should use this instead of is_boilerplate_line.
+    """
     stripped = line.strip()
     if not stripped:
         return False
     lowered = stripped.lower()
     if any(phrase in lowered for phrase in PHRASES):
         return True
-    if _URL_ONLY.match(stripped):
+    return bool(_URL_ONLY.match(stripped))
+
+
+def is_boilerplate_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if is_definite_chrome_line(stripped):
         return True
     return len(stripped) < SHORT_LINE and not stripped.endswith(_SENTENCE_END)
 

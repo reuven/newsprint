@@ -7,6 +7,7 @@ content actually reached it.
 
 import subprocess
 import tempfile
+import textwrap
 from pathlib import Path
 
 import click
@@ -117,6 +118,9 @@ def main(
             Verdict.FULL: "",
         }[item.verdict]
         click.echo(f"  {item.document.publication}: {item.cells} cells{note}")
+        for block in item.document.blocks_dropped:
+            preview = textwrap.shorten(block.text, width=70, placeholder="...")
+            click.echo(f"    removed block: {preview!r}")
     for failure in failed:
         click.echo(
             f"  SKIPPED {failure.document.publication}: {failure.error}", err=True

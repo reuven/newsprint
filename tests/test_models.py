@@ -97,6 +97,24 @@ class TestDocumentDefaultImages:
         assert doc2.images_dropped == ()
 
 
+class TestDocumentDefaultBlocksDropped:
+    """blocks_dropped defaults to tuple, not list, for the same reason
+    images_dropped does: a mutable default would be shared between every
+    Document that never overrides it."""
+
+    def test_blocks_dropped_defaults_to_empty_tuple(self) -> None:
+        origin = Origin(kind="email", identifier="msg-123")
+        doc = Document(
+            origin=origin,
+            publication="Test Newsletter",
+            title="Test Article",
+            date=datetime(2026, 9, 7, tzinfo=UTC),
+            html="<p>content</p>",
+        )
+        assert doc.blocks_dropped == ()
+        assert isinstance(doc.blocks_dropped, tuple)
+
+
 class TestOriginUidDefault:
     """uid defaults to None for URL-sourced documents and other origins without a uid."""
 

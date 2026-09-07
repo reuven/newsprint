@@ -139,6 +139,90 @@ def test_leaf_tags_are_kept_whole_not_fragmented() -> None:
     assert "markets and memory" in cleaned.html
 
 
+def test_a_heading_only_block_survives_even_though_it_scores_as_chrome() -> None:
+    """An h1-h6 block is never decomposed, however short its text scores.
+
+    is_boilerplate_line's short-line fallback treats any line under 40
+    characters without sentence punctuation as chrome, so a heading-only
+    block scores exactly 0.00 - the same as a link-roundup item. No
+    positive ratio threshold could ever spare it; the block must be
+    protected structurally instead.
+    """
+    html = (
+        "<html><body>"
+        "<div><h1>Don't Call it a Cult</h1></div>"
+        "<div><p>The rest of the newsletter goes on for a good while about "
+        "the actual subject, which is substantial enough to read as a real "
+        "article rather than a caption.</p></div>"
+        "</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Don't Call it a Cult" in cleaned.html
+
+
+def test_a_short_standalone_subtitle_survives() -> None:
+    html = (
+        "<html><body>"
+        "<div>So far, so good</div>"
+        "<div><p>The rest of the newsletter goes on for a good while about "
+        "the actual subject, which is substantial enough to read as a real "
+        "article rather than a caption.</p></div>"
+        "</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "So far, so good" in cleaned.html
+
+
+def test_a_masthead_with_byline_and_date_survives() -> None:
+    html = (
+        "<html><body>"
+        "<div>The Reframe &middot; By A.R. Moxon &bull; 25 Apr</div>"
+        "<div><p>The rest of the newsletter goes on for a good while about "
+        "the actual subject, which is substantial enough to read as a real "
+        "article rather than a caption.</p></div>"
+        "</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "A.R. Moxon" in cleaned.html
+
+
+def test_a_dateline_survives() -> None:
+    html = (
+        "<html><body>"
+        "<div>2026-06-09 -- Tel Aviv</div>"
+        "<div><p>The rest of the newsletter goes on for a good while about "
+        "the actual subject, which is substantial enough to read as a real "
+        "article rather than a caption.</p></div>"
+        "</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Tel Aviv" in cleaned.html
+
+
+def test_a_confident_chrome_block_is_still_removed_even_if_short() -> None:
+    """The heading guard must not swallow a block a phrase match already
+    confidently identifies as chrome, or test_an_all_chrome_document_
+    comes_back_empty would start failing."""
+    html = (
+        "<html><body>"
+        "<div><p>Unsubscribe</p></div>"
+        "<div><p>The rest of the newsletter goes on for a good while about "
+        "the actual subject, which is substantial enough to read as a real "
+        "article rather than a caption.</p></div>"
+        "</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Unsubscribe" not in cleaned.html
+
+
+def test_dropped_blocks_are_reported() -> None:
+    """A wrong removal must be visible, not invisible - the same principle
+    trim.py already applies by naming every dropped cell."""
+    cleaned = clean_document(document(NEWSLETTER))
+    assert cleaned.blocks_dropped
+    assert any("unsubscribe" in block.text.lower() for block in cleaned.blocks_dropped)
+
+
 def test_other_document_fields_are_preserved() -> None:
     cleaned = clean_document(document(NEWSLETTER))
     assert cleaned.title == "An Issue"
@@ -152,5 +236,23 @@ def test_cleaning_every_fixture_never_raises() -> None:
 
     paths = sorted(FIXTURES.glob("*.eml"))
     assert paths, "no fixtures; run `make fixtures`"
+    cleaned_by_name = {}
     for path in paths:
-        clean_document(extract(path.read_bytes()))
+        cleaned_by_name[path.name] = clean_document(extract(path.read_bytes()))
+
+    # Content-retention regression guard. A controller's manual recount of
+    # this corpus found the chrome stripper destroying more real content
+    # than chrome: a heading-only block - a masthead, a subtitle, a
+    # dateline, a headline in any script - scored exactly 0.00 under
+    # content_ratio, the same score as a link roundup, so no ratio
+    # threshold could ever have spared it (I1 in the final review). These
+    # two are pinned, verified-absent-before-the-fix examples drawn from
+    # this exact corpus: a standalone episode dateline, and a headline in
+    # Chinese. If the fixture corpus is regenerated and these particular
+    # newsletters vanish, replace the pins rather than deleting the check.
+    dickerson = "johnfdickerson-substack-com.eml"
+    mandarin = "realtimemandarin-lessons-substack-com.eml"
+    assert dickerson in cleaned_by_name, "fixture corpus changed: re-pin this test"
+    assert mandarin in cleaned_by_name, "fixture corpus changed: re-pin this test"
+    assert "Listen now (25 mins)" in cleaned_by_name[dickerson].html
+    assert "与运动员首次合作效果惊人" in cleaned_by_name[mandarin].html

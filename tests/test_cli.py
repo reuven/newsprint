@@ -343,6 +343,37 @@ def test_an_unconfigured_account_says_what_to_set(monkeypatch, tmp_path: Path) -
     assert "mail.host and mail.user" in result.output
 
 
+def test_a_dropped_chrome_block_is_reported(monkeypatch, tmp_path: Path) -> None:
+    """A wrong removal must be visible in the run's own output, not just
+    recorded on the Document and never shown to anyone."""
+    from datetime import datetime
+
+    from shabbat_print.models import Document, Origin
+
+    document = Document(
+        origin=Origin(kind="email", identifier="<f@example.com>", uid=9),
+        publication="Test Weekly",
+        title="An Issue",
+        date=datetime(2026, 9, 5, tzinfo=UTC),
+        html=(
+            "<div><p>The Federal Reserve declined to move rates this month, "
+            "which surprised almost nobody who was paying attention.</p></div>"
+            "<div><p>Unsubscribe</p></div>"
+        ),
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--dry-run", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+    )
+    assert result.exit_code == 0
+    assert "removed block" in result.output
+    assert "unsubscribe" in result.output.lower()
+
+
 def test_a_document_that_cannot_be_built_is_reported(
     monkeypatch, tmp_path: Path
 ) -> None:

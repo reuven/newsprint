@@ -1,6 +1,10 @@
 import pytest
 
-from shabbat_print.boilerplate import content_ratio, is_boilerplate_line
+from shabbat_print.boilerplate import (
+    content_ratio,
+    is_boilerplate_line,
+    is_definite_chrome_line,
+)
 
 PROSE = "Private credit is having a moment, and not entirely a good one."
 
@@ -56,3 +60,41 @@ def test_content_ratio_is_by_characters_not_lines() -> None:
 
 def test_content_ratio_of_empty_text_is_zero() -> None:
     assert content_ratio("\n \n") == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Unsubscribe",
+        "View this email in your browser",
+        "© 2026 Bloomberg L.P. All rights reserved.",
+        "https://example.com/some/tracking/link",
+        "www.example.com",
+    ],
+)
+def test_definite_chrome_lines_match_a_known_phrase_or_a_bare_url(
+    line: str,
+) -> None:
+    assert is_definite_chrome_line(line) is True
+
+
+def test_definite_chrome_line_of_a_blank_line_is_false() -> None:
+    assert is_definite_chrome_line("   ") is False
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "So far, so good",
+        "End of an era",
+        "Read more",
+        "Watch now",
+        "The Reframe · By A.R. Moxon • 25 Apr",
+    ],
+)
+def test_definite_chrome_lines_do_not_match_a_short_heading(line: str) -> None:
+    """These score as boilerplate under is_boilerplate_line's short-line
+    fallback, but that fallback is a weak heuristic, not a confident
+    signal - it is exactly the mechanism that let clean.py destroy real
+    headlines, subtitles, and mastheads (see I1 in the final review)."""
+    assert is_definite_chrome_line(line) is False

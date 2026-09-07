@@ -30,6 +30,18 @@ class DroppedImage:
 
 
 @dataclass(frozen=True, slots=True)
+class DroppedBlock:
+    """A top-level block clean.py judged to be chrome and removed.
+
+    Kept for reporting, so a wrong removal is visible rather than
+    invisible - the same principle trim.py already applies to a dropped
+    cell.
+    """
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
 class Document:
     """One thing to be printed, cleaned and ready to render."""
 
@@ -41,3 +53,4 @@ class Document:
     author: str | None = None
     images_kept: int = 0
     images_dropped: tuple[DroppedImage, ...] = ()
+    blocks_dropped: tuple[DroppedBlock, ...] = ()
