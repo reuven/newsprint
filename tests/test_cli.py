@@ -16,6 +16,15 @@ user = "someone@example.com"
 folder = "INBOX/toprint"
 """
 
+# Long enough to clear the default packet.min_words threshold (250) after
+# cleaning, so a fixture built from it is a genuine "Built", not skipped
+# as a teaser - H2 added that check to build_one() and this project's own
+# live queue default is well above the length of a single sentence.
+LONG_PROSE = (
+    "The Federal Reserve declined to move rates this month, which surprised "
+    "almost nobody who had been paying attention to the minutes. "
+) * 15
+
 
 def _message(headers: str, body: str) -> bytes:
     return (headers.strip() + "\n\n" + body).encode()
@@ -101,8 +110,7 @@ def test_dry_run_never_prints_and_never_retires(monkeypatch, tmp_path: Path) -> 
         publication="Test Weekly",
         title="An Issue",
         date=datetime(2026, 9, 5, tzinfo=UTC),
-        html="<div><p>The Federal Reserve declined to move rates this "
-        "month, which surprised almost nobody.</p></div>",
+        html=f"<div><p>{LONG_PROSE}</p></div>",
     )
 
     spooled: list[Path] = []
@@ -140,8 +148,7 @@ def test_declining_the_prompt_prints_nothing(monkeypatch, tmp_path: Path) -> Non
         publication="Test Weekly",
         title="Another Issue",
         date=datetime(2026, 9, 5, tzinfo=UTC),
-        html="<div><p>The Federal Reserve declined to move rates this "
-        "month, which surprised almost nobody.</p></div>",
+        html=f"<div><p>{LONG_PROSE}</p></div>",
     )
     spooled: list[Path] = []
     monkeypatch.setattr(
@@ -174,8 +181,7 @@ def _queued(identifier: str = "<d@example.com>", uid: int = 4):
         publication="Test Weekly",
         title="An Issue",
         date=datetime(2026, 9, 5, tzinfo=UTC),
-        html="<div><p>The Federal Reserve declined to move rates this "
-        "month, which surprised almost nobody.</p></div>",
+        html=f"<div><p>{LONG_PROSE}</p></div>",
     )
 
 
@@ -356,8 +362,7 @@ def test_a_url_sourced_document_prints_without_ever_calling_retire(
         publication="Test Weekly",
         title="An Issue",
         date=datetime(2026, 9, 5, tzinfo=UTC),
-        html="<div><p>The Federal Reserve declined to move rates this "
-        "month, which surprised almost nobody.</p></div>",
+        html=f"<div><p>{LONG_PROSE}</p></div>",
     )
     retired: list[list[int]] = []
     monkeypatch.setattr(
@@ -647,8 +652,7 @@ def test_image_counts_are_reported(monkeypatch, tmp_path: Path) -> None:
         title="An Issue",
         date=datetime(2026, 9, 5, tzinfo=UTC),
         html=(
-            "<div><p>The Federal Reserve declined to move rates this month, "
-            "which surprised almost nobody who was paying attention.</p>"
+            f"<div><p>{LONG_PROSE}</p>"
             '<img src="https://example.com/pixel.gif" width="1" height="1">'
             "</div>"
         ),
@@ -677,11 +681,7 @@ def test_a_dropped_chrome_block_is_reported(monkeypatch, tmp_path: Path) -> None
         publication="Test Weekly",
         title="An Issue",
         date=datetime(2026, 9, 5, tzinfo=UTC),
-        html=(
-            "<div><p>The Federal Reserve declined to move rates this month, "
-            "which surprised almost nobody who was paying attention.</p></div>"
-            "<div><p>Unsubscribe</p></div>"
-        ),
+        html=(f"<div><p>{LONG_PROSE}</p></div><div><p>Unsubscribe</p></div>"),
     )
     monkeypatch.setattr(
         "shabbat_print.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
@@ -724,6 +724,130 @@ def _empty():
         date=datetime(2026, 9, 5, tzinfo=UTC),
         html="<div><p>Unsubscribe</p></div>",
     )
+
+
+def _teaser(uid: int = 6, identifier: str = "<teaser@example.com>"):
+    """A headline-and-link teaser: survives clean.py's chrome removal (it
+    is real editorial text, not boilerplate) but falls well under the
+    default packet.min_words threshold."""
+    from datetime import datetime
+
+    from shabbat_print.models import Document, Origin
+
+    return Document(
+        origin=Origin(kind="email", identifier=identifier, uid=uid),
+        publication="The Times",
+        title="Pete Hegseth Is a Wrecking Ball",
+        date=datetime(2026, 9, 5, tzinfo=UTC),
+        html="<h1>Pete Hegseth Is a Wrecking Ball</h1><p>Read more online.</p>",
+    )
+
+
+def test_a_teaser_is_reported_on_stdout_with_subject_and_word_count(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """H2: skipping must be visible, never silent - the report must name
+    the publication, the subject, and the word count that fell short, and
+    it must be on stdout (Click's non-error stream), not buried on
+    stderr the way an ordinary build failure is."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_teaser()], None)
+    )
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")]
+    )
+    assert result.exit_code == 0
+    assert "SKIPPED" in result.output
+    assert "The Times" in result.output
+    assert "Pete Hegseth Is a Wrecking Ball" in result.output
+    assert "3 words" in result.output  # "Read more online."
+    # Explicitly on stdout, unlike the generic SKIPPED-on-build-failure line.
+    assert "SKIPPED" in result.stdout
+
+
+def test_a_skipped_teaser_is_not_retired(monkeypatch, tmp_path: Path) -> None:
+    """The retirement invariant: a message that did not reach the PDF must
+    stay starred. `uids` is derived only from `built`, so a lone teaser
+    with nothing else in the queue must never call retire_printed at all."""
+    retired: list[list[int]] = []
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue",
+        lambda config: ([_teaser()], "INBOX/Trash"),
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.retire_printed",
+        lambda config, uids, trash: retired.append(uids),
+    )
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")]
+    )
+    assert result.exit_code == 0
+    assert "Nothing could be built" in result.output
+    assert retired == []
+
+
+def test_a_skipped_teaser_is_excluded_from_uids_alongside_a_real_build(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A teaser mixed in with a real newsletter: the real one prints and
+    retires, the teaser stays starred - `uids` must name only the one
+    that actually reached the PDF."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue",
+        lambda config: ([_queued(), _teaser()], "INBOX/Trash"),
+    )
+    monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
+
+    def fake_retire_printed(config, uids, trash):
+        assert uids == [4]  # _queued()'s uid only - the teaser's is absent
+        return RetireResult(retired=tuple(uids), failed=())
+
+    monkeypatch.setattr("shabbat_print.cli.retire_printed", fake_retire_printed)
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code == 0
+    assert "SKIPPED" in result.output
+
+
+def test_skipped_teasers_are_recorded_in_the_run_log(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A user auditing the log later must be able to see what was left
+    out, not just what printed."""
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue",
+        lambda config: ([_queued(), _teaser()], "INBOX/Trash"),
+    )
+    monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
+    monkeypatch.setattr(
+        "shabbat_print.cli.retire_printed",
+        lambda config, uids, trash: RetireResult(retired=tuple(uids), failed=()),
+    )
+
+    def fake_record(entry, **kw):
+        recorded.append(entry)
+        return tmp_path / "r"
+
+    monkeypatch.setattr("shabbat_print.runlog.record", fake_record)
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code == 0
+    printed_entries = [entry for entry in recorded if entry["outcome"] == "printed"]
+    assert len(printed_entries) == 1
+    skipped = printed_entries[0]["skipped"]
+    assert len(skipped) == 1
+    assert skipped[0]["publication"] == "The Times"
+    assert skipped[0]["title"] == "Pete Hegseth Is a Wrecking Ball"
+    assert skipped[0]["words"] == 3
 
 
 def test_fetch_queue_extracts_the_flagged_messages(monkeypatch, mail_config) -> None:

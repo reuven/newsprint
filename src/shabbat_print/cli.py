@@ -27,7 +27,7 @@ from .extract import extract
 from .impose import impose
 from .mail import Mailbox, MailError, RetireResult, password_for
 from .models import Document, Verdict
-from .pipeline import Built, Failure, build_one
+from .pipeline import Built, Failure, TeaserSkippedError, build_one
 from .printer import PrintError, spool
 from .stamp import stamp_packet
 
@@ -180,9 +180,31 @@ def main(
             preview = textwrap.shorten(block.text, width=70, placeholder="...")
             click.echo(f"    removed block: {preview!r}")
     for failure in failed:
-        click.echo(
-            f"  SKIPPED {failure.document.publication}: {failure.error}", err=True
-        )
+        if isinstance(failure.error, TeaserSkippedError):
+            # H2: visible, never silent, and specifically on stdout - a
+            # user who disagrees with the threshold must be able to see
+            # what was dropped and why, not have it scroll away on
+            # stderr the way an ordinary build failure does.
+            click.echo(
+                f"  SKIPPED {failure.document.publication}: "
+                f"{failure.document.title!r} ({failure.error.word_count} words, "
+                f"below {failure.error.min_words})"
+            )
+        else:
+            click.echo(
+                f"  SKIPPED {failure.document.publication}: {failure.error}", err=True
+            )
+
+    skipped_teasers = [
+        {
+            "identifier": failure.document.origin.identifier,
+            "publication": failure.document.publication,
+            "title": failure.document.title,
+            "words": failure.error.word_count,
+        }
+        for failure in failed
+        if isinstance(failure.error, TeaserSkippedError)
+    ]
 
     if not built:
         click.echo("Nothing could be built.", err=True)
@@ -228,7 +250,13 @@ def main(
 
     destination = config.printing.printer or "the default printer"
     if not click.confirm(f"\nPrint to {destination}?", default=False):
-        runlog.record({"outcome": "cancelled", "documents": len(built)})
+        runlog.record(
+            {
+                "outcome": "cancelled",
+                "documents": len(built),
+                "skipped": skipped_teasers,
+            }
+        )
         click.echo("Not printed. Mail untouched.")
         return
 
@@ -238,6 +266,7 @@ def main(
             "outcome": "printing",
             "documents": [item.document.origin.identifier for item in built],
             "uids": uids,
+            "skipped": skipped_teasers,
         }
     )
 
@@ -256,6 +285,7 @@ def main(
             "job": job,
             "documents": [item.document.origin.identifier for item in built],
             "uids": uids,
+            "skipped": skipped_teasers,
         }
     )
 

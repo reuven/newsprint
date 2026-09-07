@@ -13,6 +13,7 @@ from .config import Config
 from .models import Document, Verdict
 from .pdfutil import page_count
 from .render import render
+from .teaser import word_count as teaser_word_count
 from .trim import fit
 
 
@@ -32,6 +33,21 @@ class Failure:
 
 class EmptyDocumentError(Exception):
     """Cleaning left nothing to print."""
+
+
+class TeaserSkippedError(Exception):
+    """The cleaned body is only a headline and a link - too short to be
+    worth a whole cell (H2). Raised as an ordinary build_one() failure so
+    a skipped document gets the same treatment as every other failure
+    path: reported, and never retired, since retirement (cli.py's `uids`)
+    is derived only from what reached the PDF. Carries the measured word
+    count and the threshold it fell below, so the caller can report
+    exactly why without re-deriving either."""
+
+    def __init__(self, word_count: int, min_words: int) -> None:
+        self.word_count = word_count
+        self.min_words = min_words
+        super().__init__(f"{word_count} words, below the {min_words}-word threshold")
 
 
 def build_one(
@@ -59,6 +75,9 @@ def build_one(
             raise EmptyDocumentError(
                 f"{document.publication}: nothing left after cleaning"
             )
+        count = teaser_word_count(cleaned)
+        if count < config.packet.min_words:
+            raise TeaserSkippedError(count, config.packet.min_words)
         pdf = render_fn(cleaned, config, out_dir=document_dir)
         fitted, verdict = fit(
             pdf,
