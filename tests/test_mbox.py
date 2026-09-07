@@ -246,6 +246,55 @@ def test_from_at_eof_without_newline(tmp_path: Path) -> None:
     assert len(messages) == 1
 
 
+def test_a_leading_newline_before_the_first_separator_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """A match at position 1 cannot have a blank line before it.
+
+    The regex matches the F in "From" at position 1 (after the leading \n).
+    _preceded_by_blank_line is called for position 1 and returns False
+    (line 35: position < 2). No valid separator at position 0 means the
+    file is rejected as having a preamble.
+    """
+    path = _write(
+        tmp_path,
+        b"\nFrom sender@example.com Fri Sep  5 10:00:00 2026\r\n"
+        b"From: sender@example.com\r\nSubject: T\r\n\r\nBody.\r\n\r\n",
+    )
+    with pytest.raises(MboxIntegrityError):
+        list(split_mbox(path))
+
+
+def test_a_leading_crlf_before_the_first_separator_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """A match at position 2 with leading CRLF.
+
+    The regex matches the F in "From" at position 2 (after the leading \r\n).
+    _preceded_by_blank_line is called for position 2 and returns False
+    (line 43: position < 3 after detecting \r\n). No valid separator at
+    position 0 means the file is rejected as having a preamble.
+    """
+    path = _write(
+        tmp_path,
+        b"\r\nFrom sender@example.com Fri Sep  5 10:00:00 2026\r\n"
+        b"From: sender@example.com\r\nSubject: T\r\n\r\nBody.\r\n\r\n",
+    )
+    with pytest.raises(MboxIntegrityError):
+        list(split_mbox(path))
+
+
+def test_a_match_not_preceded_by_a_newline_is_rejected() -> None:
+    """Reaches a branch split_mbox cannot: the regex guarantees a preceding
+    newline, but the predicate does not assume its caller.
+
+    Direct unit test of _preceded_by_blank_line as a general predicate.
+    """
+    from shabbat_print.mbox import _preceded_by_blank_line
+
+    assert _preceded_by_blank_line(b"xFrom ", 1) is False
+
+
 def test_no_thunderbird_profile_means_none(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
