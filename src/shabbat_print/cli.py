@@ -146,6 +146,10 @@ def main(
             Verdict.FULL: "",
         }[item.verdict]
         click.echo(f"  {item.document.publication}: {item.cells} cells{note}")
+        click.echo(
+            f"    kept {item.document.images_kept} images, "
+            f"dropped {len(item.document.images_dropped)}"
+        )
         for block in item.document.blocks_dropped:
             preview = textwrap.shorten(block.text, width=70, placeholder="...")
             click.echo(f"    removed block: {preview!r}")
@@ -228,4 +232,12 @@ def main(
                 f"Printed, but could not retire: {error}\n"
                 f"Mail may be partly modified; check {trash} by hand."
             ) from error
+        runlog.record(
+            {
+                "outcome": "retired",
+                "trash": trash,
+                "retired": list(result.retired),
+                "failed": list(result.failed),
+            }
+        )
         click.echo(f"Retired {len(result.retired)} message(s) to {trash}.")

@@ -420,6 +420,105 @@ def test_an_unconfigured_account_says_what_to_set(monkeypatch, tmp_path: Path) -
     assert "mail.host and mail.user" in result.output
 
 
+def test_retirement_outcome_is_logged(monkeypatch, tmp_path: Path) -> None:
+    """runlog records intent before mutating but never recorded the
+    RetireResult afterward - the spec's error table requires logging
+    which UIDs succeeded, so a partial failure can be recovered by hand
+    from the log alone."""
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
+    monkeypatch.setattr(
+        "shabbat_print.cli.retire_printed",
+        lambda config, uids, trash: RetireResult(retired=(4,), failed=()),
+    )
+
+    def fake_record(entry, **kw):
+        recorded.append(entry)
+        return tmp_path / "r"
+
+    monkeypatch.setattr("shabbat_print.runlog.record", fake_record)
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code == 0
+    retired_entries = [entry for entry in recorded if entry["outcome"] == "retired"]
+    assert len(retired_entries) == 1
+    assert retired_entries[0]["retired"] == [4]
+    assert retired_entries[0]["failed"] == []
+
+
+def test_a_partial_retirement_outcome_is_logged(monkeypatch, tmp_path: Path) -> None:
+    """The failed UIDs must be in the log too, not just the succeeded ones."""
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue",
+        lambda config: (
+            [
+                _queued(identifier="<d@example.com>", uid=4),
+                _queued("<g@example.com>", 7),
+            ],
+            "INBOX/Trash",
+        ),
+    )
+    monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
+    monkeypatch.setattr(
+        "shabbat_print.cli.retire_printed",
+        lambda config, uids, trash: RetireResult(retired=(4,), failed=(7,)),
+    )
+
+    def fake_record(entry, **kw):
+        recorded.append(entry)
+        return tmp_path / "r"
+
+    monkeypatch.setattr("shabbat_print.runlog.record", fake_record)
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code == 0
+    retired_entries = [entry for entry in recorded if entry["outcome"] == "retired"]
+    assert len(retired_entries) == 1
+    assert retired_entries[0]["retired"] == [4]
+    assert retired_entries[0]["failed"] == [7]
+
+
+def test_image_counts_are_reported(monkeypatch, tmp_path: Path) -> None:
+    """The spec requires 'kept N images, dropped M' precisely because a
+    silent drop is otherwise indistinguishable from an image that was
+    never there. The data was already on Built.document; nothing echoed
+    it."""
+    from datetime import datetime
+
+    from shabbat_print.models import Document, Origin
+
+    document = Document(
+        origin=Origin(kind="email", identifier="<h@example.com>", uid=11),
+        publication="Test Weekly",
+        title="An Issue",
+        date=datetime(2026, 9, 5, tzinfo=UTC),
+        html=(
+            "<div><p>The Federal Reserve declined to move rates this month, "
+            "which surprised almost nobody who was paying attention.</p>"
+            '<img src="https://example.com/pixel.gif" width="1" height="1">'
+            "</div>"
+        ),
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--dry-run", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+    )
+    assert result.exit_code == 0
+    assert "kept 0 images, dropped 1" in result.output
+
+
 def test_a_dropped_chrome_block_is_reported(monkeypatch, tmp_path: Path) -> None:
     """A wrong removal must be visible in the run's own output, not just
     recorded on the Document and never shown to anyone."""
