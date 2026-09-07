@@ -89,9 +89,16 @@ brew install pango cairo gdk-pixbuf
 Homebrew's `lib` directory isn't on the default `dlopen` search path, so
 WeasyPrint can fail to import with an error like `cannot load library
 'libgobject-2.0-0'` unless something points the dynamic linker at it.
-`make test` and `make lint` do this automatically by exporting
-`DYLD_FALLBACK_LIBRARY_PATH` from `brew --prefix`. If you invoke `pytest`
-directly instead of through `make test`, export it yourself first:
+`shabbat_print._libpath` handles this automatically: before `render.py`
+imports WeasyPrint, it sets `DYLD_FALLBACK_LIBRARY_PATH` to whichever of
+`/opt/homebrew/lib` or `/usr/local/lib` has the library, if the variable
+isn't already set. So running the tool, `uv run shabbat-print`, or the test
+suite all work out of the box on macOS with a Homebrew install in one of
+those two locations — no manual export needed.
+
+If your Homebrew libraries live somewhere else, set
+`DYLD_FALLBACK_LIBRARY_PATH` yourself before running; an explicit value
+always takes priority:
 
 ```
 export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib"

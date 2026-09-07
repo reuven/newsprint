@@ -2,8 +2,11 @@
 
 # WeasyPrint needs Pango/Cairo/gdk-pixbuf, installed via Homebrew on macOS.
 # Homebrew's lib directory isn't on the default dlopen search path, so we
-# point dyld at it here. dyld only reads DYLD_* at process start, so this
-# has to happen before `uv run` launches, not from inside a conftest.py.
+# point dyld at it here. This is now belt-and-braces: shabbat_print._libpath
+# sets DYLD_FALLBACK_LIBRARY_PATH from Python before weasyprint is imported
+# (ctypes.util.find_library reads os.environ live, unlike dyld itself), so
+# `uv run shabbat-print` works without this export. We keep it here so
+# `make test` still works even if that module is ever broken.
 # On a machine without Homebrew (e.g. Linux, or macOS with the libraries
 # installed some other way), `brew --prefix` fails and BREW_PREFIX is
 # empty, so we leave the environment untouched rather than exporting a

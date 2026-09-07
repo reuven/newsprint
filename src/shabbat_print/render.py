@@ -10,6 +10,12 @@ from html import escape
 from pathlib import Path
 from string import Template
 
+from ._libpath import prepare_dyld_fallback_library_path
+
+# Must run before the weasyprint import: see _libpath.py for why this
+# actually works despite dyld only reading DYLD_* once, at process start.
+prepare_dyld_fallback_library_path()
+
 from weasyprint import HTML
 
 from .config import Config
