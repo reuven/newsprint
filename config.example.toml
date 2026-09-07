@@ -1,12 +1,25 @@
 # Copy to ~/.config/shabbat-print/config.toml and edit.
 # The IMAP password is NOT stored here. Put it in your system keychain:
 #     keyring set <mail.host> <mail.user>
+#
+# Gmail specifically:
+#   - Your regular Google password will not work over IMAP. Enable 2-Step
+#     Verification, then generate an app password at
+#     https://myaccount.google.com/apppasswords and use that instead.
+#   - Gmail's folder namespace is not "INBOX/<label>". A label you create
+#     (e.g. "toprint") appears as a top-level IMAP mailbox named "toprint",
+#     a sibling of INBOX rather than something nested under it - set
+#     mail.folder to "toprint", not "INBOX/toprint".
 
 [mail]
 host   = "imap.gmail.com"        # e.g. imap.gmail.com, imap.fastmail.com
 user   = "you@example.com"
-folder = "INBOX/toprint"         # the folder you star things into
-trash  = "auto"                  # "auto" discovers the \Trash folder
+folder = "INBOX/toprint"         # the folder you star things into - for
+                                  # Gmail this is just the label name, e.g.
+                                  # "toprint" (see the Gmail note above)
+trash  = "auto"                  # "auto" discovers the \Trash folder;
+                                  # or set a literal folder name for a
+                                  # server without SPECIAL-USE support
 
 [print]
 printer = ""                     # empty means your system default printer
