@@ -113,21 +113,17 @@ importing it, so the dependency is injected and tests can pass a fake.
 
 ### The quarter-page identity
 
-A quartered sheet has the same proportions as the whole sheet, on both papers
-the tool supports — so a cell is never a distorted version of a page.
+A 2×2 grid halves both dimensions at once, so a cell's aspect ratio equals the
+sheet's — for any rectangle, not just for these two papers. A cell is therefore
+never a distorted version of a page, and no paper-specific reasoning is needed.
 
-**A4 by design.** The A series is defined by a √2 aspect ratio, chosen
-precisely so that halving preserves shape. A4 (210×297mm) halves to A5, and
-again to **A6, 105×148.5mm** — a named size the target printer already lists
-among its `PageSize` options.
+(The A series' √2 ratio is what makes *2-up* work, where only one dimension is
+halved: A4 folds to A5 folds to A6 with the shape preserved. At 4-up that
+property does no work. It is still a happy accident that quartered A4 lands on
+**A6, 105×148.5mm**, a named size the target printer lists among its `PageSize`
+options.)
 
-**Letter by coincidence.** Halving a rectangle inverts its ratio and halving
-it twice restores it, so Letter quartered is 4.25in by 5.5in and 8.5/11
-equals 4.25/5.5 exactly, 0.7727 either way. The intermediate half-Letter, at
-0.647, is a different shape — Letter only lands correctly because it is
-halved twice.
-
-This is load-bearing either way. `render.py` typesets each document directly
+The consequence is what matters. `render.py` typesets each document directly
 onto a cell-sized page, and `impose.py` places four of them at **100% scale**.
 Nothing is resampled, no margin is lost to an aspect mismatch, and a font
 specified at 9pt measures 9pt on the paper. It also means every page count in
