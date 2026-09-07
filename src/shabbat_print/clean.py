@@ -34,6 +34,7 @@ Phase 1 drops every image. Keeping content figures is spec phase 7 and is
 deliberately not implemented here.
 """
 
+import re
 from collections.abc import Iterator
 from dataclasses import replace
 
@@ -430,6 +431,149 @@ def _strip_line_chrome(root: Tag) -> tuple[DroppedBlock, ...]:
     return tuple(dropped)
 
 
+# Round 3, section D: within the leading region only, look for the
+# newsletter's own copy of its title, repeated as a second header block.
+_DUPLICATE_TITLE_LEAD_WINDOW = 15
+
+# How many leaves past a title match to look for the date line that
+# confirms it. Measured against the full fixture corpus: every genuine
+# duplicated header block (title, an optional subtitle, an optional
+# byline, a date) resolves within 3 further leaves - never more. This is
+# deliberately NOT given extra margin beyond that measured maximum: an
+# earlier draft used 4, reasoning that a little slack was harmless, and a
+# test built from this project's own flagship example
+# (test_the_real_headline_at_the_document_start_survives_a_later_
+# duplicate) proved that reasoning wrong - a genuine opening headline
+# immediately followed by a genuine duplicate block let the *real*
+# headline's own 4-away lookahead reach across the duplicate and find
+# ITS date line, swallowing the real headline into the removal too. 3 is
+# the tightest bound the evidence supports, and closes that hole.
+_DUPLICATE_TITLE_LOOKAHEAD = 3
+
+_TITLE_PUNCTUATION = re.compile(r"[^\w]+")
+
+# A bare "Month Day[, Year]" line - Substack's own dateline ("Aug 15",
+# "Jul 24, 2026"). Deliberately narrow: fullmatch, so a real sentence that
+# happens to mention a date ("The event is scheduled for Sep 4.") can
+# never qualify - it always has surrounding words the date line does not.
+_SHORT_DATE_LINE = re.compile(
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+    r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+"
+    r"\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?",
+    re.IGNORECASE,
+)
+
+
+def _normalize_title_text(text: str) -> str:
+    return _TITLE_PUNCTUATION.sub("", text).casefold()
+
+
+def _title_line_matches(line: str, title: str) -> bool:
+    """True when `line`, normalised by case-folding and stripping every
+    non-word character, is the same as the normalised Subject or a prefix
+    of it in either direction - publications truncate a long title in
+    either the Subject header or their own rendered copy, so whichever one
+    is shorter must be a prefix of the longer one."""
+    normalized_line = _normalize_title_text(line)
+    normalized_title = _normalize_title_text(title)
+    if not normalized_line or not normalized_title:
+        return False
+    return normalized_line.startswith(normalized_title) or normalized_title.startswith(
+        normalized_line
+    )
+
+
+def _is_short_date_line(line: str) -> bool:
+    return bool(_SHORT_DATE_LINE.fullmatch(line.strip()))
+
+
+def _strip_duplicate_title_block(
+    root: Tag, document: Document
+) -> tuple[DroppedBlock, ...]:
+    """Remove Substack's own duplicated title/subtitle/author/date header
+    block, when it sits in the leading region of the body (round 3,
+    section D - reversing an earlier decision to leave this alone).
+
+    render.py synthesises its own masthead and <h1> from the message's
+    Subject; several publications' own body HTML repeats the same title,
+    often with a subtitle, byline and date, as a second header block a few
+    lines into the body - the user's own screenshot showed the title
+    printed twice, six lines apart. An earlier investigation measured this
+    at "under half a cell" and the controller recommended declining it, on
+    two grounds both later found to be wrong: the cost is visual (a reader
+    sees the same headline twice), not spatial, and - most importantly for
+    this function's shape - 14 of 15 live occurrences sit in lines 1-14,
+    not mid-document. This is a leading-region problem, gated to the first
+    _DUPLICATE_TITLE_LEAD_WINDOW lines of the (already partly cleaned)
+    body, the same way _strip_leading_chrome_run is gated to a contiguous
+    run from position 0 - except the match here is anchored to a specific
+    known string (the Subject), not a score, so it does not need to start
+    at position 0 itself.
+
+    A title match alone is not enough to act on: a recurring section or
+    column name (the live queue's "Money Talks", "Cover Story", "Axios
+    AM") is often a genuine prefix of a longer Subject purely by
+    publication convention, and removing it would delete a real subtitle
+    and byline. What distinguishes Substack's own duplicated header is
+    that it always ends in a short, bare date line ("Aug 15", "Jul 24,
+    2026") within a few lines of the title - a section name never does.
+    Requiring that date line, found by scanning forward from each
+    candidate match rather than assumed to be one line away, is the
+    guard: measured against all 268 fixtures, it is what correctly finds
+    all 14 leading duplicates (plus several more, honest, mid-window
+    duplicates the earlier "under half a cell" measurement missed) while
+    leaving every section-name false positive untouched.
+
+    Matching Document.author for the "author" line, as the original
+    design sketch suggested, was tried and abandoned: the live queue's own
+    flagship example - "Don't Call it a Cult" - has a body byline of
+    "Ellie Power" against a Document.author of "Amanda & Hélène" (the
+    newsletter account's combined display name), so a literal author match
+    would silently fail to remove this exact case. The date line is the
+    reliable signal; whatever sits between the title and the date
+    (a subtitle, a byline, both, or neither) is removed with it,
+    unexamined - the same way _strip_leading_chrome_run removes a
+    contiguous run without individually validating every element in it.
+
+    If an earlier candidate title match in the window has no date line
+    within reach, the scan continues to the next candidate rather than
+    giving up - this is what correctly leaves a genuine opening headline
+    alone (the newsletter's own real <h2>, which is never followed by a
+    date) while still reaching a genuine duplicate a few lines later. See
+    test_the_real_headline_at_the_document_start_survives_a_later_
+    duplicate, which reproduces this project's own history: an earlier,
+    reverted change destroyed this exact headline by a cruder rule.
+    """
+    leaves = list(_iter_text_elements(root))
+    match_idx: int | None = None
+    end_idx: int | None = None
+    for idx in range(min(_DUPLICATE_TITLE_LEAD_WINDOW, len(leaves))):
+        text = leaves[idx].get_text(" ", strip=True)
+        if not _title_line_matches(text, document.title):
+            continue
+        for later in range(
+            idx + 1, min(idx + 1 + _DUPLICATE_TITLE_LOOKAHEAD, len(leaves))
+        ):
+            if _is_short_date_line(leaves[later].get_text(" ", strip=True)):
+                match_idx, end_idx = idx, later
+                break
+        if match_idx is not None:
+            break
+    if match_idx is None or end_idx is None:
+        return ()
+
+    block = leaves[match_idx : end_idx + 1]
+    if len(block) >= len(leaves):
+        # Removing the whole block would empty an otherwise non-empty
+        # document - the same guard the leading/trailing runs apply.
+        return ()
+
+    dropped = tuple(DroppedBlock(text=leaf.get_text(" ", strip=True)) for leaf in block)
+    for leaf in block:
+        leaf.decompose()
+    return dropped
+
+
 def _strip_presentational_attrs(root: Tag) -> None:
     """Drop inherited sender layout attributes from every retained tag."""
     for tag in (root, *root.find_all(True)):
@@ -460,6 +604,12 @@ def clean_document(document: Document) -> Document:
     # blocks that are themselves top-level, which the run-only passes
     # structurally cannot touch.
     dropped_leading = _strip_leading_chrome_run(root)
+    # Round 3, section D: with the leading chrome run already gone, the
+    # "first 15 lines" this pass is gated to are spent on the newsletter's
+    # own content rather than on a "Forwarded this email?" banner ahead of
+    # it. Runs before the trailing run and the block-level pass, neither
+    # of which this leading-region pass could ever conflict with.
+    dropped_duplicate_title = _strip_duplicate_title_block(root, document)
     dropped_trailing = _strip_trailing_chrome_run(root)
     dropped_blocks = _strip_chrome_blocks(root)
     _strip_presentational_attrs(root)
@@ -472,6 +622,7 @@ def clean_document(document: Document) -> Document:
         blocks_dropped=(
             *dropped_lines,
             *dropped_leading,
+            *dropped_duplicate_title,
             *dropped_trailing,
             *dropped_blocks,
         ),

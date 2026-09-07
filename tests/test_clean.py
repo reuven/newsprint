@@ -9,13 +9,14 @@ from shabbat_print.models import Document, Origin
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def document(html: str) -> Document:
+def document(html: str, title: str = "An Issue", author: str | None = None) -> Document:
     return Document(
         origin=Origin(kind="email", identifier="<x@example.com>"),
         publication="Test Weekly",
-        title="An Issue",
+        title=title,
         date=datetime(2026, 9, 5, tzinfo=UTC),
         html=html,
+        author=author,
     )
 
 
@@ -570,6 +571,169 @@ def test_other_document_fields_are_preserved() -> None:
     assert cleaned.title == "An Issue"
     assert cleaned.publication == "Test Weekly"
     assert cleaned.origin.identifier == "<x@example.com>"
+
+
+# Round 3, section D: the duplicated title block. Substack repeats a
+# post's own title/subtitle/author/date as a second header block a few
+# lines into the body, on top of our own masthead+<h1> (rendered in
+# render.py, not present in document.html at all). Reversing the earlier
+# decision to leave this alone: the fixture corpus shows 14 of 15 live
+# occurrences sit in the first 15 lines, so a position-gated rule is safe
+# the same way the leading-run rule is.
+def _duplicate_title_html(
+    *, subtitle: str = "The subtitle line", extra_before: str = ""
+) -> str:
+    return (
+        "<html><body><div>"
+        f"{extra_before}"
+        "<h2>Neo-Nazis and the Impotence of Trumponomics</h2>"
+        f"<p>{subtitle}</p>"
+        "<p>Paul Krugman</p>"
+        "<p>Sep 7</p>"
+        "<p>READ IN APP</p>"
+        "<p>Crude economics doesn't explain what just happened, and here is "
+        "a real paragraph of genuine article prose about the subject.</p>"
+        "</div></body></html>"
+    )
+
+
+def test_duplicated_title_block_in_leading_region_is_removed() -> None:
+    html = _duplicate_title_html()
+    cleaned = clean_document(
+        document(html, title="Neo-Nazis and the Impotence of Trumponomics")
+    )
+    assert "Neo-Nazis and the Impotence of Trumponomics" not in cleaned.html
+    assert "The subtitle line" not in cleaned.html
+    assert "Paul Krugman" not in cleaned.html
+    assert "Sep 7" not in cleaned.html
+    assert "Crude economics doesn't explain" in cleaned.html
+
+
+def test_duplicate_title_match_is_a_prefix_or_truncation_in_either_direction() -> None:
+    """Publications truncate: the body's own copy may be shorter (an
+    ellipsis-truncated rendering) or the Subject may be shorter (a
+    publication that adds a suffix in the body). Either direction of
+    prefix must match, after case-folding and stripping punctuation and
+    whitespace."""
+    html = (
+        "<html><body><div>"
+        "<h2>What's new in DevEx - Septem</h2>"
+        "<p>A subtitle</p>"
+        "<p>Daniel Grechko</p>"
+        "<p>Sep 2</p>"
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(
+        document(html, title="What's new in DevEx - September 2 edition")
+    )
+    assert "What's new in DevEx" not in cleaned.html
+    assert "genuine prose" in cleaned.html
+
+
+def test_a_title_match_with_no_date_anchor_nearby_is_not_removed() -> None:
+    """The load-bearing guard: a short line that merely happens to prefix
+    the subject (a recurring section name like "Money Talks" or "Axios
+    AM" in the live queue) is not, on its own, evidence of Substack's own
+    duplicated header - only a short date line following within a few
+    lines confirms that. Measured against the full fixture corpus: this
+    guard is what correctly leaves newsletters-e-economist-com's "Money
+    Talks" section name, and noreply-e-economist-com's "Cover Story", "The
+    Insider" section names, and mike-axios-com's "Axios AM" masthead
+    alone - none of them are followed by a bare date line."""
+    html = (
+        "<html><body><div>"
+        "<h2>Money Talks</h2>"
+        "<p>Dissecting the big themes in markets and the economy</p>"
+        "<p>What the new trend means for the economy</p>"
+        "<p>Don Weinland</p>"
+        "<p>China business and finance editor</p>"
+        "<p>Late last year I came across an amusing social-media post, and "
+        "the whole thing turned out to be a genuine editorial paragraph.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html, title="Money Talks: Chinamaxxing GDP"))
+    assert "Money Talks" in cleaned.html
+    assert "Don Weinland" in cleaned.html
+    assert "China business and finance editor" in cleaned.html
+
+
+def test_the_real_headline_at_the_document_start_survives_a_later_duplicate() -> None:
+    """The flagship regression case (from the project's own history: the
+    reverted 095d0e5 change destroyed this exact headline). "Don't Call it
+    a Cult" is the newsletter's own genuine headline at the very start of
+    the body - it has no date line following it within the lookahead, so
+    it must survive. A few lines later, Substack's own duplicated header
+    block (title again, subtitle, author, date) DOES have a date anchor,
+    and that one must be removed."""
+    html = (
+        "<html><body><div>"
+        "<h2>Don't Call it a Cult</h2>"
+        "<p>Forwarded this email? Subscribe here for more</p>"
+        "<h2>Don't Call it a Cult</h2>"
+        "<p>The Week in Conflict - June 1, 2026</p>"
+        "<p>Ellie Power</p>"
+        "<p>Jun 1</p>"
+        "<p>READ IN APP</p>"
+        "<p>It's one of the cardinal rules of cult deprogramming experts, "
+        "and this is where the real article genuinely begins in earnest.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html, title="Don't Call it a Cult"))
+    assert cleaned.html.count("Don't Call it a Cult") == 1
+    assert "It's one of the cardinal rules" in cleaned.html
+
+
+def test_duplicate_title_block_beyond_line_15_is_not_touched() -> None:
+    """The one measured mid-document case (Ian Krietzberg, line 87 of a
+    190-line digest) is a section heading naming one of several stories,
+    not a duplicate - position-gating to the first 15 lines excludes it
+    for free, without needing to tell the two apart by content."""
+    padding = "".join(
+        f"<p>Filler paragraph number {i} with enough real prose in it to "
+        "read as genuine article content rather than a caption.</p>"
+        for i in range(20)
+    )
+    html = (
+        "<html><body><div>"
+        f"{padding}"
+        "<h2>A Late Section</h2>"
+        "<p>A subtitle for the late section</p>"
+        "<p>Some Author</p>"
+        "<p>Sep 7</p>"
+        "<p>More real article prose continues here at proper length.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html, title="A Late Section"))
+    assert "A Late Section" in cleaned.html
+    assert "A subtitle for the late section" in cleaned.html
+    assert "Some Author" in cleaned.html
+
+
+def test_duplicate_title_guard_never_empties_a_nonempty_document() -> None:
+    from bs4 import BeautifulSoup
+
+    from shabbat_print.clean import _strip_duplicate_title_block
+
+    html = (
+        "<div><h2>Just a Title</h2><p>A subtitle</p><p>Some Author</p>"
+        "<p>Sep 7</p></div>"
+    )
+    soup = BeautifulSoup(f"<html><body>{html}</body></html>", "lxml")
+    root = soup.body
+    dropped = _strip_duplicate_title_block(root, document(html, title="Just a Title"))
+    assert dropped == ()
+    assert "Just a Title" in root.get_text()
+
+
+def test_duplicate_title_block_dropped_elements_are_reported() -> None:
+    cleaned = clean_document(
+        document(
+            _duplicate_title_html(), title="Neo-Nazis and the Impotence of Trumponomics"
+        )
+    )
+    assert any("trumponomics" in block.text.lower() for block in cleaned.blocks_dropped)
 
 
 @pytest.mark.skipif(not FIXTURES.exists(), reason="run `make fixtures` first")
