@@ -19,6 +19,27 @@ IMAPFactory = Callable[[str], imaplib.IMAP4]
 
 _TRASH_LINE = re.compile(rb'\\Trash\b[^"]*"[^"]*"\s+"?([^"]+?)"?\s*$')
 
+# strftime's %b reads LC_TIME, so a non-English locale can render a SEARCH
+# date the server rejects: de_DE appends a period ("Sep."), fr_FR uses its
+# own abbreviation ("sept."), he_IL spells the month in Hebrew entirely.
+# RFC 3501 wants the fixed English three-letter form regardless of locale,
+# so it is spelled out here instead of asking strftime for it. Do not
+# "simplify" this back to strftime.
+_IMAP_MONTHS = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
+
 
 class MailError(Exception):
     """Something went wrong talking to the mail server."""
@@ -51,9 +72,14 @@ class Mailbox:
         self._imap: imaplib.IMAP4 | None = None
 
     def __enter__(self) -> Self:
-        self._imap = self._factory(self._host)
-        self._imap.login(self._user, self._password)
-        self._imap.select(self._folder, readonly=True)
+        imap = self._factory(self._host)
+        status, _ = imap.login(self._user, self._password)
+        if status != "OK":
+            raise MailError(f"login failed for {self._user} at {self._host}: {status}")
+        status, _ = imap.select(self._folder, readonly=True)
+        if status != "OK":
+            raise MailError(f"could not open folder {self._folder!r}: {status}")
+        self._imap = imap
         return self
 
     def __exit__(
@@ -85,9 +111,8 @@ class Mailbox:
         return self._search("FLAGGED")
 
     def search_unflagged_since(self, since: date) -> list[int]:
-        # IMAP wants 01-Sep-2026, and the day is not zero-padded on every
-        # server, but a padded day is always accepted.
-        return self._search(f"UNFLAGGED SINCE {since.strftime('%d-%b-%Y')}")
+        month = _IMAP_MONTHS[since.month - 1]
+        return self._search(f"UNFLAGGED SINCE {since.day:02d}-{month}-{since.year}")
 
     def fetch(self, uid: int) -> bytes:
         status, data = self._connection.uid("FETCH", str(uid), "(RFC822)")

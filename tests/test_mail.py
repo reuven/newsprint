@@ -193,3 +193,34 @@ def test_trash_folder_raises_when_list_fails() -> None:
         pytest.raises(MailError, match="LIST failed"),
     ):
         box.trash_folder()
+
+
+class LoginFailsIMAP(FakeIMAP):
+    """LOGIN reports a non-OK status, as with a wrong password."""
+
+    def login(self, user: str, password: str):
+        self.calls.append(("login", user, password))
+        return ("NO", [b"authentication failed"])
+
+
+class SelectFailsIMAP(FakeIMAP):
+    """SELECT reports a non-OK status, as with a nonexistent folder."""
+
+    def select(self, folder: str, readonly: bool = False):
+        self.calls.append(("select", folder, readonly))
+        return ("NO", [b"no such mailbox"])
+
+
+def test_enter_raises_when_login_fails() -> None:
+    fake = LoginFailsIMAP("imap.example.com")
+    with (
+        pytest.raises(MailError, match="someone@example.com.*imap.example.com"),
+        mailbox(fake),
+    ):
+        pass
+
+
+def test_enter_raises_when_select_fails() -> None:
+    fake = SelectFailsIMAP("imap.example.com")
+    with pytest.raises(MailError, match="INBOX/toprint"), mailbox(fake):
+        pass
