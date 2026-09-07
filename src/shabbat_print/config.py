@@ -107,3 +107,22 @@ def load_config(
         fallback_days=data["window"]["fallback_days"],
         path=path,
     )
+
+
+DEFAULT_PUBLICATIONS_PATH = (
+    Path.home() / ".config" / "shabbat-print" / "publications.toml"
+)
+
+
+def load_publication_names(
+    path: Path = DEFAULT_PUBLICATIONS_PATH,
+) -> dict[str, str]:
+    """Map a sender address to the name that should appear on the cell.
+
+    Addresses are compared in lower case, because senders are inconsistent
+    about capitalisation and the mapping should not be.
+    """
+    if not path.exists():
+        return {}
+    data = tomllib.loads(path.read_text())
+    return {address.lower(): name for address, name in data.get("names", {}).items()}

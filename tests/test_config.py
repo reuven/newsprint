@@ -90,3 +90,17 @@ def test_unknown_paper_is_rejected(tmp_path: Path) -> None:
     path.write_text('[print]\npaper = "foolscap"\n')
     with pytest.raises(ValueError, match="unknown paper"):
         load_config(path)
+
+
+def test_publication_names_default_to_empty(tmp_path: Path) -> None:
+    from shabbat_print.config import load_publication_names
+
+    assert load_publication_names(tmp_path / "absent.toml") == {}
+
+
+def test_publication_names_are_lowercased(tmp_path: Path) -> None:
+    from shabbat_print.config import load_publication_names
+
+    path = tmp_path / "publications.toml"
+    path.write_text('[names]\n"NoReply@News.Bloomberg.com" = "Money Stuff"\n')
+    assert load_publication_names(path) == {"noreply@news.bloomberg.com": "Money Stuff"}

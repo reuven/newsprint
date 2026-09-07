@@ -180,8 +180,7 @@ def test_preamble_before_first_separator_raises_error(tmp_path: Path) -> None:
     """File with preamble before first separator must raise."""
     preamble = b"This is preamble text\n\n"  # Needs blank line before From
     content = (
-        preamble
-        + b"From sender@example.com Fri Sep  5 10:00:00 2026\r\n"
+        preamble + b"From sender@example.com Fri Sep  5 10:00:00 2026\r\n"
         b"From: sender@example.com\r\n"
         b"Subject: Test\r\n"
         b"\r\n"
