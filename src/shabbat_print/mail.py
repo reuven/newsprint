@@ -46,6 +46,20 @@ class MailError(Exception):
     """Something went wrong talking to the mail server."""
 
 
+def _quote_mailbox(name: str) -> str:
+    """IMAP-quote a mailbox name for use as a raw command argument.
+
+    Nothing in imaplib quotes a mailbox name for the caller - not
+    IMAP4.select(), not IMAP4.copy(), and not IMAP4.uid(); every argument is
+    sent exactly as given. A name containing an atom-breaking character (a
+    space, or square brackets) must be quoted by hand or the server answers
+    NO/BAD. Gmail's own \\Trash folder is literally "[Gmail]/Trash";
+    Exchange's is literally "Deleted Items" - both break MOVE unquoted.
+    """
+    escaped = name.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def password_for(host: str, user: str) -> str:
     secret = keyring.get_password(host, user)
     if not secret:
@@ -141,10 +155,24 @@ class Mailbox:
         raise MailError("no folder advertises the \\Trash special-use attribute")
 
     def retire(self, uids: Sequence[int], trash_folder: str) -> RetireResult:
-        """Mark read, unstar, and move to Trash.
+        """Move each message to Trash, then mark it read and unstar it.
 
         Called only after a job has reached the print queue, and only for the
         messages whose content actually reached it.
+
+        MOVE runs first, because it is the one irreversible act that defines
+        "no longer queued": once it succeeds the message is gone from
+        `self._folder`, so `search_flagged()` cannot find it regardless of
+        what its flags say. A message whose MOVE fails is left completely
+        untouched - still flagged, still unread, still here - so it stays
+        visibly queued rather than silently losing the star that made it
+        part of the queue in the first place while remaining stuck,
+        unmoved, in the source folder.
+
+        The two STORE calls afterward are best-effort tidiness for whichever
+        UID now lives in Trash. Their outcome does not change whether this
+        message counts as retired: that question was already answered by
+        the MOVE.
         """
         if not uids:
             return RetireResult(retired=(), failed=())
@@ -156,16 +184,11 @@ class Mailbox:
         failed: list[int] = []
         for uid in uids:
             identifier = str(uid)
-            steps = (
-                ("STORE", identifier, "+FLAGS", "(\\Seen)"),
-                ("STORE", identifier, "-FLAGS", "(\\Flagged)"),
-                ("MOVE", identifier, trash_folder),
-            )
-            for step in steps:
-                status, _ = connection.uid(*step)
-                if status != "OK":
-                    failed.append(uid)
-                    break
-            else:
-                retired.append(uid)
+            status, _ = connection.uid("MOVE", identifier, _quote_mailbox(trash_folder))
+            if status != "OK":
+                failed.append(uid)
+                continue
+            connection.uid("STORE", identifier, "+FLAGS", "(\\Seen)")
+            connection.uid("STORE", identifier, "-FLAGS", "(\\Flagged)")
+            retired.append(uid)
         return RetireResult(retired=tuple(retired), failed=tuple(failed))

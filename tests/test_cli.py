@@ -191,10 +191,12 @@ def test_accepting_prints_then_retires_in_that_order(
         "shabbat_print.cli.spool",
         lambda pdf, config: (events.append("spool"), "Printer-1")[1],
     )
-    monkeypatch.setattr(
-        "shabbat_print.cli.retire_printed",
-        lambda config, uids, trash: events.append(f"retire:{uids}"),
-    )
+
+    def fake_retire_printed(config, uids, trash):
+        events.append(f"retire:{uids}")
+        return RetireResult(retired=tuple(uids), failed=())
+
+    monkeypatch.setattr("shabbat_print.cli.retire_printed", fake_retire_printed)
     monkeypatch.setattr(
         "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
     )
@@ -315,9 +317,10 @@ def test_retire_printed_moves_messages_with_no_failures(
     monkeypatch.setattr("shabbat_print.cli.Mailbox", _FakeBox)
     monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
 
-    retire_printed(mail_config, [4], "INBOX/Trash")
+    result = retire_printed(mail_config, [4], "INBOX/Trash")
 
     assert _FakeBox.instances[0].retire_calls == [((4,), "INBOX/Trash")]
+    assert result == RetireResult(retired=(), failed=())
 
 
 def test_retire_printed_reports_a_partial_failure(
@@ -333,10 +336,51 @@ def test_retire_printed_reports_a_partial_failure(
     monkeypatch.setattr("shabbat_print.cli.Mailbox", _PartialFailureBox)
     monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
 
-    retire_printed(mail_config, [4, 7], "INBOX/Trash")
+    result = retire_printed(mail_config, [4, 7], "INBOX/Trash")
 
     captured = capsys.readouterr()
     assert "could not retire 1 message(s)" in captured.err
+    assert result == RetireResult(retired=(4,), failed=(7,))
+
+
+def test_a_partial_retire_failure_is_reported_accurately(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """main()'s stdout must not claim more retirements than actually
+    happened. Before the fix, main() echoed `len(uids)` - the number
+    attempted - regardless of how many of those the mailbox actually
+    reported as retired, contradicting its own stderr line about the
+    failure in the same breath."""
+
+    class _PartialFailureBox(_FakeBox):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(**kwargs)
+            self.retire_result = RetireResult(retired=(4,), failed=(7,))
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue",
+        lambda config: (
+            [
+                _queued(identifier="<d@example.com>", uid=4),
+                _queued("<g@example.com>", 7),
+            ],
+            "INBOX/Trash",
+        ),
+    )
+    monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _PartialFailureBox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code == 0
+    assert "Retired 1 message(s)" in result.output
+    assert "Retired 2 message(s)" not in result.output
+    assert "could not retire 1 message(s)" in result.output
 
 
 def test_a_successful_run_opens_the_pdf_in_preview(monkeypatch, tmp_path: Path) -> None:

@@ -21,7 +21,7 @@ from .config import (
 )
 from .extract import extract
 from .impose import impose
-from .mail import Mailbox, MailError, password_for
+from .mail import Mailbox, MailError, RetireResult, password_for
 from .models import Document, Verdict
 from .pipeline import build
 from .printer import PrintError, spool
@@ -44,7 +44,7 @@ def fetch_queue(config: Config) -> tuple[list[Document], str | None]:
     return documents, trash
 
 
-def retire_printed(config: Config, uids: list[int], trash: str) -> None:
+def retire_printed(config: Config, uids: list[int], trash: str) -> RetireResult:
     password = password_for(config.mail.host, config.mail.user)
     with Mailbox(
         host=config.mail.host,
@@ -58,6 +58,7 @@ def retire_printed(config: Config, uids: list[int], trash: str) -> None:
             f"  could not retire {len(result.failed)} message(s): {result.failed}",
             err=True,
         )
+    return result
 
 
 @click.command()
@@ -160,5 +161,5 @@ def main(paper: str | None, config_path: Path, dry_run: bool, no_preview: bool) 
     )
 
     if trash and uids:
-        retire_printed(config, uids, trash)
-        click.echo(f"Retired {len(uids)} message(s) to {trash}.")
+        result = retire_printed(config, uids, trash)
+        click.echo(f"Retired {len(result.retired)} message(s) to {trash}.")

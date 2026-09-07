@@ -226,7 +226,21 @@ def test_enter_raises_when_select_fails() -> None:
         pass
 
 
-def test_retire_marks_read_unstars_then_moves() -> None:
+def test_retire_moves_first_then_marks_read_and_unstars() -> None:
+    """MOVE must run before either flag change.
+
+    This is the mutation-order fix for the bug that unstarred a message
+    whose MOVE then failed (an unquoted mailbox name with a space or
+    brackets is rejected by the server), evaporating it from the
+    star-based queue with nothing recording that it had ever been there.
+    MOVE is the one irreversible act that defines "no longer queued", so
+    it goes first; the flag changes afterward are best-effort tidiness for
+    whichever UID now lives in Trash and cannot undo a successful move.
+
+    This test deliberately replaces the old order-asserting test (which
+    asserted +Seen, -Flagged, MOVE) rather than letting the reorder break
+    it silently.
+    """
     fake = FakeIMAP("imap.example.com")
     with mailbox(fake) as box:
         result = box.retire([7], "INBOX/Trash")
@@ -235,10 +249,60 @@ def test_retire_marks_read_unstars_then_moves() -> None:
 
     uid_calls = [call for call in fake.calls if call[0] == "uid"]
     assert uid_calls == [
+        ("uid", "MOVE", "7", '"INBOX/Trash"'),
         ("uid", "STORE", "7", "+FLAGS", "(\\Seen)"),
         ("uid", "STORE", "7", "-FLAGS", "(\\Flagged)"),
-        ("uid", "MOVE", "7", "INBOX/Trash"),
     ]
+
+
+def test_retire_quotes_a_trash_folder_name_containing_a_space() -> None:
+    """Exchange's special-use Trash is literally "Deleted Items"."""
+    fake = FakeIMAP("imap.example.com")
+    with mailbox(fake) as box:
+        box.retire([7], "Deleted Items")
+
+    uid_calls = [call for call in fake.calls if call[0] == "uid"]
+    assert ("uid", "MOVE", "7", '"Deleted Items"') in uid_calls
+
+
+def test_retire_quotes_a_trash_folder_name_containing_brackets() -> None:
+    """Gmail's special-use Trash is literally "[Gmail]/Trash"."""
+    fake = FakeIMAP("imap.example.com")
+    with mailbox(fake) as box:
+        box.retire([7], "[Gmail]/Trash")
+
+    uid_calls = [call for call in fake.calls if call[0] == "uid"]
+    assert ("uid", "MOVE", "7", '"[Gmail]/Trash"') in uid_calls
+
+
+def test_quote_mailbox_escapes_embedded_quotes_and_backslashes() -> None:
+    from shabbat_print.mail import _quote_mailbox
+
+    assert _quote_mailbox('Weird"Name') == '"Weird\\"Name"'
+    assert _quote_mailbox("Back\\Slash") == '"Back\\\\Slash"'
+
+
+def test_retire_leaves_a_message_untouched_when_move_fails() -> None:
+    """A message whose MOVE fails must remain visibly queued: still
+    flagged, still unread, still in the source folder - not just present
+    but silently stripped of the star that made it part of the queue."""
+    fake = FakeIMAP("imap.example.com")
+    original = fake.uid
+
+    def failing(command, *args):
+        if command == "MOVE":
+            fake.calls.append(("uid", command, *args))
+            return ("NO", [b"mailbox full"])
+        return original(command, *args)
+
+    fake.uid = failing
+    with mailbox(fake) as box:
+        result = box.retire([7], "INBOX/Trash")
+    assert result.retired == ()
+    assert result.failed == (7,)
+
+    uid_calls = [call for call in fake.calls if call[0] == "uid"]
+    assert uid_calls == [("uid", "MOVE", "7", '"INBOX/Trash"')]
 
 
 def test_retire_reopens_the_folder_writable() -> None:
@@ -264,6 +328,12 @@ def test_retire_reports_failures_without_stopping() -> None:
         result = box.retire([7, 8, 9], "INBOX/Trash")
     assert result.retired == (7, 9)
     assert result.failed == (8,)
+
+    # The failed message must not have had its flags touched: it stays
+    # exactly as it was, still flagged and still in the source folder.
+    uid_calls = [call for call in fake.calls if call[0] == "uid"]
+    assert ("uid", "STORE", "8", "+FLAGS", "(\\Seen)") not in uid_calls
+    assert ("uid", "STORE", "8", "-FLAGS", "(\\Flagged)") not in uid_calls
 
 
 def test_retire_with_no_uids_touches_nothing() -> None:
