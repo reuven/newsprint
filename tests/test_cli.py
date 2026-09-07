@@ -598,6 +598,40 @@ def test_a_partial_retirement_outcome_is_logged(monkeypatch, tmp_path: Path) -> 
     assert retired_entries[0]["failed"] == [7]
 
 
+def test_an_unrecoverable_message_is_named_in_the_run_log(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The run log is the recovery mechanism: a message whose rescue
+    re-star also failed - the one state the user cannot discover from
+    Thunderbird alone - must be named in the log, not only echoed to the
+    terminal where it can scroll away."""
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
+    monkeypatch.setattr(
+        "shabbat_print.cli.retire_printed",
+        lambda config, uids, trash: RetireResult(
+            retired=(), failed=(4,), unrecoverable=(4,)
+        ),
+    )
+
+    def fake_record(entry, **kw):
+        recorded.append(entry)
+        return tmp_path / "r"
+
+    monkeypatch.setattr("shabbat_print.runlog.record", fake_record)
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code == 0
+    retired_entries = [entry for entry in recorded if entry["outcome"] == "retired"]
+    assert len(retired_entries) == 1
+    assert retired_entries[0]["unrecoverable"] == [4]
+
+
 def test_image_counts_are_reported(monkeypatch, tmp_path: Path) -> None:
     """The spec requires 'kept N images, dropped M' precisely because a
     silent drop is otherwise indistinguishable from an image that was
@@ -799,6 +833,34 @@ def test_retire_printed_reports_a_partial_failure(
     captured = capsys.readouterr()
     assert "could not retire 1 message(s)" in captured.err
     assert result == RetireResult(retired=(4,), failed=(7,))
+
+
+def test_retire_printed_warns_distinctly_about_an_unrecoverable_message(
+    monkeypatch, mail_config, capsys
+) -> None:
+    """A message whose failed MOVE's rescue re-star also failed is gone
+    from the star-based queue with nothing visible to the user in
+    Thunderbird - the one state they cannot discover on their own. It
+    must get its own warning, distinct from the ordinary "could not
+    retire" line, naming it as needing manual attention."""
+
+    class _UnrecoverableBox(_FakeBox):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(**kwargs)
+            self.retire_result = RetireResult(
+                retired=(), failed=(7,), unrecoverable=(7,)
+            )
+
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _UnrecoverableBox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+
+    result = retire_printed(mail_config, [7], "INBOX/Trash")
+
+    captured = capsys.readouterr()
+    assert "could not retire 1 message(s)" in captured.err
+    assert "manual attention" in captured.err
+    assert "(7,)" in captured.err
+    assert result == RetireResult(retired=(), failed=(7,), unrecoverable=(7,))
 
 
 def test_a_partial_retire_failure_is_reported_accurately(

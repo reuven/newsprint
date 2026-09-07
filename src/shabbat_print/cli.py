@@ -88,6 +88,17 @@ def retire_printed(config: Config, uids: list[int], trash: str) -> RetireResult:
             f"  could not retire {len(result.failed)} message(s): {result.failed}",
             err=True,
         )
+    if result.unrecoverable:
+        # The one state the user cannot discover on their own: the move
+        # failed *and* the rescue re-star failed, so the message is read,
+        # unstarred, and stuck in the source folder - gone from the
+        # star-based queue with nothing visible in Thunderbird.
+        click.echo(
+            f"  WARNING: {len(result.unrecoverable)} message(s) need manual "
+            f"attention - could not restore to the queue after a failed "
+            f"move: {result.unrecoverable}",
+            err=True,
+        )
     return result
 
 
@@ -243,6 +254,7 @@ def main(
                 "trash": trash,
                 "retired": list(result.retired),
                 "failed": list(result.failed),
+                "unrecoverable": list(result.unrecoverable),
             }
         )
         click.echo(f"Retired {len(result.retired)} message(s) to {trash}.")

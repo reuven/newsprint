@@ -74,6 +74,13 @@ def password_for(host: str, user: str) -> str:
 class RetireResult:
     retired: tuple[int, ...]
     failed: tuple[int, ...]
+    # A uid in `failed` whose rescue re-star (after a failed MOVE) also
+    # failed: read, unstarred, and stuck in the source folder, gone from
+    # the star-based queue with nothing visible to the user. Always a
+    # subset of `failed`. The one state the user cannot discover on their
+    # own, so it is named separately rather than folded into an ordinary
+    # failure.
+    unrecoverable: tuple[int, ...] = ()
 
 
 class Mailbox:
@@ -155,24 +162,36 @@ class Mailbox:
         raise MailError("no folder advertises the \\Trash special-use attribute")
 
     def retire(self, uids: Sequence[int], trash_folder: str) -> RetireResult:
-        """Move each message to Trash, then mark it read and unstar it.
+        """Mark each message read and unstar it, then move it to Trash.
 
         Called only after a job has reached the print queue, and only for the
         messages whose content actually reached it.
 
-        MOVE runs first, because it is the one irreversible act that defines
-        "no longer queued": once it succeeds the message is gone from
-        `self._folder`, so `search_flagged()` cannot find it regardless of
-        what its flags say. A message whose MOVE fails is left completely
-        untouched - still flagged, still unread, still here - so it stays
-        visibly queued rather than silently losing the star that made it
-        part of the queue in the first place while remaining stuck,
-        unmoved, in the source folder.
+        The two STORE calls run *before* MOVE, not after. RFC 6851: a
+        successful MOVE expunges the source UID from the selected folder;
+        RFC 3501 says a subsequent command naming an expunged UID is
+        ignored. A version of this method that ran MOVE first and STORE
+        afterward therefore issued two commands that a real server
+        silently no-ops - dead code that let mail land in Trash still
+        starred and unread despite a fully green test suite, because the
+        fake in use at the time had no notion of expunge and answered OK
+        to everything. `FakeIMAP` now tracks moved UIDs and answers NO to
+        any later command against one, so this order is the one under
+        which the user's stated requirement - read, unstarred, *and*
+        moved - can actually be met.
 
-        The two STORE calls afterward are best-effort tidiness for whichever
-        UID now lives in Trash. Their outcome does not change whether this
-        message counts as retired: that question was already answered by
-        the MOVE.
+        MOVE is still the one irreversible act that defines "no longer
+        queued": if it fails, the message has already been marked read
+        and unstarred, so it must be re-starred (`+FLAGS \\Flagged`) or it
+        would silently vanish from the star-based queue while remaining
+        stuck, unmoved, in the source folder - the Critical finding's
+        invariant, approached from the other direction. `\\Seen` is
+        deliberately never rolled back: whether the message was already
+        read before this run cannot be known, and it genuinely was
+        printed, so leaving it read matches intent. If the rescue re-star
+        itself fails, the uid is recorded in `unrecoverable` as well as
+        `failed` - that combination is the one state the user cannot
+        discover on their own.
         """
         if not uids:
             return RetireResult(retired=(), failed=())
@@ -189,13 +208,23 @@ class Mailbox:
 
         retired: list[int] = []
         failed: list[int] = []
+        unrecoverable: list[int] = []
         for uid in uids:
             identifier = str(uid)
+            connection.uid("STORE", identifier, "+FLAGS", "(\\Seen)")
+            connection.uid("STORE", identifier, "-FLAGS", "(\\Flagged)")
             status, _ = connection.uid("MOVE", identifier, _quote_mailbox(trash_folder))
             if status != "OK":
                 failed.append(uid)
+                restore_status, _ = connection.uid(
+                    "STORE", identifier, "+FLAGS", "(\\Flagged)"
+                )
+                if restore_status != "OK":
+                    unrecoverable.append(uid)
                 continue
-            connection.uid("STORE", identifier, "+FLAGS", "(\\Seen)")
-            connection.uid("STORE", identifier, "-FLAGS", "(\\Flagged)")
             retired.append(uid)
-        return RetireResult(retired=tuple(retired), failed=tuple(failed))
+        return RetireResult(
+            retired=tuple(retired),
+            failed=tuple(failed),
+            unrecoverable=tuple(unrecoverable),
+        )

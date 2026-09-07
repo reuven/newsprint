@@ -1,7 +1,11 @@
 """A record of every run, written before any mail is modified.
 
-The log is what makes retirement reversible: it names the Message-IDs that were
-marked read, unstarred, and moved to Trash, so a bad run can be undone by hand.
+The log is what makes retirement reversible: it names the Message-IDs queued
+for a run before mutation, then, after retire() has run, which were actually
+marked read and unstarred (in that order) and moved to Trash - and which were
+not, because a message whose move fails has its star restored rather than
+left silently missing from the queue, so a bad or partial run can still be
+recovered by hand.
 """
 
 import json

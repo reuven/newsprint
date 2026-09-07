@@ -58,11 +58,18 @@ tool extracts the article text and re-typesets it. Images that look
 substantive are kept and converted to grayscale; tracking pixels, logos,
 banners, and social buttons are dropped.
 
-**Printed mail is retired: marked read, unstarred, moved to Trash.** The star
-means "queued to print", so the queue drains on its own and Thunderbird stays
-the place the queue is visible. Retirement happens only after `lp` accepts the
-job, only for messages that actually reached the PDF, and every affected
-Message-ID is written to a run log first.
+**Printed mail is retired: marked read, unstarred, then moved to Trash, in
+that order.** The star means "queued to print", so the queue drains on its
+own and Thunderbird stays the place the queue is visible. Read-and-unstar
+run before the move because a successful move expunges the source UID
+(RFC 6851), and a command against an expunged UID is silently ignored
+(RFC 3501) - so a command issued after the move would be dead code. If the
+move then fails, the star is restored so the message stays visibly queued
+rather than silently dropped from it; `\Seen` is left as printing set it,
+since it cannot be undone with any confidence about the prior state.
+Retirement happens only after `lp` accepts the job, only for messages that
+actually reached the PDF, and every affected Message-ID is written to a run
+log first.
 
 **Web articles are fetched through an app-owned browser profile.** The tool
 keeps its own Chromium profile which the user logs into once per site. Friday's
@@ -210,8 +217,11 @@ returns a `Document`, and changing nothing else.
 
 9. **Retire.** Only now does `mail.py` open a second, read-write connection.
    For each email document that reached the PDF: `+FLAGS \Seen`,
-   `-FLAGS \Flagged`, then `MOVE` to the Trash folder. The run log is written
-   before the first mutation.
+   `-FLAGS \Flagged`, then `MOVE` to the Trash folder - in that order, because
+   MOVE expunges the source UID and any command after it would be ignored.
+   If MOVE fails, `+FLAGS \Flagged` re-stars the message so it stays visibly
+   queued; `\Seen` is not rolled back. The run log is written before the
+   first mutation.
 
 The read-only-then-reopen split is deliberate: every stage that can crash —
 HTML parsing, rendering, imposition — runs on a connection that has no power

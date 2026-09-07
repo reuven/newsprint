@@ -9,13 +9,26 @@ RAW = b"From: someone@example.com\r\nSubject: Hello\r\n\r\nBody.\r\n"
 
 
 class FakeIMAP:
-    """Records every command, so tests can assert on the exact conversation."""
+    """Records every command, so tests can assert on the exact conversation.
+
+    Also models RFC 6851 expunge-on-MOVE semantics: a successful MOVE
+    removes the source UID from the selected folder, so any later UID
+    STORE or UID MOVE naming that same UID is answered NO, the way a real
+    server silently rejects a command against a message that is no longer
+    there (RFC 3501). This is not decorative: the dead-code version of
+    retire() issued its two STORE calls *after* a successful MOVE, and the
+    old FakeIMAP - which had no notion of expunge at all - answered OK to
+    both, so a fully green suite shipped a bug where mail landed in Trash
+    still starred and unread. Without this, no fake could ever catch that
+    class of bug again.
+    """
 
     def __init__(self, host: str) -> None:
         self.host = host
         self.calls: list[tuple] = []
         self.selected: tuple[str, bool] | None = None
         self.search_results: dict[str, bytes] = {}
+        self.expunged: set[str] = set()
         self.list_response = [
             b'(\\HasNoChildren) "/" "INBOX/toprint"',
             b'(\\HasNoChildren \\Trash) "/" "INBOX/Trash"',
@@ -32,11 +45,15 @@ class FakeIMAP:
 
     def uid(self, command: str, *args):
         self.calls.append(("uid", command, *args))
+        if command in ("STORE", "MOVE") and args and args[0] in self.expunged:
+            return ("NO", [b"invalid UID: message has been expunged"])
         if command == "SEARCH":
             criteria = " ".join(str(a) for a in args if a is not None)
             return ("OK", [self.search_results.get(criteria, b"")])
         if command == "FETCH":
             return ("OK", [(b"1 (RFC822 {58}", RAW), b")"])
+        if command == "MOVE":
+            self.expunged.add(args[0])
         return ("OK", [b""])
 
     def list(self):
@@ -236,33 +253,68 @@ def test_enter_raises_when_select_fails() -> None:
         pass
 
 
-def test_retire_moves_first_then_marks_read_and_unstars() -> None:
-    """MOVE must run before either flag change.
+def test_retire_marks_read_and_unstars_before_moving() -> None:
+    """Both flag changes must run before MOVE, not after.
 
-    This is the mutation-order fix for the bug that unstarred a message
-    whose MOVE then failed (an unquoted mailbox name with a space or
-    brackets is rejected by the server), evaporating it from the
-    star-based queue with nothing recording that it had ever been there.
-    MOVE is the one irreversible act that defines "no longer queued", so
-    it goes first; the flag changes afterward are best-effort tidiness for
-    whichever UID now lives in Trash and cannot undo a successful move.
+    RFC 6851: a successful MOVE expunges the source UID, and RFC 3501
+    says a subsequent command against an expunged UID is ignored. STORE
+    calls issued after MOVE are therefore dead code - the message lands
+    in Trash still starred and unread, silently, because nothing reports
+    the STORE as having failed. Read-and-unstar first, then MOVE, is the
+    only order under which all three of the user's requirements (read,
+    unstarred, moved) can actually take effect.
 
-    This test deliberately replaces the old order-asserting test (which
-    asserted +Seen, -Flagged, MOVE) rather than letting the reorder break
-    it silently.
+    This test deliberately replaces the earlier order-asserting test
+    (which asserted MOVE, then +Seen, then -Flagged - the dead-code
+    order) rather than letting the reorder break it silently.
     """
     fake = FakeIMAP("imap.example.com")
     with mailbox(fake) as box:
         result = box.retire([7], "INBOX/Trash")
     assert result.retired == (7,)
     assert result.failed == ()
+    assert result.unrecoverable == ()
 
     uid_calls = [call for call in fake.calls if call[0] == "uid"]
     assert uid_calls == [
-        ("uid", "MOVE", "7", '"INBOX/Trash"'),
         ("uid", "STORE", "7", "+FLAGS", "(\\Seen)"),
         ("uid", "STORE", "7", "-FLAGS", "(\\Flagged)"),
+        ("uid", "MOVE", "7", '"INBOX/Trash"'),
     ]
+
+
+def test_retire_never_issues_a_command_against_an_expunged_uid() -> None:
+    """The general invariant, checked directly against FakeIMAP's expunge
+    tracking rather than against one hard-coded call sequence: once a
+    MOVE has moved a UID, retire() must never issue another command
+    naming that UID. This is exactly the shape of bug that shipped with a
+    green suite before FakeIMAP could tell the difference - a command
+    issued after the move would silently no-op against a real server, and
+    this test is what makes that observable."""
+    fake = FakeIMAP("imap.example.com")
+    with mailbox(fake) as box:
+        box.retire([7], "INBOX/Trash")
+
+    uid_calls = [call for call in fake.calls if call[0] == "uid"]
+    move_positions = [i for i, call in enumerate(uid_calls) if call[1] == "MOVE"]
+    assert move_positions, "retire() never issued a MOVE"
+    moved_uid = uid_calls[move_positions[0]][2]
+    after_move = uid_calls[move_positions[0] + 1 :]
+    assert not any(call[2] == moved_uid for call in after_move), (
+        f"a command was issued against expunged uid {moved_uid!r}: {after_move}"
+    )
+
+
+def test_fake_imap_answers_no_to_a_store_against_an_expunged_uid() -> None:
+    """Direct proof that FakeIMAP's expunge tracking actually works - the
+    mechanism that makes the test above a meaningful assertion instead of
+    a tautology. Before this, FakeIMAP answered OK unconditionally, which
+    is exactly why the dead-code STORE-after-MOVE bug passed a green
+    suite in the first place."""
+    fake = FakeIMAP("imap.example.com")
+    fake.uid("MOVE", "7", '"INBOX/Trash"')
+    status, _ = fake.uid("STORE", "7", "+FLAGS", "(\\Seen)")
+    assert status == "NO"
 
 
 def test_retire_quotes_a_trash_folder_name_containing_a_space() -> None:
@@ -292,10 +344,17 @@ def test_quote_mailbox_escapes_embedded_quotes_and_backslashes() -> None:
     assert _quote_mailbox("Back\\Slash") == '"Back\\\\Slash"'
 
 
-def test_retire_leaves_a_message_untouched_when_move_fails() -> None:
-    """A message whose MOVE fails must remain visibly queued: still
-    flagged, still unread, still in the source folder - not just present
-    but silently stripped of the star that made it part of the queue."""
+def test_retire_restores_the_star_when_move_fails() -> None:
+    """A message whose MOVE fails must remain visibly queued.
+
+    Read-and-unstar now runs before MOVE (STORE-after-MOVE is dead code
+    per RFC 6851/3501), so a failed MOVE must re-star the message or it
+    would vanish from the star-based queue while still stuck, unmoved, in
+    the source folder - the exact bug the Critical finding was raised
+    about, from the other direction. \\Seen is deliberately *not* rolled
+    back: whether the message was already read before this run cannot be
+    known, and it genuinely was printed, so leaving it read matches
+    intent."""
     fake = FakeIMAP("imap.example.com")
     original = fake.uid
 
@@ -310,9 +369,42 @@ def test_retire_leaves_a_message_untouched_when_move_fails() -> None:
         result = box.retire([7], "INBOX/Trash")
     assert result.retired == ()
     assert result.failed == (7,)
+    assert result.unrecoverable == ()
 
     uid_calls = [call for call in fake.calls if call[0] == "uid"]
-    assert uid_calls == [("uid", "MOVE", "7", '"INBOX/Trash"')]
+    assert uid_calls == [
+        ("uid", "STORE", "7", "+FLAGS", "(\\Seen)"),
+        ("uid", "STORE", "7", "-FLAGS", "(\\Flagged)"),
+        ("uid", "MOVE", "7", '"INBOX/Trash"'),
+        ("uid", "STORE", "7", "+FLAGS", "(\\Flagged)"),
+    ]
+
+
+def test_retire_records_and_warns_distinctly_when_the_rollback_restar_fails() -> None:
+    """If MOVE fails and the rescue +FLAGS \\Flagged also fails, the
+    message ends up read, unstarred, and stuck in the source folder: gone
+    from the star-based queue with nothing visible to the user. That is
+    the one state the user cannot discover on their own, so it must be
+    recorded distinctly - not just folded into an ordinary failure - so
+    the caller can warn about it by name."""
+    fake = FakeIMAP("imap.example.com")
+    original = fake.uid
+
+    def failing(command, *args):
+        is_move = command == "MOVE"
+        is_restar = command == "STORE" and args[1:3] == ("+FLAGS", "(\\Flagged)")
+        if is_move or is_restar:
+            fake.calls.append(("uid", command, *args))
+            return ("NO", [b"failure"])
+        return original(command, *args)
+
+    fake.uid = failing
+    with mailbox(fake) as box:
+        result = box.retire([7], "INBOX/Trash")
+
+    assert result.retired == ()
+    assert result.failed == (7,)
+    assert result.unrecoverable == (7,)
 
 
 def test_retire_reopens_the_folder_writable() -> None:
@@ -338,12 +430,14 @@ def test_retire_reports_failures_without_stopping() -> None:
         result = box.retire([7, 8, 9], "INBOX/Trash")
     assert result.retired == (7, 9)
     assert result.failed == (8,)
+    assert result.unrecoverable == ()
 
-    # The failed message must not have had its flags touched: it stays
-    # exactly as it was, still flagged and still in the source folder.
+    # The failed message ends up re-starred (its rescue rollback), and
+    # the other two messages proceed untouched by its failure.
     uid_calls = [call for call in fake.calls if call[0] == "uid"]
-    assert ("uid", "STORE", "8", "+FLAGS", "(\\Seen)") not in uid_calls
-    assert ("uid", "STORE", "8", "-FLAGS", "(\\Flagged)") not in uid_calls
+    assert ("uid", "STORE", "8", "+FLAGS", "(\\Flagged)") in uid_calls
+    assert ("uid", "MOVE", "7", '"INBOX/Trash"') in uid_calls
+    assert ("uid", "MOVE", "9", '"INBOX/Trash"') in uid_calls
 
 
 def test_retire_raises_when_reopening_the_folder_writable_fails() -> None:
