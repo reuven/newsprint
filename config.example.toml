@@ -1,0 +1,22 @@
+# Copy to ~/.config/shabbat-print/config.toml and edit.
+# The IMAP password is NOT stored here. Put it in your system keychain:
+#     keyring set <mail.host> <mail.user>
+
+[mail]
+host   = "imap.gmail.com"        # e.g. imap.gmail.com, imap.fastmail.com
+user   = "you@example.com"
+folder = "INBOX/toprint"         # the folder you star things into
+trash  = "auto"                  # "auto" discovers the \Trash folder
+
+[print]
+printer = ""                     # empty means your system default printer
+paper   = "A4"                   # or "Letter"; override per run with --paper
+duplex  = "two-sided-long-edge"
+
+[layout]
+margin_mm   = 9.0
+font_size_pt = 9.0
+line_height = 1.35
+
+[window]
+fallback_days = 7                # how far back to look with no previous run
