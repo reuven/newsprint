@@ -335,13 +335,13 @@ print job.** Every other path leaves mail untouched.
 
 ```toml
 [mail]
-host   = "imap.emailsrvr.com"
-user   = "reuven@lerner.co.il"
+host   = "imap.example.com"
+user   = "you@example.com"
 folder = "INBOX/toprint"
 trash  = "auto"        # discover via the \Trash special-use attribute
 
 [print]
-printer = "Brother_MFC_L2700DW_series"
+printer = ""            # empty means the system default destination
 paper   = "A4"          # or "Letter"; overridden per-run by --paper
 duplex  = "two-sided-long-edge"
 
@@ -356,8 +356,12 @@ fallback_days = 7
 ```
 
 The IMAP password is never stored in the config or the repository. It is read
-at run time with `keyring get imap.emailsrvr.com reuven@lerner.co.il`,
-matching the existing pattern for the GitHub and PyPI tokens.
+at run time with `keyring get <mail.host> <mail.user>`, matching the existing
+pattern for the GitHub and PyPI tokens.
+
+Nothing in `src/` names a person, a mail host, or a printer: the tool assumes
+IMAP and CUPS, but assumes nothing about whose. That keeps it publishable, and
+usable by anyone whose provider speaks IMAP — which includes Gmail.
 
 A `publications.toml` maps sender addresses and `List-Id` values to display
 names, so cells read "Money Stuff" rather than

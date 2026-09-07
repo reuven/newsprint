@@ -43,6 +43,12 @@ log twice.
   a spooled print job.** Every failure path leaves mail untouched.
 - No secrets in the repo or in config files. The IMAP password comes from
   `keyring` at run time.
+- **Nothing personal in the source.** No email address, mail host, printer
+  name, or filesystem path belonging to one user may appear in `src/`. Those
+  live in the user's own config file. The tool assumes IMAP and CUPS, which is
+  a fair assumption — Gmail, Fastmail, and most hosts speak IMAP — but it must
+  assume nothing about *whose* IMAP. Tests supply their own values; they never
+  assert on a real person's.
 - `tests/fixtures/` is real personal mail and is gitignored. Never commit it.
 
 ---
@@ -272,13 +278,42 @@ font_size_pt = 10.0
 """
 
 
-def test_missing_file_yields_defaults(tmp_path: Path) -> None:
+def test_missing_file_yields_structural_defaults(tmp_path: Path) -> None:
+    """Defaults describe the layout, never a person."""
     config = load_config(tmp_path / "absent.toml")
-    assert config.mail.host == "imap.emailsrvr.com"
+    assert config.mail.host == ""
+    assert config.mail.user == ""
+    assert config.printing.printer == ""
     assert config.mail.folder == "INBOX/toprint"
     assert config.printing.paper is A4
     assert config.layout.margin_mm == pytest.approx(9.0)
     assert config.fallback_days == 7
+
+
+def test_no_personal_data_hides_in_the_defaults() -> None:
+    """A guard for the open-source goal: catch a stray address or hostname."""
+    import re
+
+    from shabbat_print.config import DEFAULTS
+
+    flattened = repr(DEFAULTS)
+    assert not re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", flattened)
+    assert "emailsrvr" not in flattened
+    assert not re.search(r"imap\.\w", flattened)
+
+
+def test_require_mail_names_what_is_missing(tmp_path: Path) -> None:
+    from shabbat_print.config import ConfigError
+
+    config = load_config(tmp_path / "absent.toml")
+    with pytest.raises(ConfigError, match="mail.host and mail.user"):
+        config.require_mail()
+
+
+def test_require_mail_passes_when_configured(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(SAMPLE)
+    load_config(path).require_mail()  # must not raise
 
 
 def test_file_values_override_defaults(tmp_path: Path) -> None:
@@ -340,21 +375,19 @@ from .geometry import Paper, paper_by_name
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "shabbat-print" / "config.toml"
 
+# Structural defaults only. Nothing here identifies a person, a mail host, or
+# a printer: those come from the user's own config file. An empty printer name
+# means "whatever CUPS treats as the default destination".
 DEFAULTS: dict[str, dict[str, Any]] = {
-    "mail": {
-        "host": "imap.emailsrvr.com",
-        "user": "reuven@lerner.co.il",
-        "folder": "INBOX/toprint",
-        "trash": "auto",
-    },
-    "print": {
-        "printer": "Brother_MFC_L2700DW_series",
-        "paper": "A4",
-        "duplex": "two-sided-long-edge",
-    },
+    "mail": {"host": "", "user": "", "folder": "INBOX/toprint", "trash": "auto"},
+    "print": {"printer": "", "paper": "A4", "duplex": "two-sided-long-edge"},
     "layout": {"margin_mm": 9.0, "font_size_pt": 9.0, "line_height": 1.35},
     "window": {"fallback_days": 7},
 }
+
+
+class ConfigError(Exception):
+    """The configuration is missing something the run needs."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -385,6 +418,22 @@ class Config:
     printing: PrintConfig
     layout: LayoutConfig
     fallback_days: int
+    path: Path
+
+    def require_mail(self) -> None:
+        """Fail early, and say exactly what to put where.
+
+        Checked at the point of use rather than at load time, so that the
+        parts of the tool that never touch mail stay usable without a
+        configured account.
+        """
+        missing = [name for name in ("host", "user") if not getattr(self.mail, name)]
+        if missing:
+            keys = " and ".join(f"mail.{name}" for name in missing)
+            raise ConfigError(
+                f"{self.path}: {keys} must be set. "
+                f"Copy config.example.toml to {self.path} and fill it in."
+            )
 
 
 def _merged(path: Path) -> dict[str, dict[str, Any]]:
@@ -416,6 +465,7 @@ def load_config(
         ),
         layout=LayoutConfig(**data["layout"]),
         fallback_days=data["window"]["fallback_days"],
+        path=path,
     )
 ```
 
@@ -424,7 +474,43 @@ def load_config(
 Run: `uv run pytest tests/ -v`
 Expected: PASS, 14 tests.
 
-- [ ] **Step 11: Format, lint, commit, and push**
+- [ ] **Step 11: Write the example config**
+
+This is the file a new user copies. It is the only place the tool documents
+what it needs, so it carries a comment per key.
+
+Create `config.example.toml` at the repository root:
+
+```toml
+# Copy to ~/.config/shabbat-print/config.toml and edit.
+# The IMAP password is NOT stored here. Put it in your system keychain:
+#     keyring set <mail.host> <mail.user>
+
+[mail]
+host   = "imap.gmail.com"        # e.g. imap.gmail.com, imap.fastmail.com
+user   = "you@example.com"
+folder = "INBOX/toprint"         # the folder you star things into
+trash  = "auto"                  # "auto" discovers the \Trash folder
+
+[print]
+printer = ""                     # empty means your system default printer
+paper   = "A4"                   # or "Letter"; override per run with --paper
+duplex  = "two-sided-long-edge"
+
+[layout]
+margin_mm   = 9.0
+font_size_pt = 9.0
+line_height = 1.35
+
+[window]
+fallback_days = 7                # how far back to look with no previous run
+```
+
+Gmail note for the README later: Gmail requires an app password rather than
+the account password, and its folder separator makes the queue folder look
+like `toprint` rather than `INBOX/toprint`.
+
+- [ ] **Step 12: Format, lint, commit, and push**
 
 ```bash
 cd ~/Consulting/shabbat-print
@@ -463,7 +549,11 @@ from pathlib import Path
 
 import pytest
 
-from shabbat_print.mbox import MboxIntegrityError, split_mbox
+from shabbat_print.mbox import (
+    MboxIntegrityError,
+    find_thunderbird_mbox,
+    split_mbox,
+)
 
 NORMAL = (
     b"From sender@example.com Fri Sep  5 10:00:00 2026\r\n"
@@ -551,6 +641,28 @@ def test_integrity_error_when_bytes_go_missing(
 
 def test_empty_file_yields_nothing(tmp_path: Path) -> None:
     assert list(split_mbox(_write(tmp_path, b""))) == []
+
+
+def test_no_thunderbird_profile_means_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert find_thunderbird_mbox() is None
+
+
+def test_a_cached_folder_is_found_whatever_the_profile_is_called(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The profile directory and mail host are per-user; neither is hardcoded."""
+    target = (
+        tmp_path
+        / "Library/Thunderbird/Profiles/xyz789.default"
+        / "ImapMail/imap.example.com/INBOX.sbd/toprint"
+    )
+    target.parent.mkdir(parents=True)
+    target.write_bytes(NORMAL)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert find_thunderbird_mbox() == target
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -646,6 +758,18 @@ def split_mbox(path: Path) -> Iterator[bytes]:
             f"{path}: parsed {parsed} bytes but the file holds {size}"
         )
     yield from messages
+
+
+def find_thunderbird_mbox(folder: str = "toprint") -> Path | None:
+    """Locate a local Thunderbird cache of an IMAP folder, if there is one.
+
+    A development convenience for building test fixtures - not part of the
+    tool's runtime. shabbat-print itself talks to IMAP and never reads a local
+    mail store, so this returning None is normal on most machines.
+    """
+    root = Path.home() / "Library" / "Thunderbird" / "Profiles"
+    candidates = sorted(root.glob(f"*/ImapMail/*/INBOX.sbd/{folder}"))
+    return candidates[0] if candidates else None
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
@@ -670,13 +794,8 @@ import sys
 from email.message import Message
 from pathlib import Path
 
-from shabbat_print.mbox import split_mbox
+from shabbat_print.mbox import find_thunderbird_mbox, split_mbox
 
-MBOX = (
-    Path.home()
-    / "Library/Thunderbird/Profiles/5sj97g04.default"
-    / "ImapMail/imap.emailsrvr.com/INBOX.sbd/toprint"
-)
 FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 UNSAFE = re.compile(r"[^a-z0-9]+")
 
@@ -687,13 +806,18 @@ def sender_of(message: Message) -> str:
 
 
 def main() -> int:
-    if not MBOX.exists():
-        print(f"mbox not found: {MBOX}", file=sys.stderr)
+    mbox = Path(sys.argv[1]) if len(sys.argv) > 1 else find_thunderbird_mbox()
+    if mbox is None or not mbox.exists():
+        print(
+            "no local Thunderbird mbox found; pass the path as an argument",
+            file=sys.stderr,
+        )
         return 1
+    print(f"reading {mbox}")
     FIXTURES.mkdir(parents=True, exist_ok=True)
     seen: set[str] = set()
     written = 0
-    for raw in split_mbox(MBOX):
+    for raw in split_mbox(mbox):
         message = email.message_from_bytes(raw)
         sender = sender_of(message)
         if not sender or sender in seen:
@@ -745,16 +869,16 @@ wrong, and this is exactly the failure the guard exists to catch.
 Append to `tests/test_mbox.py`:
 
 ```python
-REAL_MBOX = (
-    Path.home()
-    / "Library/Thunderbird/Profiles/5sj97g04.default"
-    / "ImapMail/imap.emailsrvr.com/INBOX.sbd/toprint"
-)
+REAL_MBOX = find_thunderbird_mbox()
 
 
-@pytest.mark.skipif(not REAL_MBOX.exists(), reason="local Thunderbird mbox absent")
+@pytest.mark.skipif(REAL_MBOX is None, reason="no local Thunderbird mbox")
 def test_real_mbox_parses_completely() -> None:
-    """The guard that matters, run against 201 MB of real mail."""
+    """The guard that matters, run against a large real folder.
+
+    Skipped on any machine without a local Thunderbird profile, which is most
+    of them.
+    """
     parsed = sum(len(message) for message in split_mbox(REAL_MBOX))
     assert parsed == REAL_MBOX.stat().st_size
 ```
@@ -1121,10 +1245,11 @@ mkdir -p ~/.config/shabbat-print
 uv run python - <<'SEED'
 import email, email.utils, collections
 from pathlib import Path
-from shabbat_print.mbox import split_mbox
+from shabbat_print.mbox import find_thunderbird_mbox, split_mbox
 
-mbox = (Path.home() / "Library/Thunderbird/Profiles/5sj97g04.default"
-        / "ImapMail/imap.emailsrvr.com/INBOX.sbd/toprint")
+mbox = find_thunderbird_mbox()
+if mbox is None:
+    raise SystemExit("no local Thunderbird mbox found")
 counts = collections.Counter()
 names = {}
 for raw in split_mbox(mbox):
@@ -2325,13 +2450,28 @@ def config(tmp_path: Path):
     return load_config(tmp_path / "absent.toml")
 
 
-def test_command_names_printer_paper_and_duplex(config, tmp_path: Path) -> None:
+CONFIGURED = '[print]\nprinter = "Some_Printer"\n'
+
+
+def test_command_carries_paper_and_duplex(config, tmp_path: Path) -> None:
     command = build_command(tmp_path / "sheets.pdf", config)
-    assert command[:3] == ["lp", "-d", "Brother_MFC_L2700DW_series"]
+    assert command[0] == "lp"
     assert "media=A4" in command
     assert "sides=two-sided-long-edge" in command
     assert "print-scaling=none" in command
     assert command[-1] == str(tmp_path / "sheets.pdf")
+
+
+def test_an_unset_printer_uses_the_system_default(config, tmp_path: Path) -> None:
+    """No -d at all, so CUPS picks its own default destination."""
+    assert "-d" not in build_command(tmp_path / "sheets.pdf", config)
+
+
+def test_a_configured_printer_is_named(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(CONFIGURED)
+    command = build_command(tmp_path / "sheets.pdf", load_config(path))
+    assert command[:3] == ["lp", "-d", "Some_Printer"]
 
 
 def test_letter_override_reaches_the_command(tmp_path: Path) -> None:
@@ -2344,13 +2484,11 @@ def test_spool_returns_the_job_id(config, tmp_path: Path) -> None:
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout="request id is Brother_MFC_L2700DW_series-137 (1 file(s))\n",
+            stdout="request id is Some_Printer-137 (1 file(s))\n",
             stderr="",
         )
 
-    assert spool(tmp_path / "sheets.pdf", config, runner=runner) == (
-        "Brother_MFC_L2700DW_series-137"
-    )
+    assert spool(tmp_path / "sheets.pdf", config, runner=runner) == "Some_Printer-137"
 
 
 def test_spool_raises_on_failure(config, tmp_path: Path) -> None:
@@ -2404,10 +2542,12 @@ class PrintError(Exception):
 
 
 def build_command(pdf: Path, config: Config) -> list[str]:
-    return [
-        "lp",
-        "-d",
-        config.printing.printer,
+    command = ["lp"]
+    if config.printing.printer:
+        command += ["-d", config.printing.printer]
+    # With no -d, CUPS sends the job to its own default destination, which is
+    # the right behaviour for anyone who has not named a printer.
+    command += [
         "-o",
         f"media={config.printing.paper.name}",
         "-o",
@@ -2416,6 +2556,7 @@ def build_command(pdf: Path, config: Config) -> list[str]:
         "print-scaling=none",
         str(pdf),
     ]
+    return command
 
 
 def spool(pdf: Path, config: Config, runner: Runner = subprocess.run) -> str:
@@ -3273,6 +3414,7 @@ from . import runlog
 from .config import (
     DEFAULT_CONFIG_PATH,
     Config,
+    ConfigError,
     load_config,
     load_publication_names,
 )
@@ -3286,6 +3428,7 @@ from .printer import PrintError, spool
 
 def fetch_queue(config: Config) -> tuple[list[Document], str | None]:
     """Fetch the starred messages, read-only, and discover the Trash folder."""
+    config.require_mail()
     password = password_for(config.mail.host, config.mail.user)
     names = load_publication_names()
     with Mailbox(
@@ -3340,7 +3483,7 @@ def main(
 
     try:
         documents, trash = fetch_queue(config)
-    except MailError as error:
+    except (MailError, ConfigError) as error:
         raise click.ClickException(str(error)) from error
 
     if not documents:
@@ -3378,7 +3521,8 @@ def main(
         click.echo("\nDry run: nothing printed, nothing retired.")
         return
 
-    if not click.confirm(f"\nPrint to {config.printing.printer}?", default=False):
+    destination = config.printing.printer or "the default printer"
+    if not click.confirm(f"\nPrint to {destination}?", default=False):
         runlog.record({"outcome": "cancelled", "documents": len(built)})
         click.echo("Not printed. Mail untouched.")
         return
@@ -3442,7 +3586,9 @@ git push origin main
 
 ```bash
 cd ~/Consulting/shabbat-print
-keyring set imap.emailsrvr.com reuven@lerner.co.il   # once, interactively
+# Once, interactively - use the host and user from your own config.toml:
+keyring set "$(python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path.home().joinpath(".config/shabbat-print/config.toml").read_text())["mail"]["host"])')" \
+            "$(python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path.home().joinpath(".config/shabbat-print/config.toml").read_text())["mail"]["user"])')
 uv run shabbat-print --dry-run
 ```
 
