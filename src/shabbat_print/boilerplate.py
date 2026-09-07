@@ -19,6 +19,7 @@ PHRASES: tuple[str, ...] = (
     "you're receiving this",
     "you received this",
     "was this forwarded",
+    "forwarded this email",
     "forward to a friend",
     "add us to your address book",
     "mailing address",
@@ -34,10 +35,73 @@ PHRASES: tuple[str, ...] = (
     "see you next week",
     "until next time",
     "©",
+    # G1: added from real footer prose in the user's own printed packet.
+    # Modern footers read as conversational sentences ending in periods,
+    # which defeats the short-line fallback below entirely - these are
+    # caught by phrase instead. "get the bulwark app" was left out as too
+    # specific to one publication, and no safe general "get the ... app"
+    # pattern was found that would not also match ordinary prose ("get the
+    # sense", "get the picture"); the trailing-run removal in clean.py is
+    # the safety net for that one gap.
+    "subscribe here",
+    "like comment restack",
+    "restack",
+    "a message from our sponsor",
+    "is published by",
+    "newsletter preferences",
+    "review our faq",
+    "give the gift of",
+    "check out my masterclass",
+    # Requested after a second read of the user's real printed output.
+    # "need help?", "brand partnerships", and "watch now" were also
+    # requested but are deliberately NOT here - all three were tried and
+    # measured against the full 102-fixture corpus, and reverted on
+    # concrete evidence of real content loss, not a hypothetical:
+    #
+    # - "watch now" removed a genuine editorial sentence in
+    #   pete-aidailybrief-io.eml: "AI moved fast while I was away; and
+    #   this new chapter of AI Daily Brief begins with the trends, tools,
+    #   and opportunities creators should watch now." A phrase match,
+    #   unlike the short-line fallback, does not care about length or
+    #   position, so it strikes a real sentence that happens to end in
+    #   those two words exactly as readily as a bare CTA button.
+    #
+    # - "need help?" and "brand partnerships" are individually narrow, but
+    #   together they made a real chrome block (Puck's FAQ/brand-
+    #   partnerships footer paragraph) newly chrome in jon-puck-news.eml -
+    #   and that paragraph had been the trailing run's stopping point,
+    #   protecting everything before it. With it reclassified as chrome,
+    #   the walk continued one leaf further back and removed a genuine,
+    #   two-line authorial sign-off: "Have a great weekend, / Jon". That
+    #   sign-off was never independently protected - the heading guard's
+    #   single-line exception only covers a block whose *entire* text is
+    #   one line, and this one is two ("Have a great weekend," then
+    #   "Jon"), each short and unpunctuated enough to score as chrome on
+    #   its own. This is a real, structural gap - short multi-line
+    #   sign-offs are not protected the way a single-line subtitle is -
+    #   worth its own careful look in a future change; it is not fixed
+    #   here, and these three phrases are the reason it surfaced at all.
+    #
+    # See the report for the full trace of both findings.
+    "you received this email because",
+    "to stop receiving",
+    "manage all your email preferences",
+    "read in app",
 )
 
 _URL_ONLY = re.compile(r"^(https?://\S+|www\.\S+)$", re.IGNORECASE)
 _SENTENCE_END = (".", "!", "?", '"', "'", ")", ":", "”", "’")
+
+# A line that IS a postal address - a street address, or a PMB/Suite/Apt/#
+# box - ending in a two-letter state and five-digit ZIP. Anchored to the
+# start of the line (via fullmatch) deliberately: without that anchor this
+# would also match a genuine sentence that merely quotes an address, since
+# real addresses often appear mid-sentence in real prose.
+_ADDRESS_LINE = re.compile(
+    r"(?:\d+\s+\S.*|(?:PMB|Suite|Ste\.?|Apt\.?|#)\s*\S.*)"
+    r",\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?\.?",
+    re.IGNORECASE,
+)
 
 # Below this, a line without sentence-ending punctuation reads as a
 # link-roundup item or a navigation label rather than as prose.
@@ -45,7 +109,8 @@ SHORT_LINE = 40
 
 
 def is_definite_chrome_line(line: str) -> bool:
-    """True only for a confident signal: a known phrase, or a bare URL.
+    """True only for a confident signal: a known phrase, a bare URL, or a
+    postal address.
 
     Unlike is_boilerplate_line, this leaves out the short-line fallback -
     "under 40 characters without sentence punctuation" - which is a weak
@@ -60,7 +125,9 @@ def is_definite_chrome_line(line: str) -> bool:
     lowered = stripped.lower()
     if any(phrase in lowered for phrase in PHRASES):
         return True
-    return bool(_URL_ONLY.match(stripped))
+    if _URL_ONLY.match(stripped):
+        return True
+    return bool(_ADDRESS_LINE.fullmatch(stripped))
 
 
 def is_boilerplate_line(line: str) -> bool:

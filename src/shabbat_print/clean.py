@@ -4,7 +4,9 @@ This is a deny-list, not an allow-list: everything survives except a small,
 specifically-identified set of top-level blocks - script/style/etc. tags,
 images, and blocks whose text both reads as chrome under
 boilerplate.content_ratio and is not structurally protected (see
-_is_protected_heading). Measured against the 102-fixture corpus, that removes
+_is_protected_heading) - plus a trailing run of chrome elements peeled off
+the very end of the document by _strip_trailing_chrome_run (see that
+function's docstring). Measured against the 102-fixture corpus, that removes
 under 0.5% of the corpus by word count; the rest of the document - including
 unsubscribe lines and mailing addresses that slip past the ratio check -
 passes through untouched. This module does not by itself stop a filler page
@@ -16,6 +18,7 @@ Phase 1 drops every image. Keeping content figures is spec phase 7 and is
 deliberately not implemented here.
 """
 
+from collections.abc import Iterator
 from dataclasses import replace
 
 from bs4 import BeautifulSoup, Tag
@@ -37,6 +40,37 @@ CHROME_RATIO = 0.15
 # Structural headings: a block containing one of these is never decomposed,
 # however its text scores under content_ratio.
 _HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
+
+# Formatting tags that sit inline within a run of prose. A tag in this set
+# never counts as a content-bearing child of its own for
+# _iter_text_elements's descent: an <a> inside a <p> is part of that
+# paragraph, not a separate element in its own right, which is what keeps a
+# paragraph from being torn apart looking for its worst line (see
+# test_leaf_tags_are_kept_whole_not_fragmented).
+_INLINE_TAGS = frozenset(
+    {
+        "a",
+        "span",
+        "br",
+        "em",
+        "strong",
+        "b",
+        "i",
+        "u",
+        "small",
+        "sub",
+        "sup",
+        "s",
+        "code",
+        "abbr",
+        "cite",
+        "mark",
+        "q",
+        "time",
+        "wbr",
+        "font",
+    }
+)
 
 _IMAGES_DEFERRED = "images deferred to phase 7"
 
@@ -126,6 +160,78 @@ def _strip_chrome_blocks(root: Tag) -> tuple[DroppedBlock, ...]:
     return tuple(dropped)
 
 
+def _iter_text_elements(node: Tag) -> Iterator[Tag]:
+    """Yield the document's leaf content elements, in document order.
+
+    A "leaf" is a tag that holds its text directly, rather than only by
+    containing further block-level children: a <p>, an <h1>-<h6>, an <li>,
+    or a <div>/<td> whose only descendants are inline formatting tags. A
+    container with multiple such children (or one, non-inline child) is
+    never itself yielded - only its content-bearing children are, found by
+    recursing - so a wrapping <div> around several paragraphs is never
+    treated as one indivisible unit the way _strip_chrome_blocks treats
+    root.children.
+    """
+    block_children = [
+        child
+        for child in node.children
+        if isinstance(child, Tag)
+        and child.name not in _INLINE_TAGS
+        and child.get_text(strip=True)
+    ]
+    if not block_children:
+        if node.get_text(strip=True):
+            yield node
+        return
+    for child in block_children:
+        yield from _iter_text_elements(child)
+
+
+def _strip_trailing_chrome_run(root: Tag) -> tuple[DroppedBlock, ...]:
+    """Remove a contiguous run of chrome from the very end of the document.
+
+    This is the safe cousin of an earlier, reverted attempt that examined
+    blocks anywhere in the document and destroyed real content as a
+    result (a heading, a masthead, a dateline - see clean_document's
+    docstring and the module history for the specifics). The difference
+    is the shape of the walk, not a tuned threshold: starting from the
+    document's last leaf element and moving backwards, each element is
+    removed only while it is chrome (by the same rules
+    _strip_chrome_blocks already uses - content_ratio plus the heading
+    guard), and the walk stops for good at the first element judged to be
+    genuine content. Nothing before that point is ever inspected, so this
+    cannot reach into the middle of an article, however chrome-shaped a
+    given element looks in isolation.
+
+    Guard: if the walk would reach the very first element without ever
+    finding genuine content - the whole remaining document reads as
+    chrome - nothing is removed. A newsletter that is entirely chrome
+    should be reported (by whatever ran clean_document), not silently
+    vanished by this pass; _strip_chrome_blocks, which runs after this
+    one, already has its own, separately-tested behaviour for that case.
+    """
+    leaves = list(_iter_text_elements(root))
+    removed: list[tuple[Tag, str]] = []
+    for leaf in reversed(leaves):
+        text = leaf.get_text("\n", strip=True)
+        if _is_protected_heading(leaf, text) or content_ratio(text) >= CHROME_RATIO:
+            break
+        removed.append((leaf, text))
+    else:
+        # The loop ran to completion without ever breaking: every leaf in
+        # the document was judged chrome. Removing all of it would empty
+        # an otherwise non-empty document, which this pass must not do.
+        return ()
+
+    if not removed:
+        return ()
+
+    removed.reverse()  # back to document order, for reporting and removal
+    for leaf, _text in removed:
+        leaf.decompose()
+    return tuple(DroppedBlock(text=text) for _leaf, text in removed)
+
+
 def _strip_presentational_attrs(root: Tag) -> None:
     """Drop inherited sender layout attributes from every retained tag."""
     for tag in (root, *root.find_all(True)):
@@ -141,6 +247,13 @@ def clean_document(document: Document) -> Document:
 
     root = _content_root(soup)
     kept, dropped_images = _strip_images(root)
+    # Trailing-run removal runs first, on the untouched tree: it can only
+    # ever remove a strict suffix, so running it before the block-level
+    # pass lets it reach chrome nested inside a block _strip_chrome_blocks
+    # would otherwise keep whole (see _strip_trailing_chrome_run). The
+    # block-level pass then still catches leading and mid-document chrome
+    # blocks, which the suffix-only pass structurally cannot touch.
+    dropped_trailing = _strip_trailing_chrome_run(root)
     dropped_blocks = _strip_chrome_blocks(root)
     _strip_presentational_attrs(root)
 
@@ -149,5 +262,5 @@ def clean_document(document: Document) -> Document:
         html=root.decode_contents().strip(),
         images_kept=kept,
         images_dropped=dropped_images,
-        blocks_dropped=dropped_blocks,
+        blocks_dropped=(*dropped_trailing, *dropped_blocks),
     )

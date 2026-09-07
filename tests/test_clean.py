@@ -223,6 +223,102 @@ def test_dropped_blocks_are_reported() -> None:
     assert any("unsubscribe" in block.text.lower() for block in cleaned.blocks_dropped)
 
 
+def test_trailing_chrome_nested_inside_a_protected_container_is_removed() -> None:
+    """G1: the reported failure. A block-level heading guard spares the
+    *whole* container that holds an h1, so chrome paragraphs sharing that
+    container with the headline never reached _strip_chrome_blocks's
+    per-block ratio check. The trailing-run pass must reach past the
+    block boundary and remove them anyway, because they are still a
+    genuine trailing suffix of the whole document.
+
+    The wrapping <div> needs a sibling at the body level, or
+    _content_root's single-child descent collapses past it and the
+    headline+chrome group becomes ordinary top-level blocks that the
+    existing block-level pass already handles on its own - which would
+    not actually exercise the new nested case."""
+    html = (
+        "<html><body>"
+        "<div><p>Also visible top-level content, just here so the real "
+        "test group below is not the body's only child.</p></div>"
+        "<div>"
+        "<h1>Headline</h1>"
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        "<p>Unsubscribe</p>"
+        "<p>1255 22nd St NW #18958, Washington, DC 20037</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Headline" in cleaned.html
+    assert "genuine prose" in cleaned.html
+    assert "Unsubscribe" not in cleaned.html
+    assert "22nd St NW" not in cleaned.html
+
+
+def test_trailing_run_never_reaches_past_a_genuine_final_paragraph() -> None:
+    """The suffix rule's whole safety case: nothing before the last real
+    content element is ever touched, however chrome-shaped it looks."""
+    html = (
+        "<html><body><div>"
+        "<h1>Headline</h1>"
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        "<p>Read more below</p>"
+        "<p>Another real closing paragraph with plenty of substance to "
+        "read as genuine article prose rather than a link label.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Read more below" in cleaned.html
+    assert "Another real closing paragraph" in cleaned.html
+
+
+def test_trailing_run_stops_at_a_heading_even_mid_run() -> None:
+    """A heading is genuine content, never chrome, however short it
+    scores - the exact failure mode of the earlier reverted attempt."""
+    html = (
+        "<html><body><div>"
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        "<h2>Don't Call it a Cult</h2>"
+        "<p>Unsubscribe</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Don't Call it a Cult" in cleaned.html
+    assert "Unsubscribe" not in cleaned.html
+
+
+def test_trailing_run_guard_never_empties_a_nonempty_document() -> None:
+    """If the whole document, walked from the end, never finds a genuine
+    content element, the trailing run must remove nothing rather than
+    silently vanish a newsletter that is entirely chrome."""
+    from bs4 import BeautifulSoup
+
+    from shabbat_print.clean import _strip_trailing_chrome_run
+
+    html = "<div><p>Unsubscribe</p><p>&copy; 2026 Test Co</p></div>"
+    soup = BeautifulSoup(f"<html><body>{html}</body></html>", "lxml")
+    root = soup.body
+    dropped = _strip_trailing_chrome_run(root)
+    assert dropped == ()
+    assert "Unsubscribe" in root.get_text()
+    assert "Test Co" in root.get_text()
+
+
+def test_trailing_run_dropped_elements_are_reported() -> None:
+    html = (
+        "<html><body><div>"
+        "<h1>Headline</h1>"
+        "<p>Real paragraph with enough content to read as genuine prose "
+        "about the subject at hand, not a caption or a label.</p>"
+        "<p>Unsubscribe</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert any("unsubscribe" in block.text.lower() for block in cleaned.blocks_dropped)
+
+
 def test_other_document_fields_are_preserved() -> None:
     cleaned = clean_document(document(NEWSLETTER))
     assert cleaned.title == "An Issue"
