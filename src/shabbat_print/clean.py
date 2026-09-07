@@ -1,9 +1,16 @@
 """Reduce a newsletter to its article content.
 
-This is an allow-list, not a deny-list: the output contains what the cleaner
-judged to be content, so chrome is never rendered rather than rendered and
-then removed. That is what stops a filler page from existing in the first
-place.
+This is a deny-list, not an allow-list: everything survives except a small,
+specifically-identified set of top-level blocks - script/style/etc. tags,
+images, and blocks whose text both reads as chrome under
+boilerplate.content_ratio and is not structurally protected (see
+_is_protected_heading). Measured against the 102-fixture corpus, that removes
+under 0.5% of the corpus by word count; the rest of the document - including
+unsubscribe lines and mailing addresses that slip past the ratio check -
+passes through untouched. This module does not by itself stop a filler page
+from existing: trim.py does essentially all of that work, by judging the
+document's *last* cell after rendering and dropping or squeezing it. See
+trim.py's own docstring for that half of the design.
 
 Phase 1 drops every image. Keeping content figures is spec phase 7 and is
 deliberately not implemented here.

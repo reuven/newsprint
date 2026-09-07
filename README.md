@@ -1,3 +1,12 @@
+## Filtering
+
+`clean.py` removes only what it can confidently identify as chrome (an
+"Unsubscribe" line, a "view in browser" bar, and the like); everything else
+passes through. So an unsubscribe line, a mailing address, or a similar bit
+of boilerplate can still appear on a printout if it doesn't clearly match
+that check — `trim.py`'s final-cell judgment is the actual backstop against
+a filler page, not `clean.py`'s removal.
+
 ## Development
 
 Rendering newsletters to PDF uses [WeasyPrint](https://weasyprint.org/), which

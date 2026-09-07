@@ -224,19 +224,32 @@ operations per message, and closes.
 
 Handled in two places, with different jobs.
 
-**Structural, in `clean.py`.** The reported symptom — a printout spilling onto
-another sheet because of "footers, advertisements, links" — is fixed by never
-rendering those elements in the first place. `clean.py` emits only what it
-judges to be article content, so in the common case a filler page cannot come
-into existence: there is nothing to put on it.
+**Structural, in `clean.py`.** As implemented, this is a deny-list, not an
+allow-list: everything survives except a small, specifically-identified set
+of top-level blocks (script/style/etc. tags, images, and blocks whose text
+both scores as chrome under a content-ratio heuristic and is not
+structurally protected as heading-like). Measured against the 102-fixture
+corpus, it removes under 0.5% of the corpus by word count. It does *not* by
+itself stop a filler page from coming into existence in the common case —
+that is `trim.py`'s job, described below; `clean.py`'s contribution is
+removing the handful of blocks its heuristic confidently identifies (an
+"Unsubscribe" line, a "view in browser" bar, and the like), on the way to
+`trim.py`'s final-cell judgment.
 
 Targets: the unsubscribe block, "view in browser" bars, sponsor and
 advertisement slots, social button rows, link roundups, sign-offs ("thanks for
 reading", "see you next week"), "you are receiving this because" boilerplate,
-mailing addresses, copyright lines, and preference-management links. Detected
-by a combination of link destination, element text against a phrase list, link
-density within the block, and position in the document — trailing blocks are
-far more likely to be boilerplate than leading ones.
+mailing addresses, copyright lines, and preference-management links — when a
+block's text scores as chrome by a phrase-list and content-ratio check, and
+is not spared by the heading guard (a block containing an `h1`-`h6`, or one
+whose entire text is a single short line that isn't itself a confident chrome
+match, survives regardless of score — a lesson learned from an earlier
+version of this heuristic silently destroying real headlines, subtitles, and
+mastheads that happened to be short). Because the asymmetric cost of a wrong
+removal is high, this stage is deliberately conservative: an unsubscribe line
+or mailing address that doesn't clearly match the phrase list is left in
+place for `trim.py`'s cell-level judgment to catch instead. See the note in
+the README about why an unsubscribe line may still appear on a printout.
 
 **Post-hoc, in `trim.py`.** The safety net, for chrome the stripper failed to
 recognise and therefore rendered inline.
