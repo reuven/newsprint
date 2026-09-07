@@ -338,3 +338,20 @@ def test_full_line_chrome_phrases_round_3(line: str) -> None:
 def test_a_sentence_starting_with_like_or_share_survives(line: str) -> None:
     assert is_full_line_chrome(line) is False
 
+
+# Round 3, section B: a third pass at footer prose.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Update your newsletter preferences anytime via your personal page.",
+        "Update your email preferences or unsubscribe here.",
+        "Thanks for being a Bulwark+ member.",
+        "Thanks for being a valued subscriber",
+        "Thanks for being a part of the club!",
+        "Visit our Help Center for answers to our most common questions.",
+        "Set up your personal RSS feed for ad-free listening.",
+        "The Secret Podcast is exclusively for members of Bulwark+.",
+    ],
+)
+def test_round_3_footer_phrases_are_definite_chrome(line: str) -> None:
+    assert is_definite_chrome_line(line) is True

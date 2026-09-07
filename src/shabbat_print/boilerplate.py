@@ -87,6 +87,29 @@ PHRASES: tuple[str, ...] = (
     "to stop receiving",
     "manage all your email preferences",
     "read in app",
+    # Round 3, section B: a third pass at footer prose, from a real printed
+    # packet. "thanks for being a bulwark+ member" was requested by name,
+    # but the fixture corpus shows the shape generalizes cleanly across
+    # publications with no collision found: "Thanks for being a valued
+    # subscriber" (pete-aidailybrief-io.eml) and "Thanks for being a part
+    # of the club!" (serioustrouble-substack-com.eml) are both the same
+    # kind of footer sign-off, immediately followed by Like/Comment/Restack
+    # or a Restack button in both cases - so the general "thanks for being
+    # a" is used instead of the publication-specific phrase.
+    "thanks for being a",
+    # "update your newsletter preferences" and "update your email
+    # preferences" are subsumed by the pre-existing "newsletter
+    # preferences" and "email preferences" entries above - any line
+    # containing the longer phrase already contains the shorter one, so
+    # these change nothing in this corpus. Kept anyway since they were
+    # explicitly requested and are harmless, same treatment G1 gave
+    # "you received this email because" / "manage all your email
+    # preferences".
+    "update your newsletter preferences",
+    "update your email preferences",
+    "visit our help center",
+    "set up your personal rss feed",
+    "is exclusively for members of",
 )
 
 _URL_ONLY = re.compile(r"^(https?://\S+|www\.\S+)$", re.IGNORECASE)
