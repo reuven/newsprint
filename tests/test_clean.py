@@ -240,16 +240,16 @@ def test_cleaning_every_fixture_never_raises() -> None:
     for path in paths:
         cleaned_by_name[path.name] = clean_document(extract(path.read_bytes()))
 
-    # Content-retention regression guard. A controller's manual recount of
-    # this corpus found the chrome stripper destroying more real content
-    # than chrome: a heading-only block - a masthead, a subtitle, a
-    # dateline, a headline in any script - scored exactly 0.00 under
-    # content_ratio, the same score as a link roundup, so no ratio
-    # threshold could ever have spared it (I1 in the final review). These
-    # two are pinned, verified-absent-before-the-fix examples drawn from
-    # this exact corpus: a standalone episode dateline, and a headline in
-    # Chinese. If the fixture corpus is regenerated and these particular
-    # newsletters vanish, replace the pins rather than deleting the check.
+    # Content-retention regression guard. A manual recount of this corpus
+    # once found the chrome stripper destroying more real content than
+    # chrome: a heading-only block - a masthead, a subtitle, a dateline, a
+    # headline in any script - scored exactly 0.00 under content_ratio,
+    # the same score as a link roundup, so no ratio threshold could ever
+    # have spared it. These two are pinned, verified-absent-before-the-fix
+    # examples drawn from this exact corpus: a standalone episode
+    # dateline, and a headline in Chinese. If the fixture corpus is
+    # regenerated and these particular newsletters vanish, replace the
+    # pins rather than deleting the check.
     dickerson = "johnfdickerson-substack-com.eml"
     mandarin = "realtimemandarin-lessons-substack-com.eml"
     assert dickerson in cleaned_by_name, "fixture corpus changed: re-pin this test"

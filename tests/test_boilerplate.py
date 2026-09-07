@@ -95,6 +95,6 @@ def test_definite_chrome_line_of_a_blank_line_is_false() -> None:
 def test_definite_chrome_lines_do_not_match_a_short_heading(line: str) -> None:
     """These score as boilerplate under is_boilerplate_line's short-line
     fallback, but that fallback is a weak heuristic, not a confident
-    signal - it is exactly the mechanism that let clean.py destroy real
-    headlines, subtitles, and mastheads (see I1 in the final review)."""
+    signal - it is exactly the mechanism that once let clean.py destroy
+    real headlines, subtitles, and mastheads that happened to be short."""
     assert is_definite_chrome_line(line) is False

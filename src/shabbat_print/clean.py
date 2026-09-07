@@ -80,9 +80,11 @@ def _is_protected_heading(block: Tag, text: str) -> bool:
     is_boilerplate_line's short-line fallback treats any line under
     SHORT_LINE characters without sentence punctuation as chrome, so a
     block that is *only* a headline, masthead, subtitle, or dateline scores
-    exactly 0.00 - no positive ratio threshold can ever spare it (see I1 in
-    the final review, which found this destroying more real content than
-    it removed chrome). Guard those structurally instead of by score:
+    exactly 0.00 - the same as a link-roundup item - and no positive ratio
+    threshold could ever spare it. An earlier version of this heuristic
+    used content_ratio alone and silently destroyed real headlines,
+    subtitles, and mastheads that happened to be short. Guard those
+    structurally instead of by score:
 
     - a block containing an h1-h6 is always spared, regardless of what
       else is in it;

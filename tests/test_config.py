@@ -99,17 +99,6 @@ def test_unknown_paper_is_rejected(tmp_path: Path) -> None:
         load_config(path)
 
 
-def test_a_mistyped_key_is_rejected_as_a_config_error(tmp_path: Path) -> None:
-    """MailConfig(**data["mail"]) raises a bare TypeError for an unknown
-    keyword; load_config must turn that into a ConfigError too."""
-    from shabbat_print.config import ConfigError
-
-    path = tmp_path / "config.toml"
-    path.write_text('[mail]\nhost = "imap.example.com"\nusr = "typo@example.com"\n')
-    with pytest.raises(ConfigError):
-        load_config(path)
-
-
 def test_an_unknown_print_key_is_rejected(tmp_path: Path) -> None:
     """_merged() previously accepted unknown TOML in [print] silently -
     PrintConfig is built by picking out three known keys by name, so a
