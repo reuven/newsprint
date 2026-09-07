@@ -1,0 +1,77 @@
+"""Typeset a Document onto cell-sized pages.
+
+The page box is exactly one cell, so `impose.py` can tile four of them at 100%
+scale. A font specified at 9pt therefore measures 9pt on the paper.
+"""
+
+import hashlib
+import tempfile
+from html import escape
+from pathlib import Path
+from string import Template
+
+from weasyprint import HTML
+
+from .config import Config
+from .models import Document
+
+# string.Template, not str.format: the CSS is full of braces, and the
+# substituted content is not rescanned, so a "$" in a newsletter is harmless.
+_TEMPLATE = Template("""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>$title</title>
+<style>
+@page {
+  size: ${width_mm}mm ${height_mm}mm;
+  margin: ${margin_mm}mm;
+  @bottom-center { content: counter(page); font-size: 6pt; color: #555; }
+}
+html { font-size: ${font_size_pt}pt; }
+body { font-family: Charter, Georgia, "Times New Roman", serif;
+       line-height: $line_height; margin: 0; hyphens: auto; text-align: justify; }
+.masthead { font-family: -apple-system, "Helvetica Neue", Helvetica, sans-serif;
+            font-size: 0.70rem; letter-spacing: 0.06em;
+            border-bottom: 0.5pt solid #000; padding-bottom: 2pt; margin-bottom: 6pt; }
+h1 { font-size: 1.15rem; line-height: 1.2; margin: 0 0 6pt; }
+h2, h3, h4 { font-size: 1rem; margin: 8pt 0 3pt; }
+p { margin: 0 0 5pt; orphans: 2; widows: 2; }
+ul, ol { margin: 0 0 5pt; padding-left: 12pt; }
+blockquote { margin: 0 0 5pt 8pt; font-style: italic; }
+a { color: inherit; text-decoration: none; }
+img { max-width: 100%; filter: grayscale(100%); }
+</style></head>
+<body>
+<div class="masthead">$publication &middot; $date</div>
+<h1>$title</h1>
+$content
+</body></html>""")
+
+
+def _stem(document: Document, compression: float) -> str:
+    digest = hashlib.sha256(document.origin.identifier.encode()).hexdigest()[:12]
+    return f"{digest}-{compression:.2f}"
+
+
+def render(
+    document: Document,
+    config: Config,
+    compression: float = 1.0,
+    out_dir: Path | None = None,
+) -> Path:
+    """Render to a cell-sized PDF. `compression` scales the line height."""
+    cell = config.printing.paper.cell
+    html = _TEMPLATE.substitute(
+        width_mm=f"{cell.width_mm:g}",
+        height_mm=f"{cell.height_mm:g}",
+        margin_mm=f"{config.layout.margin_mm:g}",
+        font_size_pt=f"{config.layout.font_size_pt:g}",
+        line_height=f"{config.layout.line_height * compression:.4f}",
+        publication=escape(document.publication),
+        date=escape(document.date.strftime("%-d %B %Y")),
+        title=escape(document.title),
+        content=document.html,
+    )
+    directory = out_dir if out_dir is not None else Path(tempfile.mkdtemp())
+    directory.mkdir(parents=True, exist_ok=True)
+    output = directory / f"{_stem(document, compression)}.pdf"
+    HTML(string=html).write_pdf(output)
+    return output
