@@ -904,3 +904,45 @@ def test_exit_does_not_mask_the_original_error() -> None:
     fake.logout_error = imaplib.IMAP4.abort("socket error")
     with pytest.raises(ValueError, match="the real problem"), mailbox(fake):
         raise ValueError("the real problem")
+
+
+def test_reconnect_reports_itself_when_a_notifier_is_given() -> None:
+    """A silent recovery hides a server that keeps hanging up.
+
+    Root cause for the user's dropped connection is still unknown, so a
+    reconnect has to leave a trace in the run's output rather than be
+    absorbed into a fetch that merely looks a little slow.
+    """
+    said: list[str] = []
+    dead, live = DroppingIMAP("h"), MultiFetchIMAP("h")
+    for fake in (dead, live):
+        fake.messages = {7: RAW}
+    remaining = iter([dead, live])
+    box = Mailbox(
+        host="imap.example.com",
+        user="someone@example.com",
+        password="secret",
+        folder="INBOX/toprint",
+        imap_factory=lambda host: next(remaining),
+        notify=said.append,
+    )
+    with box:
+        box.fetch_many([7])
+    assert said == ["The mail server closed the connection; reconnected and retrying."]
+
+
+def test_nothing_is_reported_when_the_connection_holds() -> None:
+    said: list[str] = []
+    fake = MultiFetchIMAP("h")
+    fake.messages = {7: RAW}
+    box = Mailbox(
+        host="imap.example.com",
+        user="someone@example.com",
+        password="secret",
+        folder="INBOX/toprint",
+        imap_factory=lambda host: fake,
+        notify=said.append,
+    )
+    with box:
+        box.fetch_many([7])
+    assert said == []

@@ -273,6 +273,7 @@ def fetch_queue(
         user=config.mail.user,
         password=password,
         folder=config.mail.folder,
+        notify=lambda message: click.echo(f"  {message}"),
     ) as box:
         click.echo(f"  Opened {config.mail.folder} ({box.message_count} messages).")
         starred_uids = box.search_flagged()
