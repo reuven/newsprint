@@ -1215,57 +1215,166 @@ def test_duplicate_title_block_dropped_elements_are_reported() -> None:
 
 @pytest.mark.skipif(not FIXTURES.exists(), reason="run `make fixtures` first")
 def test_cleaning_every_fixture_never_raises() -> None:
+    """Pure smoke test over the live, regenerated corpus: nothing may
+    raise. This is deliberately the only thing asserted here.
+
+    An earlier version of this test also pinned specific *content*
+    surviving in specific named fixtures (a standalone episode dateline,
+    a Chinese-headline dateline, a sign-off protected by the Puck FAQ
+    paragraph - see git history if you want the exact strings). Those
+    pins broke twice for a reason that had nothing to do with a
+    regression: `tests/fixtures/` is regenerated from the user's live
+    Thunderbird mbox by `make fixtures`, and that mailbox changes - new
+    mail arrives, and this tool retires printed messages out of the
+    folder - so the named fixtures could simply stop existing. The
+    regressions those pins guarded against are real and are now covered
+    by synthetic, fixture-independent tests instead, which reproduce the
+    exact structural shape without depending on any particular message
+    still being on disk: test_a_short_metadata_line_survives_the_bare_
+    cta_line_that_follows_it and test_the_same_shape_survives_with_a_cjk_
+    headline (both just below) for the dateline/short-heading guard, and
+    test_a_full_sentence_footer_paragraph_protects_the_sign_off_above_it
+    (also just below) for the trailing-walk stopping point. See those
+    tests' docstrings for the full history each one carries forward from
+    this one.
+    """
     from shabbat_print.extract import extract
 
     paths = sorted(FIXTURES.glob("*.eml"))
     assert paths, "no fixtures; run `make fixtures`"
-    cleaned_by_name = {}
     for path in paths:
-        cleaned_by_name[path.name] = clean_document(extract(path.read_bytes()))
+        clean_document(extract(path.read_bytes()))
 
-    # Content-retention regression guard. A manual recount of this corpus
-    # once found the chrome stripper destroying more real content than
-    # chrome: a heading-only block - a masthead, a subtitle, a dateline, a
-    # headline in any script - scored exactly 0.00 under content_ratio,
-    # the same score as a link roundup, so no ratio threshold could ever
-    # have spared it. These two are pinned, verified-absent-before-the-fix
-    # examples drawn from this exact corpus: a standalone episode
-    # dateline, and an episode dateline with a headline in Chinese. Both
-    # pins were confirmed by actually running the pre-fix cleaner
-    # (commit 529d163) against this corpus: each full line is absent from
-    # its pre-fix output and present in the current one. The mandarin pin
-    # must be the *full* line, not just the Chinese portion - the Chinese
-    # headline alone also appears pre-fix, in a separate hidden preview
-    # snippet elsewhere in the message, so a substring pin on it alone
-    # cannot fail on the defect it claims to guard against. If the
-    # fixture corpus is regenerated and these particular newsletters
-    # vanish, replace the pins rather than deleting the check.
-    dickerson = "johnfdickerson-substack-com-oldest.eml"
-    mandarin = "realtimemandarin-lessons-substack-com.eml"
-    assert dickerson in cleaned_by_name, "fixture corpus changed: re-pin this test"
-    assert mandarin in cleaned_by_name, "fixture corpus changed: re-pin this test"
-    assert "Listen now (25 mins)" in cleaned_by_name[dickerson].html
-    assert (
-        "Listen now (8 mins) | 与运动员首次合作效果惊人"
-        in cleaned_by_name[mandarin].html
+
+def test_a_short_metadata_line_survives_the_bare_cta_line_that_follows_it() -> None:
+    """Regression guard for a real bug (see test_cleaning_every_fixture_
+    never_raises for the history): a manual recount of the fixture corpus
+    once found the chrome stripper destroying more real content than
+    chrome, because a heading-only block - a masthead, a subtitle, a
+    dateline - scores exactly 0.00 under content_ratio, the same score as
+    a link roundup, so no ratio threshold could ever have spared it.
+
+    This reproduces the exact shape that surfaced it: a podcast
+    newsletter's own bare episode-metadata dateline (a duration, no
+    sentence-ending punctuation - so is_boilerplate_line's short-line
+    fallback scores it 0.00, same as a link-roundup item), immediately
+    followed by a bare "Listen now" call-to-action line - the CTA-line
+    half of this shape is documented in boilerplate.py's PHRASES comment
+    ("LISTEN NOW"), found immediately after such a metadata line in five
+    real publications' fixtures. The bare CTA line below is genuine,
+    high-confidence chrome (an exact _FULL_LINE_CHROME entry) and must
+    be removed; the metadata line above it matches no PHRASES or
+    _FULL_LINE_CHROME entry, is short and unpunctuated, and must survive
+    via _is_protected_heading's short-line guard - which, before the
+    fix, nothing spared it from being treated exactly like the CTA line
+    below it. (Deliberately does NOT end the dateline in a closing
+    parenthesis, e.g. "(25 mins)" - that character is itself one of
+    is_boilerplate_line's own sentence-ending markers, see
+    boilerplate._SENTENCE_END, so a parenthesised duration would survive
+    on content_ratio alone regardless of the guard this test exists to
+    check, and silently stop testing anything.)
+    """
+    html = (
+        "<html><body>"
+        "<div><p>A real episode transcript paragraph, long enough and "
+        "punctuated enough to read as genuine article prose rather than "
+        "a caption or a label of any kind.</p></div>"
+        "<div>Listen now, 25 min</div>"
+        "<div>Listen now</div>"
+        "</body></html>"
     )
+    cleaned = clean_document(document(html))
+    assert "Listen now, 25 min" in cleaned.html
+    assert "<div>Listen now</div>" not in cleaned.html
 
-    # Round 4 (derive-chrome spec, 2026-09-07): a second, newer regression
-    # guard, the same shape as the one above but found while deriving new
-    # chrome rules rather than while auditing existing ones. Adding the
-    # Puck FAQ/brand-partnerships paragraph to _FULL_LINE_CHROME (see
-    # boilerplate.py's own comment and
-    # test_puck_faq_block_as_a_whole_line_was_also_tried_and_reverted) was
-    # tried, measured against the full fixture corpus, and reverted here
-    # for the same reason: it deletes the paragraph that had been the
-    # trailing walk's stopping point, so the walk continues one leaf
-    # further back and destroys the real sign-off right before it. Pinned
-    # against the live fixture, not just the unit-level check, so a
-    # future change that reintroduces this by some other route is also
-    # caught here.
-    puck = "jon-puck-news.eml"
-    assert puck in cleaned_by_name, "fixture corpus changed: re-pin this test"
-    assert "Have a great weekend" in cleaned_by_name[puck].html
+
+def test_the_same_shape_survives_with_a_cjk_headline() -> None:
+    """The same regression as test_a_short_metadata_line_survives_the_
+    bare_cta_line_that_follows_it, but with a headline in Chinese
+    appended to the dateline on the same line - the second, verified-
+    absent-before-the-fix example the original fixture-corpus pin used,
+    confirmed by actually running the pre-fix cleaner (commit 529d163)
+    against the corpus. The assertion pins the *full* line, not just the
+    Chinese portion: in the real corpus, the Chinese headline alone also
+    appeared elsewhere, in a separate hidden preview snippet, so a
+    substring pin on it alone could pass even when the defect this test
+    guards against was present. Reproduced here with a duplicate of the
+    headline text sitting elsewhere in the document (simulating that
+    hidden preview snippet), so the same trap is still exercised.
+    """
+    html = (
+        "<html><body>"
+        '<div style="display:none">与运动员首次合作效果惊人</div>'
+        "<div><p>A real episode transcript paragraph, long enough and "
+        "punctuated enough to read as genuine article prose rather than "
+        "a caption or a label of any kind.</p></div>"
+        "<div>Listen now, 8 min | 与运动员首次合作效果惊人</div>"
+        "<div>Listen now</div>"
+        "</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Listen now, 8 min | 与运动员首次合作效果惊人" in cleaned.html
+    assert "<div>Listen now</div>" not in cleaned.html
+
+
+def test_a_full_sentence_footer_paragraph_protects_the_sign_off_above_it() -> None:
+    """Round 4 (derive-chrome spec, 2026-09-07) regression guard, the same
+    shape as the two tests above but found while deriving new chrome
+    rules rather than while auditing existing ones. Adding "need help?"
+    and "brand partnerships" to PHRASES (see boilerplate.py's own
+    comment and test_need_help_brand_partnerships_and_watch_now_were_
+    tried_and_reverted in test_boilerplate.py), or the whole FAQ/brand-
+    partnerships sentence to _FULL_LINE_CHROME (see
+    test_puck_faq_block_as_a_whole_line_was_also_tried_and_reverted,
+    also in test_boilerplate.py), was tried and reverted for the same
+    reason: doing either deletes the paragraph below that had been the
+    trailing walk's stopping point - it reads as full sentences with
+    real punctuation, so content_ratio scores it as genuine content, not
+    chrome - so the walk would continue one leaf further back and
+    destroy the real, unprotected sign-off right before it. A two-line
+    sign-off like "Have a great weekend, / Jon" gets no structural
+    protection of its own: _is_protected_heading's single-line exception
+    only covers a block whose *entire* text is one line, and this one is
+    two, each short and unpunctuated enough to score as chrome alone.
+
+    This reproduces the shape directly: a full-sentence footer paragraph
+    ("Questions about your subscription?...") that must stay classified
+    as real content (not chrome, and matching no PHRASES or
+    _FULL_LINE_CHROME entry - the same "declined" status the real
+    "need help?"/"brand partnerships" wording has). Sharing one top-level
+    container with the two-line sign-off matters too, not just adjacency:
+    _strip_chrome_blocks judges a top-level block's content_ratio over
+    its WHOLE text, so the footer sentence's real content dilutes the
+    sign-off's own weak per-line score enough to spare the block outright
+    - the same "one bad line among several good ones just lowers a
+    score, never deletes anything" dilution the module's own docstring
+    describes, here relied on to protect the sign-off directly, in
+    addition to (not instead of) the footer sentence stopping the
+    trailing walk before it would otherwise reach that sign-off as its
+    own separate leaf. The exact wording here is illustrative, not the
+    real Puck fixture text (which is gone along with the rest of the
+    regenerated corpus) - only the shape matters.
+    """
+    html = (
+        "<html><body>"
+        "<div><p>A real closing article paragraph, long enough and "
+        "punctuated enough to read as genuine prose about the subject "
+        "at hand, not a caption or a footer line.</p></div>"
+        "<div>"
+        "<p>Have a great weekend,<br>Jon</p>"
+        "<p>Questions about your subscription? Our support team is "
+        "always glad to help you sort out any issues.</p>"
+        "</div>"
+        "<div><p>&copy; 2026 Example Media LLC. All rights reserved.</p>"
+        "</div>"
+        "<div><p>Unsubscribe</p></div>"
+        "</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Have a great weekend" in cleaned.html
+    assert "Questions about your subscription" in cleaned.html
+    assert "Unsubscribe" not in cleaned.html
+    assert "All rights reserved" not in cleaned.html
 
 
 # Round 3, section E: elements with no visible text - a spacer/image-
@@ -1585,25 +1694,55 @@ def test_a_kept_image_alone_in_its_cell_is_not_pruned_as_invisible() -> None:
 
 
 @pytest.mark.skipif(not FIXTURES.exists(), reason="run `make fixtures` first")
-def test_noahpinion_charts_are_kept_and_the_gpt6_art_header_is_dropped() -> None:
+def test_a_decorative_header_image_is_dropped_amid_several_kept_real_charts() -> None:
     """The specific issue the user reported: "Here's the chart:" followed
-    by "Source: Census Bureau" with no chart in between. This fixture is
-    that newsletter - real data charts, each introduced by a colon-ending
-    sentence and each followed by a "Source:" caption - plus one purely
-    decorative post-header illustration captioned "Art by GPT-6" that
-    carries neither cue (its own preceding text is "READ IN APP", its
-    following text is the caption itself, not a Source/Chart/... label)
-    and must stay dropped. Verified by hand against the raw fixture HTML
-    before writing this pin: image index 7 (the GPT-6 art, asset id
-    cc9c4424...) has no lead-in and no caption; images 8-14 (the real
-    charts) each have both."""
-    from shabbat_print.extract import extract
+    by "Source: Census Bureau" with no chart in between - discovered
+    against a real Noahpinion newsletter that mixed real data charts
+    (each introduced by a colon-ending sentence or followed by a
+    "Source:" caption) with one purely decorative post-header
+    illustration ("Art by GPT-6") that carried neither cue: its own
+    preceding text was "READ IN APP" (a real CTA phrase, but not a
+    colon-ending lead-in), and its following text was only the caption
+    itself, not a Source/Chart/Figure/... label.
 
-    path = FIXTURES / "noahpinion-substack-com.eml"
-    assert path.exists(), "fixture corpus changed: re-pin this test"
-    cleaned = clean_document(extract(path.read_bytes()))
-    # The GPT-6 art header's own asset id must not survive as a kept <img>.
-    assert "cc9c4424-d290-4fc1-87ee-396d38fe8efe" not in cleaned.html
-    # A real chart's asset id must survive as a kept <img>.
-    assert "89f09408-433c-4468-9f29-f115bbb36434" in cleaned.html
+    That fixture is gone along with the rest of the regenerated corpus
+    (see test_cleaning_every_fixture_never_raises for why), so this
+    reproduces the same shape synthetically: one decorative header image
+    with neither cue, sitting among several real charts that each do
+    carry one. The multi-image, single-document scale matters, not just
+    each rule in isolation (already covered by test_a_colon_lead_in_
+    keeps_a_wide_image and friends, above) - it is what the real report
+    actually exercised, and what a change that broke the interaction
+    between images sharing one document would show up in.
+    """
+    html = (
+        "<html><body><div>"
+        "<p>READ IN APP</p>"
+        '<img src="https://example.com/decorative-header.png" width="600" '
+        'alt="A whimsical illustration of a robot writing a newsletter">'
+        "<p>Art by GPT-6</p>"
+        "<p>Real prose sets up the first argument, comparing two datasets "
+        "over the last decade:</p>"
+        '<img src="https://example.com/chart-1.png" width="600">'
+        "<p>Real prose continues, setting up a second comparison without "
+        "ending in a colon this time.</p>"
+        '<img src="https://example.com/chart-2.png" width="600">'
+        "<p>Source: Census Bureau</p>"
+        "<p>A third point, again ending with a colon before the figure:</p>"
+        '<img src="https://example.com/chart-3.png" width="600">'
+        "<p>More prose, this time captioned afterward instead:</p>"
+        '<img src="https://example.com/chart-4.png" width="600">'
+        "<p>Chart: Federal Reserve data.</p>"
+        "<p>A fifth point, ending in a colon once more:</p>"
+        '<img src="https://example.com/chart-5.png" width="600">'
+        "<p>A sixth and final comparison, also ending in a colon:</p>"
+        '<img src="https://example.com/chart-6.png" width="600">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    # The decorative header image must not survive as a kept <img>.
+    assert "decorative-header.png" not in cleaned.html
+    # Every real chart must survive as a kept <img>.
+    for n in range(1, 7):
+        assert f"chart-{n}.png" in cleaned.html
     assert cleaned.images_kept >= 6
