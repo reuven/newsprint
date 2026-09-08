@@ -57,6 +57,12 @@ class _FakeBox:
         # Mirrors Mailbox.message_count, set by a real SELECT response -
         # 2226 matches FakeIMAP's own default in test_mail.py.
         self.message_count = 2226
+        # Per-uid raw message override for fetch_many(); any uid not
+        # named here falls back to RAW_MESSAGE. Subclasses below (e.g.
+        # _QueueBox) populate this so the real, unmocked fetch_queue()
+        # can be driven end to end over one fake connection.
+        self.messages: dict[int, bytes] = {}
+        self.fetch_many_calls: list[tuple[tuple[int, ...], str]] = []
         _FakeBox.instances.append(self)
 
     def __enter__(self) -> Self:
@@ -72,8 +78,9 @@ class _FakeBox:
         self.since_arg = since
         return []
 
-    def fetch(self, uid: int) -> bytes:
-        return RAW_MESSAGE
+    def fetch_many(self, uids, items: str = "(UID RFC822)") -> dict[int, bytes]:
+        self.fetch_many_calls.append((tuple(uids), items))
+        return {uid: self.messages.get(uid, RAW_MESSAGE) for uid in uids}
 
     def trash_folder(self) -> str:
         return "INBOX/Trash"
@@ -81,6 +88,66 @@ class _FakeBox:
     def retire(self, uids, trash_folder):
         self.retire_calls.append((tuple(uids), trash_folder))
         return self.retire_result
+
+
+_STARRED_RAW = _message(
+    """
+From: Test Weekly <weekly@example.com>
+Subject: An Issue
+Date: Fri, 5 Sep 2026 12:00:00 +0000
+Message-ID: <d@example.com>
+Content-Type: text/html; charset="utf-8"
+""",
+    f"<div><p>{LONG_PROSE}</p></div>",
+)
+
+
+def _candidate_raw(
+    uid: int, publication: str, title: str = "Extra Issue", buildable: bool = False
+) -> bytes:
+    """Raw RFC822 bytes for a message the picker might offer from the
+    unstarred review window - the byte-level equivalent of the old
+    _candidate() Document helper, needed now that the picker tests below
+    drive the real fetch_queue()/fetch_unstarred()/fetch_picked() through
+    a fake Mailbox rather than mocking those functions away (they must
+    actually fetch headers for the listing and full content for whatever
+    gets picked - see cli.py's own module docstring on why). buildable
+    controls whether the body clears packet.min_words (H2) once picked."""
+    body = f"<div><p>{LONG_PROSE}</p></div>" if buildable else "<p>short</p>"
+    return _message(
+        f"""
+From: {publication} <pub{uid}@example.com>
+Subject: {title}
+Date: Fri, 4 Sep 2026 12:00:00 +0000
+Message-ID: <{uid}@example.com>
+Content-Type: text/html; charset="utf-8"
+""",
+        body,
+    )
+
+
+class _QueueBox(_FakeBox):
+    """A starred queue of exactly one message - uid 4, publication "Test
+    Weekly", title "An Issue", body long enough to build (mirrors the old
+    _queued() Document exactly) - plus whatever a subclass offers as
+    unstarred candidates via `unstarred_uids`/`extra_messages`. Used by
+    the picker tests, which need the real fetch_queue() to run end to end
+    (starred fetch, unstarred scan, prompt, picked fetch) over one fake
+    connection, rather than mocking fetch_queue itself away."""
+
+    unstarred_uids: ClassVar[tuple[int, ...]] = ()
+    extra_messages: ClassVar[dict[int, bytes]] = {}
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.messages = {4: _STARRED_RAW, **self.extra_messages}
+
+    def search_flagged(self) -> list[int]:
+        return [4]
+
+    def search_unflagged_since(self, since) -> list[int]:
+        self.since_arg = since
+        return list(self.unstarred_uids)
 
 
 @pytest.fixture
@@ -103,7 +170,9 @@ def test_the_config_path_is_reported_before_anything_else(
     anything appears. The config path - known before any network call -
     must be the very first thing printed, so a run gives feedback
     immediately."""
-    monkeypatch.setattr("shabbat_print.cli.fetch_queue", lambda config: ([], None))
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config, no_pick: ([], None)
+    )
     config_path = tmp_path / "absent.toml"
 
     result = CliRunner().invoke(main, ["--config", str(config_path)])
@@ -113,7 +182,9 @@ def test_the_config_path_is_reported_before_anything_else(
 
 
 def test_an_empty_queue_says_so(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("shabbat_print.cli.fetch_queue", lambda config: ([], None))
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config, no_pick: ([], None)
+    )
     result = CliRunner().invoke(main, ["--config", str(tmp_path / "absent.toml")])
     assert result.exit_code == 0
     assert "Nothing starred" in result.output
@@ -140,7 +211,8 @@ def test_dry_run_never_prints_and_never_retires(monkeypatch, tmp_path: Path) -> 
     spooled: list[Path] = []
     retired: list[list[int]] = []
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([document], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "shabbat_print.cli.spool", lambda pdf, config: spooled.append(pdf)
@@ -176,7 +248,8 @@ def test_declining_the_prompt_prints_nothing(monkeypatch, tmp_path: Path) -> Non
     )
     spooled: list[Path] = []
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([document], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "shabbat_print.cli.spool", lambda pdf, config: spooled.append(pdf)
@@ -209,39 +282,14 @@ def _queued(identifier: str = "<d@example.com>", uid: int = 4):
     )
 
 
-def _candidate(
-    uid: int,
-    publication: str,
-    title: str = "Extra Issue",
-    buildable: bool = False,
-):
-    """A message the picker might offer from the unstarred review window.
-
-    buildable=False (the default) is enough for tests that only check the
-    listing/prompt itself; buildable=True gives it LONG_PROSE body text so
-    that, if picked, it clears packet.min_words and actually builds into a
-    real cell rather than being skipped as a teaser (H2)."""
-    from datetime import datetime
-
-    from shabbat_print.models import Document, Origin
-
-    html = f"<div><p>{LONG_PROSE}</p></div>" if buildable else "<p>short</p>"
-    return Document(
-        origin=Origin(kind="email", identifier=f"<{uid}@example.com>", uid=uid),
-        publication=publication,
-        title=title,
-        date=datetime(2026, 9, 4, tzinfo=UTC),
-        html=html,
-    )
-
-
 def test_accepting_prints_then_retires_in_that_order(
     monkeypatch, tmp_path: Path
 ) -> None:
     """The invariant: mail is modified only after a job reaches the queue."""
     events: list[str] = []
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "shabbat_print.cli.spool",
@@ -272,7 +320,8 @@ def test_no_retire_spools_but_never_calls_retire_printed(
     spooled: list[Path] = []
     retired: list[list[int]] = []
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "shabbat_print.cli.spool",
@@ -305,7 +354,8 @@ def test_no_retire_records_the_outcome_as_printed_kept(
     last_successful_run() would treat a rehearsal as the real thing."""
     recorded: list[dict] = []
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr(
@@ -335,7 +385,8 @@ def test_dry_run_wins_when_combined_with_no_retire(monkeypatch, tmp_path: Path) 
     stricter of the two and wins, so nothing is printed at all."""
     spooled: list[Path] = []
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "shabbat_print.cli.spool", lambda pdf, config: spooled.append(pdf)
@@ -362,7 +413,8 @@ def test_paper_letter_propagates_end_to_end(monkeypatch, tmp_path: Path) -> None
     import pymupdf
 
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
 
     result = CliRunner().invoke(
@@ -416,7 +468,8 @@ def test_a_url_sourced_document_prints_without_ever_calling_retire(
     )
     retired: list[list[int]] = []
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([document], "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr(
@@ -444,7 +497,8 @@ def test_a_print_failure_leaves_mail_untouched(monkeypatch, tmp_path: Path) -> N
         raise PrintError("lp: no such printer")
 
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli.spool", explode)
     monkeypatch.setattr(
@@ -490,7 +544,8 @@ def test_a_retire_failure_after_printing_is_reported_not_crashed(
     from shabbat_print.mail import MailError
 
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
 
@@ -520,7 +575,8 @@ def test_an_imap_readonly_error_from_retire_is_reported_not_crashed(
     import imaplib
 
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
 
@@ -562,7 +618,8 @@ def test_a_retire_connection_failure_after_printing_is_reported_not_crashed(
             return None
 
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr("shabbat_print.cli.Mailbox", _ExplodingMailbox)
@@ -594,7 +651,8 @@ def test_retirement_outcome_is_logged(monkeypatch, tmp_path: Path) -> None:
     from the log alone."""
     recorded: list[dict] = []
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr(
@@ -623,7 +681,7 @@ def test_a_partial_retirement_outcome_is_logged(monkeypatch, tmp_path: Path) -> 
     recorded: list[dict] = []
     monkeypatch.setattr(
         "shabbat_print.cli.fetch_queue",
-        lambda config: (
+        lambda config, no_pick: (
             [
                 _queued(identifier="<d@example.com>", uid=4),
                 _queued("<g@example.com>", 7),
@@ -662,7 +720,8 @@ def test_an_unrecoverable_message_is_named_in_the_run_log(
     terminal where it can scroll away."""
     recorded: list[dict] = []
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr(
@@ -708,7 +767,8 @@ def test_image_counts_are_reported(monkeypatch, tmp_path: Path) -> None:
         ),
     )
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([document], "INBOX/Trash"),
     )
 
     result = CliRunner().invoke(
@@ -747,7 +807,8 @@ def test_kept_images_are_counted_and_a_fetch_failure_is_reported_distinctly(
         ),
     )
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([document], "INBOX/Trash"),
     )
 
     result = CliRunner().invoke(
@@ -774,7 +835,8 @@ def test_a_dropped_chrome_block_is_reported(monkeypatch, tmp_path: Path) -> None
         html=(f"<div><p>{LONG_PROSE}</p></div><div><p>Unsubscribe</p></div>"),
     )
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([document], "INBOX/Trash"),
     )
 
     result = CliRunner().invoke(
@@ -814,7 +876,8 @@ def test_a_dropped_duplicate_title_is_reported_distinctly(
         html=html,
     )
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([document], "INBOX/Trash"),
     )
 
     result = CliRunner().invoke(
@@ -833,7 +896,7 @@ def test_a_document_that_cannot_be_built_is_reported(
 ) -> None:
     """A newsletter that cleans down to nothing is named, not silently lost."""
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_empty()], None)
+        "shabbat_print.cli.fetch_queue", lambda config, no_pick: ([_empty()], None)
     )
     result = CliRunner().invoke(
         main, ["--no-preview", "--config", str(tmp_path / "absent.toml")]
@@ -883,7 +946,7 @@ def test_a_teaser_is_reported_on_stdout_with_subject_and_word_count(
     it must be on stdout (Click's non-error stream), not buried on
     stderr the way an ordinary build failure is."""
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_teaser()], None)
+        "shabbat_print.cli.fetch_queue", lambda config, no_pick: ([_teaser()], None)
     )
     result = CliRunner().invoke(
         main, ["--no-preview", "--config", str(tmp_path / "absent.toml")]
@@ -904,7 +967,7 @@ def test_a_skipped_teaser_is_not_retired(monkeypatch, tmp_path: Path) -> None:
     retired: list[list[int]] = []
     monkeypatch.setattr(
         "shabbat_print.cli.fetch_queue",
-        lambda config: ([_teaser()], "INBOX/Trash"),
+        lambda config, no_pick: ([_teaser()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "shabbat_print.cli.retire_printed",
@@ -927,7 +990,7 @@ def test_a_skipped_teaser_is_excluded_from_uids_alongside_a_real_build(
     that actually reached the PDF."""
     monkeypatch.setattr(
         "shabbat_print.cli.fetch_queue",
-        lambda config: ([_queued(), _teaser()], "INBOX/Trash"),
+        lambda config, no_pick: ([_queued(), _teaser()], "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
 
@@ -955,7 +1018,7 @@ def test_skipped_teasers_are_recorded_in_the_run_log(
     recorded: list[dict] = []
     monkeypatch.setattr(
         "shabbat_print.cli.fetch_queue",
-        lambda config: ([_queued(), _teaser()], "INBOX/Trash"),
+        lambda config, no_pick: ([_queued(), _teaser()], "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr(
@@ -985,18 +1048,54 @@ def test_skipped_teasers_are_recorded_in_the_run_log(
 def test_fetch_queue_extracts_the_flagged_messages(monkeypatch, mail_config) -> None:
     """Unit-tests fetch_queue's own body, which the CLI-level tests above
     always monkeypatch away: it must open the mailbox read-only, extract a
-    Document per flagged uid, and discover the Trash folder."""
+    Document per flagged uid, and discover the Trash folder.
+
+    no_pick=True keeps this test focused on the starred fetch alone - the
+    picker path is exercised separately below."""
     _FakeBox.instances.clear()
     monkeypatch.setattr("shabbat_print.cli.Mailbox", _FakeBox)
     monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
 
-    documents, trash = fetch_queue(mail_config)
+    documents, trash = fetch_queue(mail_config, no_pick=True)
 
     assert len(documents) == 2
     assert all(document.title == "This Week" for document in documents)
     assert trash == "INBOX/Trash"
     assert _FakeBox.instances[0].kwargs["host"] == "imap.example.com"
     assert _FakeBox.instances[0].kwargs["password"] == "secret"
+    # Exactly one connection - the whole point of sharing it between the
+    # starred fetch and the unstarred scan.
+    assert len(_FakeBox.instances) == 1
+
+
+def test_fetch_queue_reuses_one_connection_for_starred_and_unstarred(
+    monkeypatch, mail_config
+) -> None:
+    """The tool used to connect twice: once for the starred queue, once
+    more for the unstarred scan. fetch_queue must now open exactly one
+    Mailbox for a run that touches both, not two."""
+
+    class _BothBox(_FakeBox):
+        def search_unflagged_since(self, since) -> list[int]:
+            self.since_arg = since
+            return [5, 6]
+
+    _FakeBox.instances.clear()
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _BothBox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+    monkeypatch.setattr(
+        "shabbat_print.cli.window_since",
+        lambda fallback_days, today: date(2026, 9, 1),
+    )
+    # Force the non-interactive branch deterministically, regardless of
+    # whether this test process happens to have a real tty on stdin.
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: False)
+
+    documents, trash = fetch_queue(mail_config, no_pick=False)
+
+    assert len(_FakeBox.instances) == 1
+    assert len(documents) == 2  # the starred pair only - nothing was picked
+    assert trash == "INBOX/Trash"
 
 
 def test_fetch_queue_skips_trash_lookup_when_nothing_is_flagged(
@@ -1014,7 +1113,7 @@ def test_fetch_queue_skips_trash_lookup_when_nothing_is_flagged(
     monkeypatch.setattr("shabbat_print.cli.Mailbox", _EmptyBox)
     monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
 
-    documents, trash = fetch_queue(mail_config)
+    documents, trash = fetch_queue(mail_config, no_pick=True)
     assert documents == []
     assert trash is None
 
@@ -1041,7 +1140,7 @@ def test_fetch_queue_honours_a_configured_literal_trash_folder(
     monkeypatch.setattr("shabbat_print.cli.Mailbox", _NoTrashLookupBox)
     monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
 
-    _documents, trash = fetch_queue(config)
+    _documents, trash = fetch_queue(config, no_pick=True)
     assert trash == "Configured-Trash"
 
 
@@ -1054,7 +1153,7 @@ def test_fetch_queue_still_discovers_trash_when_configured_as_auto(
     monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
 
     assert mail_config.mail.trash == "auto"
-    _documents, trash = fetch_queue(mail_config)
+    _documents, trash = fetch_queue(mail_config, no_pick=True)
     assert trash == "INBOX/Trash"
 
 
@@ -1069,7 +1168,7 @@ def test_fetch_queue_reports_progress_at_every_step(
     monkeypatch.setattr("shabbat_print.cli.Mailbox", _FakeBox)
     monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
 
-    fetch_queue(mail_config)
+    fetch_queue(mail_config, no_pick=True)
 
     output = capsys.readouterr().out
     assert "Connecting to imap.example.com as someone@example.com" in output
@@ -1095,7 +1194,7 @@ def test_fetch_queue_uses_the_configured_trash_folder_without_discovering(
     monkeypatch.setattr("shabbat_print.cli.Mailbox", _NoTrashLookupBox)
     monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
 
-    fetch_queue(config)
+    fetch_queue(config, no_pick=True)
 
     output = capsys.readouterr().out
     assert "Using configured Trash folder: Configured-Trash" in output
@@ -1104,14 +1203,18 @@ def test_fetch_queue_uses_the_configured_trash_folder_without_discovering(
 def test_fetch_queue_progress_bar_leaves_no_artefacts_when_not_a_tty(
     monkeypatch, mail_config, capsys
 ) -> None:
-    """click.progressbar over the fetch loop must hide itself the same way
-    the build bar already does, so it never litters captured (non-tty)
-    output with carriage returns or fill characters."""
+    """click.progressbar over a chunked fetch must hide itself the same
+    way the build bar already does, so it never litters captured (non-tty)
+    output with carriage returns or fill characters. Below
+    Mailbox.FETCH_CHUNK_SIZE uids - every ordinary run - there is no bar
+    at all (see cli._fetch_documents), so this asserts the more general
+    property: whatever fetch_queue prints, it never contains bar
+    artefacts."""
     _FakeBox.instances.clear()
     monkeypatch.setattr("shabbat_print.cli.Mailbox", _FakeBox)
     monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
 
-    fetch_queue(mail_config)
+    fetch_queue(mail_config, no_pick=True)
 
     output = capsys.readouterr().out
     assert "\r" not in output
@@ -1119,94 +1222,129 @@ def test_fetch_queue_progress_bar_leaves_no_artefacts_when_not_a_tty(
     assert "#" not in output
 
 
-def test_fetch_unstarred_extracts_the_review_window(monkeypatch, mail_config) -> None:
-    """Mirrors test_fetch_queue_extracts_the_flagged_messages: fetch_unstarred
-    must open the mailbox read-only, search UNFLAGGED SINCE the given date,
-    extract a Document per uid, and discover Trash - exactly like the
-    starred fetch, just against the other search."""
+def test_fetch_queue_chunks_a_starred_queue_larger_than_fetch_chunk_size(
+    monkeypatch, mail_config, capsys
+) -> None:
+    """Above Mailbox.FETCH_CHUNK_SIZE uids, _fetch_documents chunks the
+    fetch across several box.fetch_many() calls, tracked with a
+    click.progressbar - which must still hide its own rendering on a
+    non-tty, the same as the single-call path already does."""
+    from shabbat_print.mail import FETCH_CHUNK_SIZE
+
+    uids = list(range(1, FETCH_CHUNK_SIZE + 52))  # two chunks: 200 + 51
+
+    class _BigBox(_FakeBox):
+        def search_flagged(self) -> list[int]:
+            return uids
+
+    _FakeBox.instances.clear()
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _BigBox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+
+    documents, _trash = fetch_queue(mail_config, no_pick=True)
+
+    assert len(documents) == len(uids)
+    box = _FakeBox.instances[0]
+    assert len(box.fetch_many_calls) == 2
+    assert len(box.fetch_many_calls[0][0]) == FETCH_CHUNK_SIZE
+    assert len(box.fetch_many_calls[1][0]) == 51
+
+    output = capsys.readouterr().out
+    assert "\r" not in output
+    assert "[" not in output
+    assert "#" not in output
+
+
+def test_fetch_unstarred_extracts_the_review_window() -> None:
+    """fetch_unstarred works off an already-open box (the connection it
+    now shares with the starred fetch, via fetch_queue) - it must search
+    UNFLAGGED SINCE the given date and extract a partial Document (for
+    the listing) per uid found."""
     from datetime import date
 
     from shabbat_print.cli import fetch_unstarred
+    from shabbat_print.config import PublicationNames
 
     class _UnstarredBox(_FakeBox):
         def search_unflagged_since(self, since) -> list[int]:
             self.since_arg = since
             return [5, 6]
 
-    _FakeBox.instances.clear()
-    monkeypatch.setattr("shabbat_print.cli.Mailbox", _UnstarredBox)
-    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+    box = _UnstarredBox()
+    names = PublicationNames(by_address={}, by_list_id={})
 
-    documents, trash = fetch_unstarred(mail_config, date(2026, 9, 1))
+    documents = fetch_unstarred(box, date(2026, 9, 1), names)
 
     assert len(documents) == 2
     assert all(document.title == "This Week" for document in documents)
-    assert trash == "INBOX/Trash"
-    assert _FakeBox.instances[0].since_arg == date(2026, 9, 1)
+    assert box.since_arg == date(2026, 9, 1)
 
 
-def test_fetch_unstarred_skips_trash_lookup_when_the_window_is_empty(
-    monkeypatch, mail_config
-) -> None:
-    """No point discovering Trash for a window with nothing unflagged in
-    it - mirrors fetch_queue's same optimisation for an empty starred
-    search."""
-    from datetime import date
-
-    from shabbat_print.cli import fetch_unstarred
-
-    class _EmptyUnstarredBox(_FakeBox):
-        def search_unflagged_since(self, since) -> list[int]:
-            return []
-
-        def trash_folder(self) -> str:
-            raise AssertionError("trash_folder must not be called for an empty window")
-
-    monkeypatch.setattr("shabbat_print.cli.Mailbox", _EmptyUnstarredBox)
-    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
-
-    documents, trash = fetch_unstarred(mail_config, date(2026, 9, 1))
-    assert documents == []
-    assert trash is None
-
-
-def test_fetch_unstarred_reports_the_window_and_how_many_it_found(
-    monkeypatch, mail_config, capsys
-) -> None:
+def test_fetch_unstarred_reports_how_many_it_found(capsys) -> None:
     """The unstarred scan silently walks up to ~90 more messages after the
     starred fetch - it must report the window's start date and how many
     it found, the same as the starred search does."""
     from datetime import date
 
     from shabbat_print.cli import fetch_unstarred
+    from shabbat_print.config import PublicationNames
 
     class _TwoUnstarredBox(_FakeBox):
         def search_unflagged_since(self, since) -> list[int]:
             self.since_arg = since
             return [5, 6]
 
-    monkeypatch.setattr("shabbat_print.cli.Mailbox", _TwoUnstarredBox)
-    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+    box = _TwoUnstarredBox()
+    names = PublicationNames(by_address={}, by_list_id={})
 
-    fetch_unstarred(mail_config, date(2026, 9, 1))
+    fetch_unstarred(box, date(2026, 9, 1), names)
 
     output = capsys.readouterr().out
-    assert "Connecting to imap.example.com as someone@example.com" in output
-    assert "Opened INBOX/toprint (2226 messages)" in output
     assert "2 unstarred message(s) found since 1 Sep 2026" in output
 
 
-def test_fetch_unstarred_requires_mail_configuration(tmp_path: Path) -> None:
-    """Like fetch_queue, fetch_unstarred must fail fast and clearly rather
-    than trying to open a mailbox with nothing configured."""
+def test_fetch_unstarred_uses_peek_so_nothing_is_marked_seen() -> None:
+    """The unstarred picker only needs From/Subject/Date/List-Id - fetching
+    with plain BODY[...] would mark every scanned message \\Seen as a side
+    effect, silently mutating up to ~90 of the user's unread messages a
+    week. PEEK is what prevents that: BODY.PEEK[...] fetches without
+    setting \\Seen, where a plain BODY[...] would. This asserts the items
+    string fetch_unstarred actually sends names PEEK explicitly, not just
+    that some items string was sent."""
     from datetime import date
 
     from shabbat_print.cli import fetch_unstarred
-    from shabbat_print.config import ConfigError, load_config
+    from shabbat_print.config import PublicationNames
 
-    config = load_config(tmp_path / "absent.toml")
-    with pytest.raises(ConfigError, match="mail.host and mail.user"):
-        fetch_unstarred(config, date(2026, 9, 1))
+    class _UnstarredBox(_FakeBox):
+        def search_unflagged_since(self, since) -> list[int]:
+            return [5, 6]
+
+    box = _UnstarredBox()
+    fetch_unstarred(
+        box, date(2026, 9, 1), PublicationNames(by_address={}, by_list_id={})
+    )
+
+    assert len(box.fetch_many_calls) == 1
+    uids, items = box.fetch_many_calls[0]
+    assert uids == (5, 6)
+    assert "PEEK" in items
+    assert "HEADER.FIELDS" in items
+    for field in ("FROM", "SUBJECT", "DATE", "LIST-ID"):
+        assert field in items
+
+
+def test_fetch_picked_uses_peek_free_full_items() -> None:
+    """Unlike the listing scan, fetching what the user actually picked
+    must retrieve the real body - RFC822, not a headers-only PEEK - since
+    it is about to be built into the printed packet."""
+    from shabbat_print.cli import fetch_picked
+    from shabbat_print.config import PublicationNames
+
+    box = _FakeBox()
+    fetch_picked(box, [1, 2], PublicationNames(by_address={}, by_list_id={}))
+
+    assert box.fetch_many_calls == [((1, 2), "(UID RFC822)")]
 
 
 def test_password_never_appears_in_the_output(monkeypatch, mail_config) -> None:
@@ -1321,7 +1459,7 @@ def test_a_partial_retire_failure_is_reported_accurately(
 
     monkeypatch.setattr(
         "shabbat_print.cli.fetch_queue",
-        lambda config: (
+        lambda config, no_pick: (
             [
                 _queued(identifier="<d@example.com>", uid=4),
                 _queued("<g@example.com>", 7),
@@ -1354,7 +1492,8 @@ def test_preview_open_failure_does_not_crash_the_run(
     `open` nor `xdg-open` must not crash: the PDF's own path is already
     echoed, which is enough to open it by hand."""
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
 
     def missing(command, **kw):
@@ -1379,7 +1518,8 @@ def test_preview_falls_back_to_xdg_open_when_open_is_missing(
             raise FileNotFoundError("open")
 
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli.subprocess.run", fake_run)
 
@@ -1400,7 +1540,8 @@ def test_the_progress_bar_leaves_no_artefacts_in_captured_output(
     undisturbed by carriage returns, fill characters, or brackets from the
     bar itself."""
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
 
     result = CliRunner().invoke(
@@ -1421,7 +1562,7 @@ def test_a_failing_document_among_others_is_still_reported_not_swallowed(
     get lost because the bar consumed the iteration."""
     monkeypatch.setattr(
         "shabbat_print.cli.fetch_queue",
-        lambda config: ([_queued(), _empty()], "INBOX/Trash"),
+        lambda config, no_pick: ([_queued(), _empty()], "INBOX/Trash"),
     )
 
     result = CliRunner().invoke(
@@ -1442,7 +1583,8 @@ def test_contents_non_convergence_is_reported_not_silently_shipped(
     still finish the run without a contents page, rather than crash or
     silently print numbers that might be wrong."""
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "shabbat_print.cli.build_contents",
@@ -1465,7 +1607,8 @@ def test_the_finishing_phase_is_reported_in_order(monkeypatch, tmp_path: Path) -
     it actually happens, so the packet total never appears out of a
     multi-second silence."""
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
 
     result = CliRunner().invoke(
@@ -1485,7 +1628,8 @@ def test_a_successful_run_opens_the_pdf_in_preview(monkeypatch, tmp_path: Path) 
     call itself is faked, so no real window is ever spawned during tests."""
     opened: list[list[str]] = []
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "shabbat_print.cli.subprocess.run",
@@ -1515,7 +1659,8 @@ def test_summary_disabled_by_default_never_touches_build_summary_pages(
         raise AssertionError("build_summary_pages must not be called when disabled")
 
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli.build_summary_pages", explode)
 
@@ -1536,7 +1681,8 @@ def test_summary_flag_enables_it_even_though_config_says_off(
 
     calls: list[object] = []
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "shabbat_print.cli.build_summary_pages",
@@ -1577,7 +1723,8 @@ def test_no_summary_flag_disables_it_even_though_config_says_on(
         raise AssertionError("build_summary_pages must not be called with --no-summary")
 
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli.build_summary_pages", explode)
 
@@ -1603,7 +1750,8 @@ def test_summary_flag_absent_lets_config_decide(monkeypatch, tmp_path: Path) -> 
 
     calls: list[object] = []
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "shabbat_print.cli.build_summary_pages",
@@ -1685,7 +1833,8 @@ def test_summary_enabled_success_inserts_pages_and_reports_cost(
     summary_pages = (fake_built("summary-topics"), fake_built("summary-candidates"))
 
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "shabbat_print.cli.build_summary_pages",
@@ -1743,7 +1892,8 @@ def test_summary_success_without_token_counts_omits_the_token_clause(
     )
 
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "shabbat_print.cli.build_summary_pages",
@@ -1778,7 +1928,8 @@ def test_summary_failure_is_reported_on_stdout_and_the_packet_still_prints(
     from shabbat_print.summarize import SummaryOutcome
 
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "shabbat_print.cli.build_summary_pages",
@@ -1817,7 +1968,8 @@ def test_an_empty_summary_outcome_prints_no_summary_line_at_all(
     from shabbat_print.summarize import SummaryOutcome
 
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "shabbat_print.cli.build_summary_pages",
@@ -1883,7 +2035,8 @@ def test_summary_pages_shift_the_contents_starting_numbers(
     summary_pages = (fake_built("summary-topics"), fake_built("summary-candidates"))
 
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
     )
 
     baseline = CliRunner().invoke(
@@ -1923,43 +2076,55 @@ def test_summary_pages_shift_the_contents_starting_numbers(
 # ---------------------------------------------------------------------------
 
 
-def test_no_pick_flag_never_calls_fetch_unstarred(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
-    )
+def test_no_pick_flag_never_calls_fetch_unstarred(monkeypatch, mail_config) -> None:
+    """--no-pick must skip the picker branch of fetch_queue entirely -
+    fetch_unstarred (and so its underlying search) must never run.
+    Unit-tests fetch_queue directly, since main()-level tests always
+    mock fetch_queue away and so cannot exercise its own no_pick gate."""
 
-    def explode(config, since):
+    def explode(box, since, names):
         raise AssertionError("fetch_unstarred must not be called with --no-pick")
 
     monkeypatch.setattr("shabbat_print.cli.fetch_unstarred", explode)
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _FakeBox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
 
-    result = CliRunner().invoke(
-        main,
-        [
-            "--no-pick",
-            "--dry-run",
-            "--no-preview",
-            "--config",
-            str(tmp_path / "absent.toml"),
-        ],
-    )
-    assert result.exit_code == 0
+    documents, _trash = fetch_queue(mail_config, no_pick=True)
+    assert len(documents) == 2  # the starred fetch still ran normally
 
 
 def test_an_unconfigured_picker_is_skipped_with_a_message_not_a_crash(
-    monkeypatch, tmp_path: Path
+    monkeypatch, mail_config
 ) -> None:
-    """No mail account configured for the picker's own lookup must not
-    abort a run that would otherwise succeed - the starred queue this run
-    was already going to build must still print, exactly like a summary
-    failure degrades (H3) rather than aborting."""
+    """A problem specific to the picker's own step on the shared
+    connection - here, the unstarred SEARCH itself failing mid-session -
+    must not abort a run that already has a valid starred queue: the
+    starred queue this run was already going to build must still print,
+    exactly like a summary failure degrades (H3) rather than aborting.
+
+    Before the two connections were merged into one, this scenario was
+    "no mail account configured" specifically for the picker's own,
+    separate connect attempt. Now that the picker shares fetch_queue's
+    already-open connection, config.require_mail() gates the whole run
+    once, up front - so "unconfigured" can no longer happen only for the
+    picker. A mid-session IMAP failure on the shared connection is the
+    realistic scenario that replaces it."""
+    from shabbat_print.mail import MailError
+
+    class _FailingUnstarredBox(_QueueBox):
+        def search_unflagged_since(self, since):
+            raise MailError("server dropped the connection")
+
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _FailingUnstarredBox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "shabbat_print.cli.window_since",
+        lambda fallback_days, today: date(2026, 9, 1),
     )
 
     result = CliRunner().invoke(
         main,
-        ["--dry-run", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+        ["--dry-run", "--no-preview", "--config", str(mail_config.path)],
     )
     assert result.exit_code == 0
     assert "Could not check for unstarred newsletters" in result.output
@@ -1972,18 +2137,20 @@ def test_dry_run_shows_the_unstarred_window_and_skips_the_prompt(
     """Verify bullet: 'The live queue in dry-run: how many unstarred
     messages the window finds, and that the list renders sensibly
     grouped.' Nothing shown here may be built - dry-run always skips the
-    selection prompt."""
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
-    )
+    selection prompt (stdin is not a terminal under CliRunner, so no
+    _stdin_is_tty override is needed to take that branch)."""
+
+    class _Box(_QueueBox):
+        unstarred_uids = (20,)
+        extra_messages: ClassVar[dict[int, bytes]] = {
+            20: _candidate_raw(20, "Money Stuff", "Extra Issue")
+        }
+
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _Box)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "shabbat_print.cli.window_since",
         lambda fallback_days, today: date(2026, 9, 1),
-    )
-    picks = [_candidate(uid=20, publication="Money Stuff", title="Extra Issue")]
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_unstarred",
-        lambda config, since: (picks, "INBOX/Trash"),
     )
 
     result = CliRunner().invoke(
@@ -2008,19 +2175,18 @@ def test_dry_run_still_prompts_when_stdin_is_a_terminal(
     run with a real terminal on stdin must still prompt, and a selected
     pick must still be built into the preview (just not printed or
     retired). Only non-interactive stdin should skip the prompt."""
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
-    )
+
+    class _Box(_QueueBox):
+        unstarred_uids = (21,)
+        extra_messages: ClassVar[dict[int, bytes]] = {
+            21: _candidate_raw(21, "Alpha Weekly", "Pick One", buildable=True)
+        }
+
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _Box)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "shabbat_print.cli.window_since",
         lambda fallback_days, today: date(2026, 9, 1),
-    )
-    picks = [
-        _candidate(uid=21, publication="Alpha Weekly", title="Pick One", buildable=True)
-    ]
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_unstarred",
-        lambda config, since: (picks, "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
 
@@ -2042,15 +2208,26 @@ def test_a_non_interactive_run_skips_the_prompt_and_does_not_hang(
     """No --dry-run here, and no `input=` is given at all - if the prompt
     were reached despite stdin not being a terminal, CliRunner's stdin
     would be exhausted and the run would abort or hang rather than finish
-    cleanly with exit_code 0."""
-    monkeypatch.setattr("shabbat_print.cli.fetch_queue", lambda config: ([], None))
+    cleanly with exit_code 0. The starred queue is deliberately empty
+    here (unlike _QueueBox's default), so "Nothing starred" is the only
+    thing left to assert once the picker itself has been skipped."""
+
+    class _Box(_FakeBox):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(**kwargs)
+            self.messages = {20: _candidate_raw(20, "Money Stuff")}
+
+        def search_flagged(self) -> list[int]:
+            return []
+
+        def search_unflagged_since(self, since) -> list[int]:
+            return [20]
+
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _Box)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "shabbat_print.cli.window_since",
         lambda fallback_days, today: date(2026, 9, 1),
-    )
-    picks = [_candidate(uid=20, publication="Money Stuff")]
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_unstarred", lambda config, since: (picks, None)
     )
 
     result = CliRunner().invoke(
@@ -2064,15 +2241,11 @@ def test_a_non_interactive_run_skips_the_prompt_and_does_not_hang(
 def test_no_candidates_in_the_window_says_so_and_skips_the_prompt(
     monkeypatch, mail_config
 ) -> None:
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
-    )
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _QueueBox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "shabbat_print.cli.window_since",
         lambda fallback_days, today: date(2026, 9, 1),
-    )
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_unstarred", lambda config, since: ([], "INBOX/Trash")
     )
 
     result = CliRunner().invoke(
@@ -2088,27 +2261,20 @@ def test_selecting_a_range_adds_exactly_those_newsletters(
     """Verify bullet: 'Selecting a range adds exactly those newsletters
     to the packet.' Row 3 ('Charlie Weekly') is deliberately left out of
     the '1-2' selection and must not be built."""
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
-    )
+
+    class _Box(_QueueBox):
+        unstarred_uids = (21, 22, 23)
+        extra_messages: ClassVar[dict[int, bytes]] = {
+            21: _candidate_raw(21, "Alpha Weekly", "Pick One", buildable=True),
+            22: _candidate_raw(22, "Bravo Weekly", "Pick Two", buildable=True),
+            23: _candidate_raw(23, "Charlie Weekly", "Not Picked", buildable=True),
+        }
+
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _Box)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "shabbat_print.cli.window_since",
         lambda fallback_days, today: date(2026, 9, 1),
-    )
-    picks = [
-        _candidate(
-            uid=21, publication="Alpha Weekly", title="Pick One", buildable=True
-        ),
-        _candidate(
-            uid=22, publication="Bravo Weekly", title="Pick Two", buildable=True
-        ),
-        _candidate(
-            uid=23, publication="Charlie Weekly", title="Not Picked", buildable=True
-        ),
-    ]
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_unstarred",
-        lambda config, since: (picks, "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
     # Declining the print confirm below still calls runlog.record("cancelled")
@@ -2140,24 +2306,19 @@ def test_selected_picks_shift_the_contents_starting_numbers(
     contents' starting cell numbers by its own real size, not some fixed
     or wrong amount.
     """
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
-    )
+
+    class _Box(_QueueBox):
+        unstarred_uids = (21, 22)
+        extra_messages: ClassVar[dict[int, bytes]] = {
+            21: _candidate_raw(21, "Alpha Weekly", "Pick One", buildable=True),
+            22: _candidate_raw(22, "Bravo Weekly", "Pick Two", buildable=True),
+        }
+
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _Box)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "shabbat_print.cli.window_since",
         lambda fallback_days, today: date(2026, 9, 1),
-    )
-    picks = [
-        _candidate(
-            uid=21, publication="Alpha Weekly", title="Pick One", buildable=True
-        ),
-        _candidate(
-            uid=22, publication="Bravo Weekly", title="Pick Two", buildable=True
-        ),
-    ]
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_unstarred",
-        lambda config, since: (picks, "INBOX/Trash"),
     )
     # Both non-dry-run invocations below decline the print confirm, which
     # calls runlog.record("cancelled") for real - route it to tmp_path, not
@@ -2204,19 +2365,17 @@ def test_selected_picks_shift_the_contents_starting_numbers(
 def test_pressing_enter_at_the_prompt_skips_selection(
     monkeypatch, mail_config, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
-    )
+    class _Box(_QueueBox):
+        unstarred_uids = (21,)
+        extra_messages: ClassVar[dict[int, bytes]] = {
+            21: _candidate_raw(21, "Alpha Weekly", "Pick", buildable=True)
+        }
+
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _Box)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "shabbat_print.cli.window_since",
         lambda fallback_days, today: date(2026, 9, 1),
-    )
-    picks = [
-        _candidate(uid=21, publication="Alpha Weekly", title="Pick", buildable=True)
-    ]
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_unstarred",
-        lambda config, since: (picks, "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
     monkeypatch.setattr(
@@ -2238,19 +2397,18 @@ def test_an_out_of_range_selection_is_named_and_reprompted(
     """'Reject out-of-range numbers with a message naming the bad one
     rather than silently ignoring it' - and the user gets another chance
     rather than losing the whole run over a typo."""
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
-    )
+
+    class _Box(_QueueBox):
+        unstarred_uids = (21,)
+        extra_messages: ClassVar[dict[int, bytes]] = {
+            21: _candidate_raw(21, "Alpha Weekly", "Pick", buildable=True)
+        }
+
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _Box)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "shabbat_print.cli.window_since",
         lambda fallback_days, today: date(2026, 9, 1),
-    )
-    picks = [
-        _candidate(uid=21, publication="Alpha Weekly", title="Pick", buildable=True)
-    ]
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_unstarred",
-        lambda config, since: (picks, "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
     monkeypatch.setattr(
@@ -2274,19 +2432,18 @@ def test_a_picked_newsletter_is_retired_like_any_other(
     list and printed is retired exactly like a starred one - no special
     case, because `uids` is derived only from `built`, which the pick now
     belongs to just like every other document."""
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
-    )
+
+    class _Box(_QueueBox):
+        unstarred_uids = (99,)
+        extra_messages: ClassVar[dict[int, bytes]] = {
+            99: _candidate_raw(99, "Alpha Weekly", "Pick", buildable=True)
+        }
+
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _Box)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "shabbat_print.cli.window_since",
         lambda fallback_days, today: date(2026, 9, 1),
-    )
-    picks = [
-        _candidate(uid=99, publication="Alpha Weekly", title="Pick", buildable=True)
-    ]
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_unstarred",
-        lambda config, since: (picks, "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
     monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
@@ -2318,17 +2475,25 @@ def test_picker_trash_is_used_when_the_starred_queue_was_empty(
     is None) - but a pick can still introduce a uid that needs retiring.
     The Trash folder the picker itself discovered must be used, or a
     printed pick would never be retired."""
-    monkeypatch.setattr("shabbat_print.cli.fetch_queue", lambda config: ([], None))
+
+    class _Box(_FakeBox):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(**kwargs)
+            self.messages = {
+                99: _candidate_raw(99, "Alpha Weekly", "Pick", buildable=True)
+            }
+
+        def search_flagged(self) -> list[int]:
+            return []
+
+        def search_unflagged_since(self, since) -> list[int]:
+            return [99]
+
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _Box)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "shabbat_print.cli.window_since",
         lambda fallback_days, today: date(2026, 9, 1),
-    )
-    picks = [
-        _candidate(uid=99, publication="Alpha Weekly", title="Pick", buildable=True)
-    ]
-    monkeypatch.setattr(
-        "shabbat_print.cli.fetch_unstarred",
-        lambda config, since: (picks, "INBOX/Trash"),
     )
     monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
     monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")

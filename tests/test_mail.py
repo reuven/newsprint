@@ -3,7 +3,7 @@ from datetime import date
 
 import pytest
 
-from shabbat_print.mail import Mailbox, MailError, password_for
+from shabbat_print.mail import FETCH_CHUNK_SIZE, Mailbox, MailError, password_for
 
 RAW = b"From: someone@example.com\r\nSubject: Hello\r\n\r\nBody.\r\n"
 
@@ -51,7 +51,14 @@ class FakeIMAP:
             criteria = " ".join(str(a) for a in args if a is not None)
             return ("OK", [self.search_results.get(criteria, b"")])
         if command == "FETCH":
-            return ("OK", [(b"1 (RFC822 {58}", RAW), b")"])
+            # A real server's UID FETCH response always carries the
+            # message's own UID as a data item (RFC 3501) - not just its
+            # sequence number - which is how Mailbox.fetch_many() maps a
+            # response tuple back to the uid it belongs to. args[0] here
+            # is the uid set string a single-uid fetch() call sends.
+            uid_arg = args[0] if args else "1"
+            info = f"{uid_arg} (UID {uid_arg} RFC822 {{58}}".encode()
+            return ("OK", [(info, RAW), b")"])
         if command == "MOVE":
             self.expunged.add(args[0])
         return ("OK", [b""])
@@ -63,6 +70,53 @@ class FakeIMAP:
     def logout(self):
         self.calls.append(("logout",))
         return ("BYE", [b"bye"])
+
+
+class MultiFetchIMAP(FakeIMAP):
+    """Models a real server's response to a batched `UID FETCH
+    <uid-set> <items>` covering several messages: one (info, payload)
+    tuple per matched message, each followed by a closing b')' entry -
+    the same per-message shape FakeIMAP's own single-uid FETCH already
+    uses, just repeated once per message. Per RFC 3501, a UID FETCH
+    response always carries the message's own UID as a data item, which
+    is what `fetch_many()` reads to map a response tuple back to its uid
+    - never response position, since a server is free to answer in a
+    different order than the UID set was requested in.
+
+    `messages` maps a uid to the raw bytes the fake should hand back for
+    it; a uid with no entry is simply omitted from the response, the way
+    a server would if asked for a uid it does not have. `response_order`,
+    when set, controls the order those uids appear in the response,
+    independent of request order, for the out-of-order test.
+    """
+
+    def __init__(self, host: str) -> None:
+        super().__init__(host)
+        self.messages: dict[int, bytes] = {}
+        self.response_order: list[int] | None = None
+        self.fetch_calls: list[str] = []
+
+    def uid(self, command: str, *args):
+        if command == "FETCH":
+            self.calls.append(("uid", command, *args))
+            uid_set, items = args[0], args[1]
+            self.fetch_calls.append(uid_set)
+            requested = [int(token) for token in uid_set.split(",")]
+            order = (
+                self.response_order if self.response_order is not None else requested
+            )
+            data: list[bytes | tuple[bytes, bytes]] = []
+            for uid in order:
+                if uid not in requested:
+                    continue
+                payload = self.messages.get(uid)
+                if payload is None:
+                    continue
+                info = f"{uid} (UID {uid} {items} {{{len(payload)}}}".encode()
+                data.append((info, payload))
+                data.append(b")")
+            return ("OK", data)
+        return super().uid(command, *args)
 
 
 def mailbox(fake: FakeIMAP) -> Mailbox:
@@ -104,10 +158,104 @@ def test_unflagged_since_formats_the_date_for_imap() -> None:
         assert box.search_unflagged_since(date(2026, 9, 1)) == [9, 11]
 
 
-def test_fetch_returns_the_raw_message() -> None:
+def test_fetch_many_returns_the_raw_messages_keyed_by_uid() -> None:
     fake = FakeIMAP("imap.example.com")
     with mailbox(fake) as box:
-        assert box.fetch(3) == RAW
+        assert box.fetch_many([3]) == {3: RAW}
+
+
+def test_fetch_many_with_no_uids_makes_no_call() -> None:
+    fake = FakeIMAP("imap.example.com")
+    with mailbox(fake) as box:
+        assert box.fetch_many([]) == {}
+    assert not [call for call in fake.calls if call[0] == "uid"]
+
+
+def test_fetch_many_issues_one_uid_fetch_for_the_whole_set() -> None:
+    """The whole point: 40 uids in one round trip, not 40. A comma-joined
+    UID set in a single UID FETCH command, not a loop of single fetches."""
+    fake = MultiFetchIMAP("imap.example.com")
+    fake.messages = {3: RAW, 17: RAW, 204: b"From: x\r\nSubject: y\r\n\r\nZ\r\n"}
+    with mailbox(fake) as box:
+        result = box.fetch_many([3, 17, 204])
+    assert result == {3: RAW, 17: RAW, 204: b"From: x\r\nSubject: y\r\n\r\nZ\r\n"}
+    assert fake.fetch_calls == ["3,17,204"]
+
+
+def test_fetch_many_does_not_assume_the_servers_response_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real server is free to answer a UID FETCH in a different order
+    than the UID set was given in. fetch_many must map each response back
+    to its own uid (read off the response's own UID data item, per RFC
+    3501) rather than zipping the response against the request order."""
+    fake = MultiFetchIMAP("imap.example.com")
+    fake.messages = {3: b"three", 17: b"seventeen", 204: b"two-oh-four"}
+    fake.response_order = [204, 3, 17]  # deliberately not request order
+    with mailbox(fake) as box:
+        result = box.fetch_many([3, 17, 204])
+    assert result == {3: b"three", 17: b"seventeen", 204: b"two-oh-four"}
+
+
+def test_fetch_many_forwards_the_requested_items_to_the_server() -> None:
+    """The caller decides what to fetch (full RFC822, or a headers-only
+    BODY.PEEK[HEADER.FIELDS (...)]) - fetch_many must send exactly that
+    items string on the wire, not hard-code RFC822."""
+    fake = MultiFetchIMAP("imap.example.com")
+    fake.messages = {3: RAW}
+    with mailbox(fake) as box:
+        box.fetch_many([3], items="(UID BODY.PEEK[HEADER.FIELDS (SUBJECT)])")
+    fetch_call = next(
+        call for call in fake.calls if call[0] == "uid" and call[1] == "FETCH"
+    )
+    assert fetch_call[3] == "(UID BODY.PEEK[HEADER.FIELDS (SUBJECT)])"
+
+
+def test_fetch_many_chunks_a_large_uid_set() -> None:
+    """A server can cap a command line's length; chunking a huge UID set
+    into several FETCH calls is the safety net for that, independent of
+    the batching win itself."""
+    fake = MultiFetchIMAP("imap.example.com")
+    uids = list(range(1, FETCH_CHUNK_SIZE * 2 + 5))
+    fake.messages = dict.fromkeys(uids, RAW)
+    with mailbox(fake) as box:
+        result = box.fetch_many(uids)
+    assert result == dict.fromkeys(uids, RAW)
+    assert len(fake.fetch_calls) == 3
+    assert fake.fetch_calls[0].count(",") == FETCH_CHUNK_SIZE - 1
+    assert fake.fetch_calls[1].count(",") == FETCH_CHUNK_SIZE - 1
+    assert fake.fetch_calls[2].count(",") == 3
+
+
+def test_fetch_many_raises_when_the_server_reports_failure() -> None:
+    with (
+        mailbox(FailingIMAP("imap.example.com")) as box,
+        pytest.raises(MailError, match="fetch failed"),
+    ):
+        box.fetch_many([1])
+
+
+def test_parse_fetch_response_ignores_a_tuple_with_no_uid_data_item() -> None:
+    """RFC 3501 guarantees a UID FETCH response always carries a UID data
+    item, but the parser must not crash on a malformed line that lacks
+    one - it should simply not attribute that payload to any uid, the
+    same as a server that never answered for it at all."""
+    from shabbat_print.mail import _parse_fetch_response
+
+    malformed = [(b"1 (RFC822 {5}", b"hello"), b")"]
+    assert _parse_fetch_response(malformed) == {}
+
+
+def test_fetch_many_raises_naming_a_uid_missing_from_the_response() -> None:
+    """A response missing one of the requested uids - the server simply
+    did not answer for it - must be surfaced, not silently under-counted."""
+    fake = MultiFetchIMAP("imap.example.com")
+    fake.messages = {3: RAW}  # 17 never answered
+    with (
+        mailbox(fake) as box,
+        pytest.raises(MailError, match=r"no message body.*17"),
+    ):
+        box.fetch_many([3, 17])
 
 
 def test_message_count_is_read_from_the_select_response() -> None:
@@ -186,16 +334,6 @@ class FailingIMAP:
         return ("BYE", [b"bye"])
 
 
-class EmptyFetchIMAP(FakeIMAP):
-    """FETCH reports success but the response carries no message body."""
-
-    def uid(self, command: str, *args):
-        if command == "FETCH":
-            self.calls.append(("uid", command, *args))
-            return ("OK", [b""])
-        return super().uid(command, *args)
-
-
 def test_exiting_a_mailbox_that_was_never_entered_is_a_no_op() -> None:
     """__exit__ guards on self._imap being set, in case it is ever called
     without a matching successful __enter__ - direct branch coverage for
@@ -217,22 +355,6 @@ def test_search_raises_when_the_server_reports_failure() -> None:
         pytest.raises(MailError, match="search failed"),
     ):
         box.search_flagged()
-
-
-def test_fetch_raises_when_the_server_reports_failure() -> None:
-    with (
-        mailbox(FailingIMAP("imap.example.com")) as box,
-        pytest.raises(MailError, match="fetch failed"),
-    ):
-        box.fetch(1)
-
-
-def test_fetch_raises_when_the_response_carries_no_body() -> None:
-    with (
-        mailbox(EmptyFetchIMAP("imap.example.com")) as box,
-        pytest.raises(MailError, match="no message body"),
-    ):
-        box.fetch(1)
 
 
 def test_trash_folder_raises_when_list_fails() -> None:

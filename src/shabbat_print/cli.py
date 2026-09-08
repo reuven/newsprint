@@ -10,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -27,7 +29,7 @@ from .config import (
 from .contents import build_contents
 from .extract import extract
 from .impose import impose
-from .mail import Mailbox, MailError, RetireResult, password_for
+from .mail import FETCH_CHUNK_SIZE, Mailbox, MailError, RetireResult, password_for
 from .models import Document, Verdict
 from .picker import SelectionError, build_listing, parse_selection, window_since
 from .pipeline import Built, Failure, TeaserSkippedError, build_one
@@ -35,29 +37,64 @@ from .printer import PrintError, spool
 from .stamp import format_packet_date, stamp_packet
 from .summarize import build_summary_pages
 
+# A full message, for the starred queue and for whatever the user picks -
+# both are about to be printed. UID is asked for explicitly (RFC 3501
+# already guarantees it for a UID FETCH response, but naming it removes
+# any doubt about what Mailbox.fetch_many()'s parser is reading).
+_FULL_ITEMS = "(UID RFC822)"
 
-def _fetch_with_progress(
-    box: Mailbox, uids: list[int], names: PublicationNames
+# Headers only, for the unstarred picker's listing - it only needs
+# publication and subject (From/List-Id and Subject; Date to order and
+# display each row). BODY.PEEK[...] - PEEK specifically - fetches without
+# setting \Seen, unlike a plain BODY[...]; scanning up to ~90 of the
+# user's unread messages a week must never mark any of them read as a
+# side effect of merely listing them.
+_HEADER_ITEMS = "(UID BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE LIST-ID)])"
+
+
+def _fetch_documents(
+    box: Mailbox, uids: list[int], names: PublicationNames, items: str, label: str
 ) -> list[Document]:
-    """Fetch each message, with a progress bar.
+    """Fetch `uids` in as few IMAP round trips as possible, and report how
+    long it took.
 
-    Measured against the live queue, this loop is the bulk of a run's
-    wall time - about 0.24s per message - so it is the one silent stretch
-    most worth making visible. click.progressbar hides its own rendering
-    when the output is not a terminal, exactly like the build bar's.
+    Measured against the live queue, a batched UID FETCH is a 40x speed-up
+    over fetching one message at a time (6.95s -> 0.17s for 40 headers) -
+    the cost was per-command latency, not bandwidth, so batching is the
+    fix, not fetching less. A batched fetch is one server round trip
+    regardless of how many uids it covers, so a per-message progress bar
+    no longer means anything; below FETCH_CHUNK_SIZE uids - every
+    ordinary run (~21 starred, ~98 unstarred candidates) - this is a
+    single call, reported as one line with the count and elapsed time.
+    Above it, a click.progressbar tracks progress across the chunks
+    Mailbox.fetch_many() itself issues one UID FETCH per (see
+    FETCH_CHUNK_SIZE's own docstring for why chunking exists at all),
+    hiding itself on a non-tty exactly like the build bar.
     """
-    documents: list[Document] = []
-    with click.progressbar(
-        uids,
-        label="  Fetching",
-        item_show_func=lambda uid: str(uid) if uid else None,
-    ) as bar:
-        for uid in bar:
-            documents.append(extract(box.fetch(uid), uid=uid, names=names))
-    return documents
+    if not uids:
+        return []
+    started = time.monotonic()
+    if len(uids) <= FETCH_CHUNK_SIZE:
+        raw = box.fetch_many(uids, items)
+    else:
+        chunks = [
+            uids[start : start + FETCH_CHUNK_SIZE]
+            for start in range(0, len(uids), FETCH_CHUNK_SIZE)
+        ]
+        raw: dict[int, bytes] = {}
+        with click.progressbar(
+            chunks,
+            label=label,
+            item_show_func=lambda chunk: f"{len(chunk)} messages" if chunk else None,
+        ) as bar:
+            for chunk in bar:
+                raw.update(box.fetch_many(chunk, items))
+    elapsed = time.monotonic() - started
+    click.echo(f"{label} {len(raw)} message(s) in {elapsed:.2f}s.")
+    return [extract(raw[uid], uid=uid, names=names) for uid in uids if uid in raw]
 
 
-def _resolve_trash(box: Mailbox, config: Config, uids: list[int]) -> str | None:
+def _resolve_trash(box: Mailbox, config: Config, uids: Sequence[int]) -> str | None:
     """Discover or use the configured Trash folder, and say which.
 
     config.mail.trash lets a user name the Trash folder literally, for a
@@ -77,63 +114,46 @@ def _resolve_trash(box: Mailbox, config: Config, uids: list[int]) -> str | None:
     return trash
 
 
-def fetch_queue(config: Config) -> tuple[list[Document], str | None]:
-    """Fetch the starred messages, read-only, and resolve the Trash folder."""
-    config.require_mail()
-    click.echo(f"Connecting to {config.mail.host} as {config.mail.user}...")
-    password = password_for(config.mail.host, config.mail.user)
-    names = load_publication_names()
-    with Mailbox(
-        host=config.mail.host,
-        user=config.mail.user,
-        password=password,
-        folder=config.mail.folder,
-    ) as box:
-        click.echo(f"  Opened {config.mail.folder} ({box.message_count} messages).")
-        uids = box.search_flagged()
-        click.echo(f"  {len(uids)} starred message(s) found.")
-        documents = _fetch_with_progress(box, uids, names)
-        trash = _resolve_trash(box, config, uids)
-    return documents, trash
-
-
-def fetch_unstarred(config: Config, since: date) -> tuple[list[Document], str | None]:
-    """The unstarred review window, read-only: everything unflagged since
-    `since`.
-
-    Extracted with the same extract() the starred queue uses - it parses
-    headers and picks the message body apart, but never cleans or renders
-    it - never pipeline.build_one(), which is reserved for whatever the
-    user actually picks. Most of what this returns will never be picked,
-    so doing that heavier work for all of it here would make a large
-    window slow for no reason.
-    """
-    config.require_mail()
-    click.echo(f"Connecting to {config.mail.host} as {config.mail.user}...")
-    password = password_for(config.mail.host, config.mail.user)
-    names = load_publication_names()
-    with Mailbox(
-        host=config.mail.host,
-        user=config.mail.user,
-        password=password,
-        folder=config.mail.folder,
-    ) as box:
-        click.echo(f"  Opened {config.mail.folder} ({box.message_count} messages).")
-        uids = box.search_unflagged_since(since)
-        click.echo(
-            f"  {len(uids)} unstarred message(s) found since "
-            f"{format_packet_date(since)}."
-        )
-        documents = _fetch_with_progress(box, uids, names)
-        trash = _resolve_trash(box, config, uids)
-    return documents, trash
-
-
 def _stdin_is_tty() -> bool:
     return sys.stdin.isatty()
 
 
-def _offer_picks(config: Config) -> tuple[list[Document], str | None]:
+def fetch_unstarred(
+    box: Mailbox, since: date, names: PublicationNames
+) -> list[Document]:
+    """The unstarred review window, on the connection already opened by
+    fetch_queue: only the headers needed for the listing (see
+    _HEADER_ITEMS) for everything unflagged since `since`.
+
+    Extracted with the same extract() the starred queue uses, but on
+    headers-only bytes - extract() still parses publication, title, and
+    date correctly from those (body/html simply comes back empty, which
+    the listing never reads). Most of what this returns will never be
+    picked, so fetching full content for all of it here - the previous
+    behaviour, and the actual cost behind the ~17s unstarred scan - would
+    make a large window slow for no reason; full content for whatever the
+    user actually picks is fetched separately, only for those uids, by
+    fetch_picked().
+    """
+    uids = box.search_unflagged_since(since)
+    click.echo(
+        f"  {len(uids)} unstarred message(s) found since {format_packet_date(since)}."
+    )
+    return _fetch_documents(box, uids, names, items=_HEADER_ITEMS, label="  Scanning")
+
+
+def fetch_picked(
+    box: Mailbox, uids: list[int], names: PublicationNames
+) -> list[Document]:
+    """Full content for exactly the uids the user picked - the only
+    unstarred candidates worth the cost, since most of a large window is
+    never picked (see picker.py's own module docstring)."""
+    return _fetch_documents(box, uids, names, items=_FULL_ITEMS, label="  Fetching")
+
+
+def _offer_picks(
+    box: Mailbox, config: Config, names: PublicationNames, since: date
+) -> tuple[list[Document], list[int]]:
     """Show what else arrived since the last successful run and let the
     user add some to the packet.
 
@@ -143,22 +163,19 @@ def _offer_picks(config: Config) -> tuple[list[Document], str | None]:
     starred document: same cleaning, rendering, trimming, contents entry,
     footer, and retirement, with no special case needed anywhere for it.
 
-    Any problem reaching mail here (no account configured, a network
-    blip) is reported and swallowed rather than aborting the run - the
-    starred queue this run was already going to build must still print.
+    Uses the same read-only connection fetch_queue already opened for the
+    starred fetch - the tool used to open a second connection here, one
+    full connect/login/select cycle just for this scan. Any problem on
+    this connection's own operations (a mid-session server hiccup) is
+    reported and swallowed by the caller rather than aborting the run -
+    the starred queue this run was already going to build must still
+    print; see fetch_queue's own docstring.
     """
-    try:
-        config.require_mail()
-        since = window_since(config.fallback_days, datetime.now(UTC).date())
-        candidates, trash = fetch_unstarred(config, since)
-    except (MailError, ConfigError) as error:
-        click.echo(f"  Could not check for unstarred newsletters: {error}", err=True)
-        return [], None
-
+    candidates = fetch_unstarred(box, since, names)
     when = format_packet_date(since)
     if not candidates:
         click.echo(f"  No unstarred newsletters since {when}.")
-        return [], trash
+        return [], []
 
     listing = build_listing(candidates)
     click.echo(f"\n  Newsletters since {when} you haven't starred:")
@@ -172,7 +189,7 @@ def _offer_picks(config: Config) -> tuple[list[Document], str | None]:
     interactive = _stdin_is_tty()
     if not interactive:
         click.echo("  Skipping the selection prompt (stdin is not a terminal).")
-        return [], trash
+        return [], []
 
     while True:
         response = click.prompt(
@@ -187,10 +204,75 @@ def _offer_picks(config: Config) -> tuple[list[Document], str | None]:
             continue
         break
 
-    picked = [listing.documents[index - 1] for index in indices]
-    if picked:
-        click.echo(f"  Added {len(picked)} newsletter(s) from the unstarred list.")
-    return picked, trash
+    picked_candidates = [listing.documents[index - 1] for index in indices]
+    if not picked_candidates:
+        return [], []
+
+    picked_uids = [
+        document.origin.uid
+        for document in picked_candidates
+        if document.origin.uid is not None
+    ]
+    picked = fetch_picked(box, picked_uids, names)
+    click.echo(f"  Added {len(picked)} newsletter(s) from the unstarred list.")
+    return picked, picked_uids
+
+
+def fetch_queue(
+    config: Config, no_pick: bool = False
+) -> tuple[list[Document], str | None]:
+    """Fetch the starred queue and, unless no_pick, offer this week's
+    unstarred newsletters to add - both on the SAME read-only IMAP
+    connection.
+
+    The tool used to open two separate connections here: one for the
+    starred fetch, a second (inside what is now _offer_picks/
+    fetch_unstarred) for the unstarred scan - each paying its own
+    connect/login/select round trip. Doing both inside one
+    `with Mailbox(...) as box:` removes that second connect entirely. The
+    retirement connection, opened later by retire_printed() only after a
+    job has reached the print queue, stays deliberately separate - see
+    mail.py's own module docstring on why that one must not be collapsed
+    in.
+
+    A MailError raised specifically by the picker's own operations (the
+    unstarred SEARCH or its header fetch) is caught here and swallowed,
+    exactly as _offer_picks's own docstring says: the starred queue this
+    run was already going to build must still print. A MailError raised
+    by the starred fetch itself, or by opening the connection at all,
+    is not caught - that failure is fatal to the whole run, same as
+    always.
+    """
+    config.require_mail()
+    click.echo(f"Connecting to {config.mail.host} as {config.mail.user}...")
+    password = password_for(config.mail.host, config.mail.user)
+    names = load_publication_names()
+    with Mailbox(
+        host=config.mail.host,
+        user=config.mail.user,
+        password=password,
+        folder=config.mail.folder,
+    ) as box:
+        click.echo(f"  Opened {config.mail.folder} ({box.message_count} messages).")
+        starred_uids = box.search_flagged()
+        click.echo(f"  {len(starred_uids)} starred message(s) found.")
+        documents = _fetch_documents(
+            box, starred_uids, names, items=_FULL_ITEMS, label="  Fetching"
+        )
+
+        picked: list[Document] = []
+        picked_uids: list[int] = []
+        if not no_pick:
+            try:
+                since = window_since(config.fallback_days, datetime.now(UTC).date())
+                picked, picked_uids = _offer_picks(box, config, names, since)
+            except MailError as error:
+                click.echo(
+                    f"  Could not check for unstarred newsletters: {error}", err=True
+                )
+
+        trash = _resolve_trash(box, config, [*starred_uids, *picked_uids])
+    return [*documents, *picked], trash
 
 
 def _open_preview(pdf: Path) -> None:
@@ -296,16 +378,9 @@ def main(
     click.echo(f"Reading config: {config_path}")
     try:
         config = load_config(config_path, paper_override=paper)
-        documents, trash = fetch_queue(config)
+        documents, trash = fetch_queue(config, no_pick)
     except (MailError, ConfigError) as error:
         raise click.ClickException(str(error)) from error
-
-    if not no_pick:
-        picked, picked_trash = _offer_picks(config)
-        if picked:
-            documents = [*documents, *picked]
-        if trash is None:
-            trash = picked_trash
 
     if not documents:
         click.echo("Nothing starred in the queue.")

@@ -20,6 +20,25 @@ IMAPFactory = Callable[[str], imaplib.IMAP4]
 
 _TRASH_LINE = re.compile(rb'\\Trash\b[^"]*"[^"]*"\s+"?([^"]+?)"?\s*$')
 
+# A UID FETCH response line always carries the message's own UID as a
+# data item (RFC 3501), regardless of what else was asked for - which is
+# how _parse_fetch_response maps a response tuple back to its uid, rather
+# than assuming the server answers in request order (it is not required
+# to, and measured against the user's real server it does not always).
+_FETCH_UID_RE = re.compile(rb"UID (\d+)")
+
+# Measured against the user's real server: 40 single-message FETCH round
+# trips took 6.95s; one batched UID FETCH for the same 40 took 0.17s - the
+# cost is per-command latency, not bandwidth, so batching is the whole
+# fix. Chunking on top of that is a safety net, not a further speed-up:
+# nothing in RFC 3501 caps a command line's length, but real servers do
+# (Dovecot's default is 64KiB; older or more conservative ones can be far
+# smaller) - 200 uids, each at most a handful of digits plus a comma,
+# stays comfortably under any of them while still being one round trip
+# for every ordinary run (the live queue's largest fetch, ~98 unstarred
+# candidates, is one chunk).
+FETCH_CHUNK_SIZE = 200
+
 # strftime's %b reads LC_TIME, so a non-English locale can render a SEARCH
 # date the server rejects: de_DE appends a period ("Sep."), fr_FR uses its
 # own abbreviation ("sept."), he_IL spells the month in Hebrew entirely.
@@ -61,6 +80,32 @@ def _message_count(data: Sequence[bytes | None]) -> int:
         return int(data[0])
     except IndexError, TypeError, ValueError:
         return 0
+
+
+def _parse_fetch_response(
+    data: Sequence[bytes | tuple[bytes, bytes] | None],
+) -> dict[int, bytes]:
+    """Turn a (possibly multi-message) UID FETCH response into {uid:
+    payload}.
+
+    Each matched message contributes one (info, payload) tuple to `data`,
+    followed by a closing b')' entry that carries no data of its own -
+    the exact same shape imaplib returns for a single-uid fetch, just
+    repeated once per message for a batched one. The uid is read from
+    each tuple's own info line rather than from its position in `data`,
+    because a real server is not required to (and, measured against the
+    user's own server, does not always) answer a UID FETCH in the order
+    the UID set was requested in.
+    """
+    result: dict[int, bytes] = {}
+    for item in data:
+        if not (isinstance(item, tuple) and len(item) > 1):
+            continue
+        info, payload = item[0], item[1]
+        match = _FETCH_UID_RE.search(info)
+        if match:
+            result[int(match.group(1))] = payload
+    return result
 
 
 def _quote_mailbox(name: str) -> str:
@@ -164,14 +209,39 @@ class Mailbox:
         month = _IMAP_MONTHS[since.month - 1]
         return self._search(f"UNFLAGGED SINCE {since.day:02d}-{month}-{since.year}")
 
-    def fetch(self, uid: int) -> bytes:
-        status, data = self._connection.uid("FETCH", str(uid), "(RFC822)")
-        if status != "OK":
-            raise MailError(f"fetch failed for uid {uid}: {status}")
-        for item in data:
-            if isinstance(item, tuple) and len(item) > 1:
-                return item[1]
-        raise MailError(f"fetch returned no message body for uid {uid}")
+    def fetch_many(
+        self, uids: Sequence[int], items: str = "(UID RFC822)"
+    ) -> dict[int, bytes]:
+        """Fetch every uid in `uids` in as few round trips as possible.
+
+        One `UID FETCH <comma-joined uid set> <items>` command covers an
+        entire chunk (see FETCH_CHUNK_SIZE) - a 40x speed-up over fetching
+        one message at a time, measured against the user's real server
+        (6.95s -> 0.17s for 40 headers). `items` lets a caller ask for
+        only what it needs - the default is a full message, but the
+        unstarred picker asks for headers only, via
+        BODY.PEEK[HEADER.FIELDS (...)] - PEEK specifically, so scanning
+        a week's unstarred mail never marks any of it \\Seen.
+
+        Raises if the server reports failure for a chunk, or if any
+        requested uid never appears in what came back - a message the
+        server silently skipped is not the same as one it truthfully
+        fetched, and must not be undercounted without saying so.
+        """
+        if not uids:
+            return {}
+        result: dict[int, bytes] = {}
+        for start in range(0, len(uids), FETCH_CHUNK_SIZE):
+            chunk = uids[start : start + FETCH_CHUNK_SIZE]
+            uid_set = ",".join(str(uid) for uid in chunk)
+            status, data = self._connection.uid("FETCH", uid_set, items)
+            if status != "OK":
+                raise MailError(f"fetch failed for {len(chunk)} uid(s): {status}")
+            result.update(_parse_fetch_response(data))
+        missing = [uid for uid in uids if uid not in result]
+        if missing:
+            raise MailError(f"fetch returned no message body for uid(s): {missing}")
+        return result
 
     def trash_folder(self) -> str:
         status, lines = self._connection.list()
