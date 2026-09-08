@@ -621,9 +621,9 @@ def test_watch_now_as_a_substring_of_a_real_sentence_still_survives() -> None:
         "you’re currently a free subscriber to Prof G Media.",
         "You’re currently a free subscriber to Behind the Craft.",
         "this email was sent by: The Economist Newspaper Ltd.",
-        "This email was sent to: reuven@lerner.co.il",
+        "This email was sent to: reader@example.com",
         (
-            "This email has been sent to   reuven@lerner.co.il    because you "
+            "This email has been sent to   reader@example.com    because you "
             "signed up for this newsletter."
         ),
     ],
