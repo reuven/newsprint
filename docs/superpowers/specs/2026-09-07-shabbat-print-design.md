@@ -58,11 +58,18 @@ tool extracts the article text and re-typesets it. Images that look
 substantive are kept and converted to grayscale; tracking pixels, logos,
 banners, and social buttons are dropped.
 
-**Printed mail is retired: marked read, unstarred, moved to Trash.** The star
-means "queued to print", so the queue drains on its own and Thunderbird stays
-the place the queue is visible. Retirement happens only after `lp` accepts the
-job, only for messages that actually reached the PDF, and every affected
-Message-ID is written to a run log first.
+**Printed mail is retired: marked read, unstarred, then moved to Trash, in
+that order.** The star means "queued to print", so the queue drains on its
+own and Thunderbird stays the place the queue is visible. Read-and-unstar
+run before the move because a successful move expunges the source UID
+(RFC 6851), and a command against an expunged UID is silently ignored
+(RFC 3501) - so a command issued after the move would be dead code. If the
+move then fails, the star is restored so the message stays visibly queued
+rather than silently dropped from it; `\Seen` is left as printing set it,
+since it cannot be undone with any confidence about the prior state.
+Retirement happens only after `lp` accepts the job, only for messages that
+actually reached the PDF, and every affected Message-ID is written to a run
+log first.
 
 **Web articles are fetched through an app-owned browser profile.** The tool
 keeps its own Chromium profile which the user logs into once per site. Friday's
@@ -210,8 +217,11 @@ returns a `Document`, and changing nothing else.
 
 9. **Retire.** Only now does `mail.py` open a second, read-write connection.
    For each email document that reached the PDF: `+FLAGS \Seen`,
-   `-FLAGS \Flagged`, then `MOVE` to the Trash folder. The run log is written
-   before the first mutation.
+   `-FLAGS \Flagged`, then `MOVE` to the Trash folder - in that order, because
+   MOVE expunges the source UID and any command after it would be ignored.
+   If MOVE fails, `+FLAGS \Flagged` re-stars the message so it stays visibly
+   queued; `\Seen` is not rolled back. The run log is written before the
+   first mutation.
 
 The read-only-then-reopen split is deliberate: every stage that can crash —
 HTML parsing, rendering, imposition — runs on a connection that has no power
@@ -224,19 +234,32 @@ operations per message, and closes.
 
 Handled in two places, with different jobs.
 
-**Structural, in `clean.py`.** The reported symptom — a printout spilling onto
-another sheet because of "footers, advertisements, links" — is fixed by never
-rendering those elements in the first place. `clean.py` emits only what it
-judges to be article content, so in the common case a filler page cannot come
-into existence: there is nothing to put on it.
+**Structural, in `clean.py`.** As implemented, this is a deny-list, not an
+allow-list: everything survives except a small, specifically-identified set
+of top-level blocks (script/style/etc. tags, images, and blocks whose text
+both scores as chrome under a content-ratio heuristic and is not
+structurally protected as heading-like). Measured against the 102-fixture
+corpus, it removes under 0.5% of the corpus by word count. It does *not* by
+itself stop a filler page from coming into existence in the common case —
+that is `trim.py`'s job, described below; `clean.py`'s contribution is
+removing the handful of blocks its heuristic confidently identifies (an
+"Unsubscribe" line, a "view in browser" bar, and the like), on the way to
+`trim.py`'s final-cell judgment.
 
 Targets: the unsubscribe block, "view in browser" bars, sponsor and
 advertisement slots, social button rows, link roundups, sign-offs ("thanks for
 reading", "see you next week"), "you are receiving this because" boilerplate,
-mailing addresses, copyright lines, and preference-management links. Detected
-by a combination of link destination, element text against a phrase list, link
-density within the block, and position in the document — trailing blocks are
-far more likely to be boilerplate than leading ones.
+mailing addresses, copyright lines, and preference-management links — when a
+block's text scores as chrome by a phrase-list and content-ratio check, and
+is not spared by the heading guard (a block containing an `h1`-`h6`, or one
+whose entire text is a single short line that isn't itself a confident chrome
+match, survives regardless of score — a lesson learned from an earlier
+version of this heuristic silently destroying real headlines, subtitles, and
+mastheads that happened to be short). Because the asymmetric cost of a wrong
+removal is high, this stage is deliberately conservative: an unsubscribe line
+or mailing address that doesn't clearly match the phrase list is left in
+place for `trim.py`'s cell-level judgment to catch instead. See the note in
+the README about why an unsubscribe line may still appear on a printout.
 
 **Post-hoc, in `trim.py`.** The safety net, for chrome the stripper failed to
 recognise and therefore rendered inline.

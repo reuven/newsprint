@@ -1,0 +1,59 @@
+# Copy to ~/.config/shabbat-print/config.toml and edit.
+# The IMAP password is NOT stored here. Put it in your system keychain:
+#     keyring set <mail.host> <mail.user>
+#
+# Gmail specifically:
+#   - Your regular Google password will not work over IMAP. Enable 2-Step
+#     Verification, then generate an app password at
+#     https://myaccount.google.com/apppasswords and use that instead.
+#   - Gmail's folder namespace is not "INBOX/<label>". A label you create
+#     (e.g. "toprint") appears as a top-level IMAP mailbox named "toprint",
+#     a sibling of INBOX rather than something nested under it - set
+#     mail.folder to "toprint", not "INBOX/toprint".
+
+[mail]
+host   = "imap.gmail.com"        # e.g. imap.gmail.com, imap.fastmail.com
+user   = "you@example.com"
+folder = "INBOX/toprint"         # the folder you star things into - for
+                                  # Gmail this is just the label name, e.g.
+                                  # "toprint" (see the Gmail note above)
+trash  = "auto"                  # "auto" discovers the \Trash folder;
+                                  # or set a literal folder name for a
+                                  # server without SPECIAL-USE support
+
+[print]
+printer = ""                     # empty means your system default printer
+paper   = "A4"                   # or "Letter"; override per run with --paper
+duplex  = "two-sided-long-edge"
+
+[layout]
+margin_mm   = 9.0
+font_size_pt = 9.0
+line_height = 1.35
+
+[window]
+fallback_days = 7                # how far back to look with no previous run
+
+[packet]
+title = ""                       # a title line above "CONTENTS ·" on the
+                                  # contents page, e.g. "Family Shabbat
+                                  # Reading" - empty renders nothing
+min_words = 250                  # newsletters whose cleaned body has fewer
+                                  # words than this are skipped as teasers
+                                  # (headline + link, no real article) and
+                                  # reported, not printed or retired
+
+[summary]
+enabled = false                  # off by default: makes one Claude API
+                                  # call per run, sending the packet's
+                                  # cleaned text to Anthropic - understand
+                                  # the cost and the data-sharing before
+                                  # turning this on
+api_key_file = "~/.env"          # dotenv-format file holding the key -
+                                  # only api_key_var is read from it, never
+                                  # logged and never written to the run log
+api_key_var = "ANTHROPIC_API_KEY"
+model = "claude-opus-5"
+timeout_seconds = 120.0          # if the call is slower than this, or
+                                  # fails outright, the packet still prints
+                                  # - just without the summary pages

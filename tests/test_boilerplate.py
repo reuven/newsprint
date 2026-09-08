@@ -1,0 +1,444 @@
+import pytest
+
+from shabbat_print.boilerplate import (
+    content_ratio,
+    is_boilerplate_line,
+    is_definite_chrome_line,
+    is_full_line_chrome,
+)
+
+PROSE = "Private credit is having a moment, and not entirely a good one."
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Unsubscribe",
+        "You are receiving this because you signed up.",
+        "View this email in your browser",
+        "Manage your preferences",
+        "© 2026 Bloomberg L.P. All rights reserved.",
+        "https://example.com/some/tracking/link",
+        "www.example.com",
+        "Read more",
+        "Sponsored by Acme",
+    ],
+)
+def test_boilerplate_lines(line: str) -> None:
+    assert is_boilerplate_line(line) is True
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        PROSE,
+        "The Federal Reserve declined to move rates this month, again.",
+        "She wrote that the deal was, in her words, entirely unremarkable.",
+    ],
+)
+def test_content_lines(line: str) -> None:
+    assert is_boilerplate_line(line) is False
+
+
+def test_blank_lines_are_not_boilerplate() -> None:
+    assert is_boilerplate_line("   ") is False
+
+
+def test_content_ratio_of_pure_footer_is_zero() -> None:
+    footer = "Unsubscribe\nManage your preferences\nhttps://example.com/x\n"
+    assert content_ratio(footer) == pytest.approx(0.0)
+
+
+def test_content_ratio_of_pure_prose_is_one() -> None:
+    assert content_ratio(PROSE) == pytest.approx(1.0)
+
+
+def test_content_ratio_is_by_characters_not_lines() -> None:
+    """A long ad page must score low even though it is long."""
+    text = PROSE + "\n" + "\n".join(["Sponsored by Acme"] * 30)
+    assert content_ratio(text) < 0.15
+
+
+def test_content_ratio_of_empty_text_is_zero() -> None:
+    assert content_ratio("\n \n") == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Unsubscribe",
+        "View this email in your browser",
+        "© 2026 Bloomberg L.P. All rights reserved.",
+        "https://example.com/some/tracking/link",
+        "www.example.com",
+    ],
+)
+def test_definite_chrome_lines_match_a_known_phrase_or_a_bare_url(
+    line: str,
+) -> None:
+    assert is_definite_chrome_line(line) is True
+
+
+def test_definite_chrome_line_of_a_blank_line_is_false() -> None:
+    assert is_definite_chrome_line("   ") is False
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "So far, so good",
+        "End of an era",
+        "Read more",
+        "Watch now",
+        "The Reframe · By A.R. Moxon • 25 Apr",
+    ],
+)
+def test_definite_chrome_lines_do_not_match_a_short_heading(line: str) -> None:
+    """These score as boilerplate under is_boilerplate_line's short-line
+    fallback, but that fallback is a weak heuristic, not a confident
+    signal - it is exactly the mechanism that once let clean.py destroy
+    real headlines, subtitles, and mastheads that happened to be short.
+
+    "Watch now" was requested as a phrase (it survives as a bare CTA
+    button in the user's real output), tried, and reverted: see
+    test_watch_now_was_tried_and_reverted for the measured counter-
+    example that ruled it out."""
+    assert is_definite_chrome_line(line) is False
+
+
+# G1: real footer prose observed in the user's own printed packet. Modern
+# footers read as conversational sentences ending in periods, which defeats
+# is_boilerplate_line's short-line fallback entirely - these must be caught
+# by phrase or shape, not length.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Forwarded this email? Subscribe here for more",
+        "Share / Like / Comment / Restack",
+        "A MESSAGE FROM OUR SPONSOR",
+        "Puck is published by Heat Media LLC.",
+        "Update your newsletter preferences anytime via your personal page.",
+        "Review our FAQ page or contact us for assistance.",
+        "Give the gift of a subscription this year.",
+        "Check out my masterclass on negotiation.",
+        "You received this email because you signed up on our website.",
+        "To stop receiving this newsletter, click here.",
+        "Manage all your email preferences from your account page.",
+        "Read in app",
+    ],
+)
+def test_new_footer_phrases_are_definite_chrome(line: str) -> None:
+    assert is_definite_chrome_line(line) is True
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "1255 22nd St NW #18958, Washington, DC 20037",
+        "548 Market Street PMB 72296, San Francisco, CA 94104",
+        "107 Greenwich St., New York, NY 10006",
+        "PMB 72296, San Francisco, CA 94104",
+        "Suite 200, Chicago, IL 60601",
+    ],
+)
+def test_postal_addresses_are_definite_chrome(line: str) -> None:
+    assert is_definite_chrome_line(line) is True
+
+
+def test_an_address_quoted_inside_a_real_sentence_is_not_chrome() -> None:
+    """The adversarial false-positive case: a genuine sentence that happens
+    to quote a full postal address is not, itself, chrome. The address
+    pattern is anchored to the start of the line so this must not match."""
+    line = (
+        "She used to live at 1600 Pennsylvania Ave NW, Washington, DC 20500 "
+        "before the campaign ended."
+    )
+    assert is_definite_chrome_line(line) is False
+
+
+def test_need_help_brand_partnerships_and_watch_now_were_tried_and_reverted() -> None:
+    """All three were requested (need help?/brand partnerships from the
+    spec's own suggestions and a second read of the user's real output;
+    watch now from the same second read), added, and measured against all
+    102 fixtures. All three were reverted on concrete evidence, not a
+    hypothetical:
+
+    - "watch now" removed a genuine editorial sentence from
+      pete-aidailybrief-io.eml: "AI moved fast while I was away; and this
+      new chapter of AI Daily Brief begins with the trends, tools, and
+      opportunities creators should watch now." A phrase match, unlike
+      the short-line fallback, does not care about length or position.
+
+    - "need help?" and "brand partnerships" together made a real chrome
+      block newly chrome in jon-puck-news.eml - Puck's FAQ/brand-
+      partnerships footer paragraph - which had been the trailing run's
+      stopping point. With it reclassified, the walk continued one leaf
+      further back and removed a genuine two-line sign-off: "Have a
+      great weekend, / Jon". See the report for the full trace.
+
+    None of the three are in PHRASES; is_definite_chrome_line must still
+    say False for all of them."""
+    assert is_definite_chrome_line("Need help? Here is what to do next.") is False
+    assert (
+        is_definite_chrome_line(
+            "Brand partnerships now account for a third of the site's revenue."
+        )
+        is False
+    )
+    assert (
+        is_definite_chrome_line(
+            "AI moved fast while I was away, so this chapter begins with the "
+            "trends creators should watch now."
+        )
+        is False
+    )
+
+
+# Round 2, F3: a line-level check distinct from is_definite_chrome_line.
+# is_definite_chrome_line matches a PHRASES entry as a SUBSTRING anywhere in
+# the line - safe for scoring a block's overall ratio (one bad line among
+# several good ones just lowers the score), but never safe for deleting a
+# specific line outright, since a real sentence can quote or contain one of
+# those words. is_full_line_chrome instead requires the phrase to BE the
+# whole line (after collapsing internal whitespace to single spaces and
+# case-folding), which is what makes it safe to apply anywhere in a
+# document rather than only where a block or a leading/trailing run
+# happens to expose it.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Forwarded this email?",
+        "forwarded this email?",
+        "Forwarded this email? Subscribe here for more",
+        "Restack",
+        "restack",
+        "A MESSAGE FROM OUR SPONSOR",
+        "a message from our sponsor",
+        "Unsubscribe",
+        "unsubscribe",
+        "Get the Bulwark app",
+        "Get the NYT app",
+        (
+            "You received this email because you signed up for David French "
+            "from The New York Times."
+        ),
+        "You received this email because you are on our list.",
+    ],
+)
+def test_full_line_chrome_phrases(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "",
+        "   ",
+        PROSE,
+        (
+            "The chapter closes on a long note, and there is an unsubscribe "
+            "link somewhere below, which almost nobody ever clicks."
+        ),
+        "Get the picture",
+        "Get the sense of how this played out",
+        "Get the app",
+        "You received a warm welcome from the whole team.",
+        "Restacking the shelves took all afternoon.",
+    ],
+)
+def test_full_line_chrome_rejects_a_substring_or_unrelated_line(line: str) -> None:
+    """The two adversarial cases this exists to guard: 'unsubscribe' quoted
+    inside a real sentence, and the declined general 'get the ...' pattern
+    (no trailing 'app') that the earlier wave found matches real prose
+    ('get the picture', 'get the sense')."""
+    assert is_full_line_chrome(line) is False
+
+
+def test_full_line_chrome_collapses_internal_line_breaks() -> None:
+    """The 'Forwarded this email?' button renders as three visual lines
+    ('Forwarded this email?' / 'Subscribe here' / 'for more') inside one
+    element; collapsed with a single space this is exactly the second
+    known phrase."""
+    assert (
+        is_full_line_chrome("Forwarded this email?\nSubscribe here\nfor more") is True
+    )
+
+
+# F2's live-queue trace found one surviving case is_full_line_chrome's
+# original phrase list did not cover: a footer block whose text is
+# "© 2026\nSubstack Inc.\n548 Market Street PMB 72296, San Francisco, CA
+# 94104\nUnsubscribe" scores content_ratio 0.159 - just over CHROME_RATIO
+# (0.15) - because "Substack Inc." ends in a period, which defeats
+# is_boilerplate_line's short-line fallback (it reads as a "sentence").
+# Once _strip_line_chrome removes the standalone "Unsubscribe" line, the
+# ratio of what remains rises even further (removing a zero-content line
+# only raises the surviving fraction), so the address is never reachable
+# through the ratio path at all - it needs its own explicit, whole-line
+# match, the same way "Unsubscribe" already has one. Reuses the existing,
+# already-vetted _ADDRESS_LINE pattern (anchored with fullmatch, proven
+# safe against an address quoted mid-sentence) rather than inventing a new
+# heuristic.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "548 Market Street PMB 72296, San Francisco, CA 94104",
+        "1255 22nd St NW #18958, Washington, DC 20037",
+        "PMB 72296, San Francisco, CA 94104",
+    ],
+)
+def test_full_line_chrome_matches_a_postal_address(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+def test_full_line_chrome_does_not_match_an_address_quoted_in_a_sentence() -> None:
+    line = (
+        "She used to live at 1600 Pennsylvania Ave NW, Washington, DC 20500 "
+        "before the campaign ended."
+    )
+    assert is_full_line_chrome(line) is False
+
+
+# Round 3, section A: whole-line exact matches, extending the F3 list.
+# "Like" and "Comment" were declined in round 2 as PHRASES substring
+# entries, correctly - the live queue has real article sentences containing
+# those words. is_full_line_chrome is a different, stronger claim (the
+# whole line, not a substring), so these are safe here even though they
+# were not safe there.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Share",
+        "share",
+        "Like",
+        "Comment",
+        "Share Now",
+        "READ IN APP",
+        "View in browser",
+        "Share The Bulwark",
+    ],
+)
+def test_full_line_chrome_phrases_round_3(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+# The load-bearing distinction for section A: these are real article
+# sentences from the live queue that a substring match on "Like"/"Share"
+# would destroy. is_full_line_chrome must say False for all of them,
+# because none of them is, in its entirety, one of the bare words above -
+# each has more text sharing the same line.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Like most of America, Dry Powder will be…",
+        "Like it or not, we now live in a world in which the weapon…",
+        "Like, right now.",
+        "Share this newsletter with someone who prefers truth, honesty…",
+    ],
+)
+def test_a_sentence_starting_with_like_or_share_survives(line: str) -> None:
+    assert is_full_line_chrome(line) is False
+
+
+# Round 3, section B: a third pass at footer prose.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Update your newsletter preferences anytime via your personal page.",
+        "Update your email preferences or unsubscribe here.",
+        "Thanks for being a Bulwark+ member.",
+        "Thanks for being a valued subscriber",
+        "Thanks for being a part of the club!",
+        "Visit our Help Center for answers to our most common questions.",
+        "Set up your personal RSS feed for ad-free listening.",
+        "The Secret Podcast is exclusively for members of Bulwark+.",
+    ],
+)
+def test_round_3_footer_phrases_are_definite_chrome(line: str) -> None:
+    assert is_definite_chrome_line(line) is True
+
+
+# Round 3b, item 1: "READ TO ME" is a Bulwark variant of "READ IN APP" -
+# the same audio/app-affordance CTA shape, requested by name. "LISTEN NOW"
+# is added alongside it: a small family investigation (measured against
+# the full 268-fixture corpus) found it always appears as a bare,
+# standalone line immediately after a "Listen now (NN mins) | ..."
+# metadata line, in five other publications' fixtures
+# (datascienceeducation, johnfdickerson, pragmaticengineer, serioustrouble,
+# thepythonshow), with zero collisions with real content across the whole
+# corpus. Both are literals, not a broader regex - see the module comment
+# by _FULL_LINE_CHROME's definition for why a wider family pattern
+# ("read"/"listen" + "now"/"to me"/"in app"/"aloud") was considered and
+# declined.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "READ TO ME",
+        "read to me",
+        "Read To Me",
+        "LISTEN NOW",
+        "Listen now",
+        "listen now",
+    ],
+)
+def test_full_line_chrome_phrases_round_3b(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+# The load-bearing distinction for the "listen now" addition: a real,
+# plausible sentence that merely contains those two words, or is close in
+# shape, must not collapse to the bare phrase and must survive. None of
+# these is the entire line "listen now" or "read to me" once collapsed
+# and case-folded.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Listen to me for a moment before you decide anything.",
+        "Read this to me tomorrow, would you?",
+        "You can read it in the app if you'd rather.",
+        "Listen now (18 mins) | Season 11, Episode 8",
+    ],
+)
+def test_a_sentence_resembling_the_audio_app_family_survives(line: str) -> None:
+    assert is_full_line_chrome(line) is False
+
+
+# Round 3b, item 2: a publisher's own pipe/middot/bullet-separated
+# navigation row - "View in browser | nytimes.com" - where "View in
+# browser" is already a known whole-line chrome phrase and "nytimes.com"
+# is a bare domain (see _BARE_DOMAIN's own comment). Every one of the
+# three delimiters clean.py's docstring names is checked, and the row
+# survives collapsing internal whitespace differently (no spaces at all,
+# vs. spaces on both sides of the delimiter) the way a real rendered line
+# might.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "View in browser|nytimes.com",
+        "View in browser | nytimes.com",
+        "View in browser · nytimes.com",
+        "View in browser • bulwark.com",
+        "Unsubscribe|nytimes.com",
+    ],
+)
+def test_a_delimiter_separated_navigation_row_is_chrome(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+# The load-bearing safety property: EVERY segment must independently
+# qualify, or nothing is removed. A pipe in a real sentence, a nav row
+# with one genuine content segment among the chrome, an empty trailing
+# segment, and an engagement-stats row that superficially looks similar
+# (the live corpus's real "a month ago · 99 likes · 11 comments · Renee
+# DiResta" line) must all survive.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "View in browser | The Fed considers new rate hikes this week",
+        "Cost: $10 | Free shipping available",
+        "View in browser | ",
+        "a month ago · 99 likes · 11 comments · Renee DiResta",
+        "U.S. | Real Content",
+    ],
+)
+def test_a_mixed_or_non_chrome_delimited_row_survives(line: str) -> None:
+    assert is_full_line_chrome(line) is False

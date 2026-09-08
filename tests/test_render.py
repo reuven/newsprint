@@ -1,0 +1,218 @@
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from shabbat_print.config import load_config
+from shabbat_print.geometry import A4
+from shabbat_print.models import Document, Origin
+from shabbat_print.pdfutil import page_count, page_text, text_extent_mm
+from shabbat_print.render import render
+
+PROSE = (
+    "<p>The Federal Reserve declined to move rates this month, which surprised "
+    "almost nobody who had been paying attention to the minutes.</p>"
+)
+
+
+@pytest.fixture
+def config(tmp_path: Path):
+    return load_config(tmp_path / "absent.toml")
+
+
+def document(html: str) -> Document:
+    return Document(
+        origin=Origin(kind="email", identifier="<x@example.com>"),
+        publication="Money Stuff",
+        title="Private Credit Gets Complicated",
+        date=datetime(2026, 9, 5, tzinfo=UTC),
+        html=html,
+    )
+
+
+def test_page_is_exactly_one_cell(config, tmp_path: Path) -> None:
+    import pymupdf
+
+    pdf = render(document(PROSE), config, out_dir=tmp_path)
+    with pymupdf.open(pdf) as opened:
+        rect = opened[0].rect
+    expected_width, expected_height = A4.cell.as_points()
+    assert rect.width == pytest.approx(expected_width, abs=1.0)
+    assert rect.height == pytest.approx(expected_height, abs=1.0)
+
+
+def test_title_and_publication_appear(config, tmp_path: Path) -> None:
+    pdf = render(document(PROSE), config, out_dir=tmp_path)
+    text = page_text(pdf, 0)
+    assert "Private Credit Gets Complicated" in text
+    # The masthead is deliberately rendered in uppercase (text-transform,
+    # paired with letter-spacing), so compare case-insensitively rather
+    # than bending production behaviour to fit the test.
+    assert "money stuff" in text.replace("\n", " ").lower()
+
+
+def test_content_appears(config, tmp_path: Path) -> None:
+    pdf = render(document(PROSE), config, out_dir=tmp_path)
+    assert "Federal Reserve" in page_text(pdf, 0)
+
+
+def test_long_document_spans_several_cells(config, tmp_path: Path) -> None:
+    pdf = render(document(PROSE * 40), config, out_dir=tmp_path)
+    assert page_count(pdf) > 1
+
+
+def test_compression_never_increases_the_page_count(config, tmp_path: Path) -> None:
+    long_document = document(PROSE * 40)
+    loose = render(long_document, config, out_dir=tmp_path)
+    tight = render(long_document, config, compression=0.98, out_dir=tmp_path)
+    assert page_count(tight) <= page_count(loose)
+
+
+def test_compression_writes_a_distinct_file(config, tmp_path: Path) -> None:
+    doc = document(PROSE)
+    assert render(doc, config, out_dir=tmp_path) != render(
+        doc, config, compression=0.98, out_dir=tmp_path
+    )
+
+
+def test_letter_paper_gives_a_letter_cell(tmp_path: Path) -> None:
+    import pymupdf
+
+    from shabbat_print.geometry import LETTER
+
+    config = load_config(tmp_path / "absent.toml", paper_override="letter")
+    pdf = render(document(PROSE), config, out_dir=tmp_path)
+    with pymupdf.open(pdf) as opened:
+        rect = opened[0].rect
+    expected_width, _ = LETTER.cell.as_points()
+    assert rect.width == pytest.approx(expected_width, abs=1.0)
+
+
+def test_text_extent_of_a_short_page_is_small(config, tmp_path: Path) -> None:
+    pdf = render(document(PROSE), config, out_dir=tmp_path)
+    assert text_extent_mm(pdf, 0, config.layout.margin_mm) < A4.cell.height_mm / 2
+
+
+def test_text_extent_of_a_full_page_is_large(config, tmp_path: Path) -> None:
+    pdf = render(document(PROSE * 40), config, out_dir=tmp_path)
+    assert text_extent_mm(pdf, 0, config.layout.margin_mm) > A4.cell.height_mm / 2
+
+
+def test_text_extent_counts_a_trailing_numeric_content_block(
+    config, tmp_path: Path
+) -> None:
+    """A numeral that is genuine content (a year, here) must not be mistaken
+    for the footer's page-number counter and excluded from the extent."""
+    without_numeral = render(document(PROSE), config, out_dir=tmp_path / "without")
+    with_numeral = render(
+        document(PROSE + "<p>2026</p>"), config, out_dir=tmp_path / "with"
+    )
+    assert text_extent_mm(with_numeral, 0, config.layout.margin_mm) > text_extent_mm(
+        without_numeral, 0, config.layout.margin_mm
+    )
+
+
+def test_no_page_number_is_emitted_in_the_footer(config, tmp_path: Path) -> None:
+    """F1 moved the footer to stamp.py; render.py's CSS must no longer draw
+    a bare page-number counter in @bottom-center, or the packet footer
+    stamped later would collide with it."""
+    pdf = render(document(PROSE * 40), config, out_dir=tmp_path)
+    assert page_count(pdf) > 1
+    # The old counter rendered a bare "1" (just the page number, on its
+    # own) in the bottom margin; with no @bottom-center rule at all, the
+    # only text on the page is the masthead, heading and body.
+    text = page_text(pdf, 0).replace("\n", " ")
+    words = text.split(" ")
+    assert "1" not in words
+
+
+def test_dollar_signs_in_content_survive(config, tmp_path: Path) -> None:
+    """The template substitutes with string.Template; $ in the content must
+    not be treated as a placeholder."""
+    pdf = render(
+        document("<p>It cost $500 and $unexpected trouble.</p>"),
+        config,
+        out_dir=tmp_path,
+    )
+    assert "$500" in page_text(pdf, 0)
+
+
+def test_masthead_reads_as_a_section_break(config) -> None:
+    """G2: the masthead must read as a section break, not a subtitle - a
+    heavy rule above it, and the name set bold and roughly level with the
+    headline (not smaller than it). The old thin rule below the masthead
+    goes: one heavy rule above is clearer than two rules."""
+    from shabbat_print.render import _build_html
+
+    html = _build_html(document(PROSE), config, compression=1.0)
+    masthead_rule = _masthead_css(html)
+    assert "border-top" in masthead_rule
+    assert "border-bottom" not in masthead_rule
+    assert "font-weight: bold" in masthead_rule or "font-weight:bold" in masthead_rule
+    assert "1rem" in masthead_rule or "1.0rem" in masthead_rule
+    # Roughly level with the headline, not smaller than it: h1 stayed at
+    # 1.15rem, so the masthead (>= 1rem) must not be the smaller of the two.
+    assert "0.70rem" not in masthead_rule
+    assert "0.85rem" not in masthead_rule
+    # Still reads as a masthead, not ordinary running text.
+    assert "text-transform: uppercase" in masthead_rule
+    assert "letter-spacing" in masthead_rule
+
+
+def _masthead_css(html: str) -> str:
+    start = html.index(".masthead")
+    end = html.index("}", start)
+    return html[start : end + 1]
+
+
+def test_no_packet_title_line_renders_by_default(config, tmp_path: Path) -> None:
+    """The tracked default is empty; an empty packet title must render
+    nothing, not a blank line - the whole open-source point of H1."""
+    pdf = render(document(PROSE), config, out_dir=tmp_path)
+    text = page_text(pdf, 0)
+    assert "packet-title" not in text
+
+
+def test_a_packet_title_renders_above_the_masthead(config, tmp_path: Path) -> None:
+    pdf = render(
+        document(PROSE),
+        config,
+        out_dir=tmp_path,
+        packet_title="Reuven's Shabbat reading",
+    )
+    text = page_text(pdf, 0)
+    assert "shabbat reading" in text.lower()
+
+
+def test_an_empty_packet_title_changes_nothing_in_the_generated_html(config) -> None:
+    """Passing packet_title="" (the default) must produce byte-identical
+    HTML to not passing it at all - nothing shifts."""
+    from shabbat_print.render import _build_html
+
+    without_kwarg = _build_html(document(PROSE), config)
+    with_empty = _build_html(document(PROSE), config, packet_title="")
+    assert without_kwarg == with_empty
+
+
+def test_the_packet_title_is_larger_and_bolder_than_the_masthead(config) -> None:
+    from shabbat_print.render import _build_html
+
+    html = _build_html(document(PROSE), config, packet_title="Family Reading")
+    start = html.index(".packet-title")
+    end = html.index("}", start)
+    packet_title_rule = html[start : end + 1]
+    assert "font-weight: 900" in packet_title_rule
+    assert "1.4rem" in packet_title_rule
+
+
+def test_masthead_appears_only_once_per_newsletter(config, tmp_path: Path) -> None:
+    """The masthead is the newsletter's own navigation cue and must appear
+    once, on the first cell only - even when the article spans several
+    cells."""
+    pdf = render(document(PROSE * 40), config, out_dir=tmp_path)
+    assert page_count(pdf) > 1
+    first_page = page_text(pdf, 0).replace("\n", " ").lower()
+    assert "money stuff" in first_page
+    for index in range(1, page_count(pdf)):
+        later_page = page_text(pdf, index).replace("\n", " ").lower()
+        assert "money stuff" not in later_page

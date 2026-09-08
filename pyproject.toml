@@ -1,17 +1,40 @@
 [project]
 name = "shabbat-print"
 version = "0.1.0"
-description = "Add your description here"
+description = "Fetch starred newsletters over IMAP, reduce them to article content, and print them quarter-sheet, four to a side, duplex."
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "Reuven Lerner", email = "reuven@lerner.co.il" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "anthropic>=1.4.0",
+    "beautifulsoup4>=4.15.0",
+    "click>=8.5.0",
+    "keyring>=25.7.0",
+    "lxml>=6.1.3",
+    "pymupdf>=1.28.2",
+    "pypdf>=6.17.0",
+    "weasyprint>=69.0",
+]
 
 [project.scripts]
-shabbat-print = "shabbat_print:main"
+shabbat-print = "shabbat_print.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.6",
+]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "error",
+    "ignore:builtin type .* has no __module__ attribute:DeprecationWarning",
+]

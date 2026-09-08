@@ -3171,9 +3171,15 @@ def test_builds_a_pdf_per_document(config, tmp_path: Path) -> None:
     assert all(item.cells >= 1 for item in built)
 
 
-def test_records_the_verdict(config, tmp_path: Path) -> None:
+def test_cells_matches_the_pdf_it_reports(config, tmp_path: Path) -> None:
+    """Built.cells is what the sheet count is computed from, so it must equal
+    the page count of the PDF actually handed on."""
+    from shabbat_print.pdfutil import page_count
+
     built, _ = build([document(PROSE * 40)], config, tmp_path)
-    assert built[0].verdict in set(Verdict)
+    assert built[0].cells == page_count(built[0].pdf)
+    assert built[0].cells > 1
+    assert isinstance(built[0].verdict, Verdict)
 
 
 def test_a_failing_document_is_reported_not_raised(config, tmp_path: Path) -> None:
@@ -3556,6 +3562,115 @@ def main(
         retire_printed(config, uids, trash)
         click.echo(f"Retired {len(uids)} message(s) to {trash}.")
 ```
+
+- [ ] **Step 8b: Cover the printing, failure, and retirement paths**
+
+The plan requires 100% coverage, and the four tests above never reach the
+branch that spools a job or the branch that retires mail — the most
+safety-critical code in the project. Append to `tests/test_cli.py`:
+
+```python
+def _queued(identifier: str = "<d@example.com>", uid: int = 4):
+    from datetime import datetime, timezone
+
+    from shabbat_print.models import Document, Origin
+
+    return Document(
+        origin=Origin(kind="email", identifier=identifier, uid=uid),
+        publication="Test Weekly",
+        title="An Issue",
+        date=datetime(2026, 9, 5, tzinfo=timezone.utc),
+        html="<div><p>The Federal Reserve declined to move rates this "
+        "month, which surprised almost nobody.</p></div>",
+    )
+
+
+def test_accepting_prints_then_retires_in_that_order(monkeypatch, tmp_path: Path) -> None:
+    """The invariant: mail is modified only after a job reaches the queue."""
+    events: list[str] = []
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.spool",
+        lambda pdf, config: (events.append("spool"), "Printer-1")[1],
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.retire_printed",
+        lambda config, uids, trash: events.append(f"retire:{uids}"),
+    )
+    monkeypatch.setattr("shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r")
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code == 0
+    assert events == ["spool", "retire:[4]"]
+
+
+def test_a_print_failure_leaves_mail_untouched(monkeypatch, tmp_path: Path) -> None:
+    from shabbat_print.printer import PrintError
+
+    retired: list[list[int]] = []
+
+    def explode(pdf, config):
+        raise PrintError("lp: no such printer")
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli.spool", explode)
+    monkeypatch.setattr(
+        "shabbat_print.cli.retire_printed",
+        lambda config, uids, trash: retired.append(uids),
+    )
+    monkeypatch.setattr("shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r")
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code != 0
+    assert "no such printer" in result.output
+    assert retired == []
+
+
+def test_an_unconfigured_account_says_what_to_set(monkeypatch, tmp_path: Path) -> None:
+    """With no config file at all, the error names the missing keys."""
+    result = CliRunner().invoke(main, ["--config", str(tmp_path / "absent.toml")])
+    assert result.exit_code != 0
+    assert "mail.host and mail.user" in result.output
+
+
+def test_a_document_that_cannot_be_built_is_reported(monkeypatch, tmp_path: Path) -> None:
+    """A newsletter that cleans down to nothing is named, not silently lost."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_empty()], None)
+    )
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")]
+    )
+    assert result.exit_code == 0
+    assert "SKIPPED" in result.output
+    assert "Empty Weekly" in result.output
+    assert "Nothing could be built" in result.output
+
+
+def _empty():
+    from datetime import datetime, timezone
+
+    from shabbat_print.models import Document, Origin
+
+    return Document(
+        origin=Origin(kind="email", identifier="<e@example.com>", uid=5),
+        publication="Empty Weekly",
+        title="Nothing",
+        date=datetime(2026, 9, 5, tzinfo=timezone.utc),
+        html="<div><p>Unsubscribe</p></div>",
+    )
+```
+
+Note: `test_an_unconfigured_account_says_what_to_set` needs `fetch_queue`
+unmocked so `require_mail` runs; do not add a `fetch_queue` monkeypatch to it.
 
 - [ ] **Step 9: Point the entry point at the CLI**
 
