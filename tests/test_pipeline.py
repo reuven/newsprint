@@ -99,6 +99,38 @@ def test_a_document_at_or_above_the_threshold_is_built(config, tmp_path: Path) -
     assert len(built) == 1
 
 
+def test_force_include_bypasses_the_teaser_threshold(config, tmp_path: Path) -> None:
+    """Phase 8: a fetched URL whose extracted word count is implausibly
+    low can still be built when the user explicitly confirmed "include it
+    anyway" at cli.py's own prompt (webextract.py's thin-content check) -
+    the one case where a document below packet.min_words must still reach
+    the PDF rather than being silently re-skipped a second time, which
+    would make that confirmation meaningless."""
+    from dataclasses import replace
+
+    teaser = replace(
+        document("<h1>An Issue</h1><p>Read more online.</p>", "<v@x>"),
+        force_include=True,
+    )
+    built, failed = build([teaser], config, tmp_path)
+    assert failed == []
+    assert len(built) == 1
+
+
+def test_force_include_does_not_rescue_a_genuinely_empty_document(
+    config, tmp_path: Path
+) -> None:
+    """force_include only bypasses the word-count threshold - a document
+    that cleans down to literally nothing must still fail, since there is
+    nothing to render regardless of what the user confirmed."""
+    from dataclasses import replace
+
+    empty = replace(document(""), force_include=True)
+    built, failed = build([empty], config, tmp_path)
+    assert built == []
+    assert len(failed) == 1
+
+
 # Phase 8 (charts.md): render_fn may now report failed image fetches via
 # an `image_fetch_failures` kwarg (render.py's own contract - a list it
 # appends URLs into, never replaces). build_one() must thread that same

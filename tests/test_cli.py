@@ -1921,7 +1921,7 @@ def test_selecting_a_range_adds_exactly_those_newsletters(
     result = CliRunner().invoke(
         main,
         ["--no-preview", "--config", str(mail_config.path)],
-        input="1-2\nn\n",
+        input="1-2\n\nn\n",
     )
     assert result.exit_code == 0
     assert "Alpha Weekly: " in result.output
@@ -1985,7 +1985,7 @@ def test_selected_picks_shift_the_contents_starting_numbers(
     one_pick = CliRunner().invoke(
         main,
         ["--no-preview", "--config", str(mail_config.path)],
-        input="1\nn\n",
+        input="1\n\nn\n",
     )
     assert one_pick.exit_code == 0
     one_pick_cells = int(_TOTAL_CELLS_RE.search(one_pick.output).group(1))
@@ -1995,7 +1995,7 @@ def test_selected_picks_shift_the_contents_starting_numbers(
     two_picks = CliRunner().invoke(
         main,
         ["--no-preview", "--config", str(mail_config.path)],
-        input="1-2\nn\n",
+        input="1-2\n\nn\n",
     )
     assert two_picks.exit_code == 0
     two_pick_cells = int(_TOTAL_CELLS_RE.search(two_picks.output).group(1))
@@ -2027,7 +2027,7 @@ def test_pressing_enter_at_the_prompt_skips_selection(
     result = CliRunner().invoke(
         main,
         ["--no-preview", "--config", str(mail_config.path)],
-        input="\nn\n",
+        input="\n\nn\n",
     )
     assert result.exit_code == 0
     assert "Alpha Weekly: " not in result.output
@@ -2061,7 +2061,7 @@ def test_an_out_of_range_selection_is_named_and_reprompted(
     result = CliRunner().invoke(
         main,
         ["--no-preview", "--config", str(mail_config.path)],
-        input="99\n1\nn\n",
+        input="99\n1\n\nn\n",
     )
     assert result.exit_code == 0
     assert "no newsletter numbered 99" in result.output
@@ -2106,7 +2106,7 @@ def test_a_picked_newsletter_is_retired_like_any_other(
     result = CliRunner().invoke(
         main,
         ["--no-preview", "--config", str(mail_config.path)],
-        input="1\ny\n",
+        input="1\n\ny\n",
     )
     assert result.exit_code == 0
     assert retired_uids == [[4, 99]]  # the starred uid, then the picked one
@@ -2148,7 +2148,7 @@ def test_picker_trash_is_used_when_the_starred_queue_was_empty(
     result = CliRunner().invoke(
         main,
         ["--no-preview", "--config", str(mail_config.path)],
-        input="1\ny\n",
+        input="1\n\ny\n",
     )
     assert result.exit_code == 0
     assert retire_calls == [([99], "INBOX/Trash")]
@@ -2158,3 +2158,368 @@ def test_help_mentions_no_pick() -> None:
     result = CliRunner().invoke(main, ["--help"])
     assert result.exit_code == 0
     assert "--no-pick" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Web article fetching (phase8-urls.md)
+# ---------------------------------------------------------------------------
+
+
+def test_help_lists_the_login_subcommand() -> None:
+    result = CliRunner().invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "login" in result.output
+
+
+def test_login_opens_the_profile_under_the_config_directory(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[Path] = []
+    monkeypatch.setattr(
+        "shabbat_print.cli.browser.login", lambda profile: calls.append(profile)
+    )
+    config_path = tmp_path / "config.toml"
+
+    result = CliRunner().invoke(main, ["login", "--config", str(config_path)])
+
+    assert result.exit_code == 0
+    assert calls == [tmp_path / "browser-profile"]
+    assert "browser-profile" in result.output
+
+
+def test_login_default_config_path_still_runs_the_print_command(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A plain `shabbat-print` (no subcommand) must still run the print
+    flow exactly as before - converting `main` into a click.Group must
+    not turn "no subcommand" into an error or a no-op."""
+    monkeypatch.setattr("shabbat_print.cli.fetch_queue", lambda config: ([], None))
+
+    result = CliRunner().invoke(main, ["--config", str(tmp_path / "absent.toml")])
+    assert result.exit_code == 0
+    assert "Nothing starred" in result.output
+
+
+def _url_document(word_count: int = 400, identifier: str = "https://example.com/a"):
+    from datetime import datetime
+
+    from shabbat_print.models import Document, Origin
+
+    words = " ".join(["word"] * word_count)
+    return Document(
+        origin=Origin(kind="url", identifier=identifier),
+        publication="Example Times",
+        title="A Real Headline",
+        date=datetime(2026, 9, 5, tzinfo=UTC),
+        html=f"<p>{words}</p>",
+    )
+
+
+def test_a_non_interactive_run_skips_the_url_prompt_and_does_not_hang(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """No --dry-run and no `input=` given at all - if the URL prompt were
+    reached, CliRunner's stdin would be exhausted and the run would abort
+    or hang instead of finishing cleanly."""
+    monkeypatch.setattr("shabbat_print.cli.fetch_queue", lambda config: ([], None))
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")]
+    )
+    assert result.exit_code == 0
+    assert "Skipping the URL prompt" in result.output
+    assert "not a terminal" in result.output.lower()
+
+
+def test_dry_run_skips_the_url_prompt(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--dry-run", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+    )
+    assert result.exit_code == 0
+    assert "Skipping the URL prompt (dry run)" in result.output
+
+
+def test_a_missing_profile_is_reported_before_the_prompt(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Verify bullet: what a run does with no profile and no login
+    configured - a clear, one-time notice naming `shabbat-print login`,
+    not a crash and not silence."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(tmp_path / "absent.toml")],
+        input="\nn\n",
+    )
+    assert result.exit_code == 0
+    assert "No browser profile found" in result.output
+    assert "shabbat-print login" in result.output
+
+
+def test_an_existing_profile_is_not_reported_as_missing(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+    (tmp_path / "browser-profile").mkdir()
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(tmp_path / "absent.toml")],
+        input="\nn\n",
+    )
+    assert result.exit_code == 0
+    assert "No browser profile found" not in result.output
+
+
+def test_pressing_enter_at_the_url_prompt_skips_it(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    def explode(*a, **kw):
+        raise AssertionError("fetch_html must not be called with no URLs")
+
+    monkeypatch.setattr("shabbat_print.cli.browser.fetch_html", explode)
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(tmp_path / "absent.toml")],
+        input="\nn\n",
+    )
+    assert result.exit_code == 0
+
+
+def test_a_pasted_url_is_fetched_extracted_and_added_to_the_packet(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.browser.fetch_html",
+        lambda url, profile, **kw: "<html><body>ignored</body></html>",
+    )
+
+    from shabbat_print.webextract import Extracted
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.webextract.extract_article",
+        lambda url, html, **kw: Extracted(
+            document=_url_document(400, identifier=url), word_count=400
+        ),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(tmp_path / "absent.toml")],
+        input="https://example.com/a\nn\n",
+    )
+    assert result.exit_code == 0
+    assert "Fetched: A Real Headline" in result.output
+    assert "Example Times: " in result.output  # it actually built a cell
+
+
+def test_a_fetch_failure_is_reported_and_the_rest_of_the_packet_still_prints(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    from shabbat_print.browser import FetchError
+
+    def exploding_fetch(url, profile, **kw):
+        raise FetchError(f"could not fetch {url}: timed out")
+
+    monkeypatch.setattr("shabbat_print.cli.browser.fetch_html", exploding_fetch)
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(tmp_path / "absent.toml")],
+        input="https://example.com/dead\nn\n",
+    )
+    assert result.exit_code == 0
+    assert "could not fetch" in result.output
+    assert "shabbat-print login" in result.output
+    assert "Mail untouched" in result.output  # the rest of the run still finished
+
+
+def test_an_extraction_failure_is_reported_and_does_not_abort_the_run(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.browser.fetch_html",
+        lambda url, profile, **kw: "<html><body></body></html>",
+    )
+
+    from shabbat_print.webextract import ExtractionError
+
+    def exploding_extract(url, html, **kw):
+        raise ExtractionError(f"no article content found at {url}")
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.webextract.extract_article", exploding_extract
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(tmp_path / "absent.toml")],
+        input="https://example.com/empty\nn\n",
+    )
+    assert result.exit_code == 0
+    assert "no article content found" in result.output
+
+
+def test_thin_content_prompts_and_declining_excludes_it(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.browser.fetch_html",
+        lambda url, profile, **kw: "<html><body>ignored</body></html>",
+    )
+
+    from shabbat_print.webextract import Extracted
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.webextract.extract_article",
+        lambda url, html, **kw: Extracted(
+            document=_url_document(10, identifier=url), word_count=10
+        ),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(tmp_path / "absent.toml")],
+        input="https://example.com/paywalled\nn\nn\n",
+    )
+    assert result.exit_code == 0
+    assert "only 10 words" in result.output
+    assert "Fetched:" not in result.output
+    assert "Example Times: " not in result.output
+
+
+def test_thin_content_confirmed_anyway_reaches_the_pdf(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Confirming "include it anyway" must actually reach the PDF, not be
+    silently re-skipped a second time by the ordinary teaser threshold -
+    see pipeline.py's force_include."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.browser.fetch_html",
+        lambda url, profile, **kw: "<html><body>ignored</body></html>",
+    )
+
+    from shabbat_print.webextract import Extracted
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.webextract.extract_article",
+        lambda url, html, **kw: Extracted(
+            document=_url_document(10, identifier=url), word_count=10
+        ),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(tmp_path / "absent.toml")],
+        input="https://example.com/paywalled\ny\nn\n",
+    )
+    assert result.exit_code == 0
+    assert "only 10 words" in result.output
+    assert "Fetched:" in result.output
+    assert "Example Times: " in result.output  # it actually built a cell
+    assert "SKIPPED" not in result.output
+
+
+def test_a_url_sourced_pick_is_never_retired(monkeypatch, tmp_path: Path) -> None:
+    """The retirement invariant, confirmed for a fetched URL exactly as it
+    already is for a picked email (uids come only from Origin.uid, which
+    is always None for kind="url") - a fetched article must join the
+    packet and print without ever appearing in retire_printed's uids."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
+    monkeypatch.setattr(
+        "shabbat_print.cli.browser.fetch_html",
+        lambda url, profile, **kw: "<html><body>ignored</body></html>",
+    )
+
+    from shabbat_print.webextract import Extracted
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.webextract.extract_article",
+        lambda url, html, **kw: Extracted(
+            document=_url_document(400, identifier=url), word_count=400
+        ),
+    )
+
+    retired_uids: list[list[int]] = []
+
+    def fake_retire_printed(config, uids, trash):
+        retired_uids.append(uids)
+        return RetireResult(retired=tuple(uids), failed=())
+
+    monkeypatch.setattr("shabbat_print.cli.retire_printed", fake_retire_printed)
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(tmp_path / "absent.toml")],
+        input="https://example.com/a\ny\n",
+    )
+    assert result.exit_code == 0
+    assert retired_uids == [[4]]  # only the starred queue's uid - never the URL

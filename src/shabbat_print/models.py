@@ -66,3 +66,11 @@ class Document:
     images_kept: int = 0
     images_dropped: tuple[DroppedImage, ...] = ()
     blocks_dropped: tuple[DroppedBlock, ...] = ()
+    # Phase 8 (phase8-urls.md): set when the user explicitly confirmed
+    # "include it anyway" at cli.py's own thin-content prompt for a
+    # fetched URL whose extracted word count looked like a hard paywall's
+    # teaser. pipeline.build_one() is the only reader - it lets this one
+    # document past the packet.min_words teaser check that would
+    # otherwise skip it a second time, silently undoing the choice the
+    # user just made. False for every other document, always.
+    force_include: bool = False
