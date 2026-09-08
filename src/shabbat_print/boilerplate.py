@@ -360,6 +360,28 @@ _FULL_LINE_CHROME: frozenset[str] = frozenset(
         "photo: getty images",
         "read full story",
         "read more",
+        # Not from the frequency table (both found reading the live
+        # queue's own dry-run output by hand, checking the user's
+        # reported strings directly - see the derive-chrome report).
+        # "Listen Now." is the same CTA round 3b already vetted as
+        # "listen now" (bare, unpunctuated), but William D. Cohan's own
+        # Puck template renders it WITH a trailing period, which
+        # normalize_full_line does not strip - so the existing entry
+        # never actually matched this real occurrence. "Listen to the
+        # episode here." is a new one, confirmed in the same live
+        # message, in a sponsored third-party podcast ad block
+        # ("Introducing InterSectors, a new podcast from White & Case"),
+        # sitting right beside two "A MESSAGE FROM OUR SPONSOR" lines
+        # already removed from the same document - unambiguous ad CTA
+        # text, not the newsletter author's own prose. Round 3b's own
+        # comment explicitly declined a broader "listen ..." family
+        # pattern because "Listen to me." reads as a plausible real
+        # first-person sentence; "Listen to the episode here." does not
+        # have that shape (a real sentence does not open "the episode"
+        # this way), so it is added as its own literal, not folded into
+        # a wider pattern.
+        "listen now.",
+        "listen to the episode here.",
         # Not from the frequency table (a single publication, so
         # frequency alone could never surface it) - the trailing
         # self-promotional block reported live in

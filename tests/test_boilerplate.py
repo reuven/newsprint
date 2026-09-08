@@ -580,10 +580,24 @@ def test_a_mixed_or_non_chrome_delimited_row_survives(line: str) -> None:
         "Read full story",
         "Read more",
         "Buy Trade World",
+        "Listen Now.",
+        "Listen to the episode here.",
     ],
 )
 def test_round_4_full_line_chrome_literals(line: str) -> None:
     assert is_full_line_chrome(line) is True
+
+
+def test_a_sentence_resembling_listen_to_the_episode_here_survives() -> None:
+    """The load-bearing negative case for the new literal: it must not
+    become a broader pattern that would catch a real first-person
+    sentence, the exact adversarial shape round 3b's own comment already
+    identified for this family ("Listen to me.")."""
+    assert is_full_line_chrome("Listen to me for a moment before you decide.") is False
+    assert (
+        is_full_line_chrome("You can listen to the recording here if you missed it.")
+        is False
+    )
 
 
 # The "watch now" addition's own load-bearing distinction: the real
