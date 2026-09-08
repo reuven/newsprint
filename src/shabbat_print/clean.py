@@ -48,7 +48,7 @@ import re
 from collections.abc import Iterator
 from dataclasses import replace
 
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, CData, NavigableString, Tag
 
 from .boilerplate import (
     SHORT_LINE,
@@ -606,13 +606,25 @@ def _rendered_lines(tag: Tag) -> list[str]:
         current.clear()
 
     def walk(node: Tag | NavigableString) -> None:
-        if isinstance(node, NavigableString):
+        node_type = type(node)
+        if node_type is NavigableString or node_type is CData:
             current.append(str(node))
             return
-        # tag.children only ever yields Tag or NavigableString (and
-        # NavigableString subclasses, e.g. Comment) - nothing else reaches
-        # this branch, so `node` is a Tag here with no further check
-        # needed.
+        if isinstance(node, NavigableString):
+            # A NavigableString subclass that is not itself real text -
+            # Comment (Outlook's own MSO conditional markup, e.g.
+            # "<!--[if mso]>...<![endif]-->", is the one the fixture
+            # corpus is full of), Declaration, Doctype, or
+            # ProcessingInstruction. None of these render as visible text
+            # in any browser, so none of them may ever become a "line"
+            # here - matching bs4's own get_text(), whose default `types`
+            # restricts to exactly {NavigableString, CData} for the same
+            # reason (see Tag.MAIN_CONTENT_STRING_TYPES). tag.children
+            # never yields anything but a Tag or some NavigableString
+            # subclass, so this is also the point nothing further is a
+            # Tag either - the branch below is reached only when neither
+            # check above matched.
+            return
         boundary = _is_line_boundary(node)
         if boundary:
             flush()

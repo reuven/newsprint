@@ -403,6 +403,27 @@ def test_a_br_still_starts_a_new_rendered_line() -> None:
     assert _rendered_lines(soup.div) == ["Line one", "Line two"]
 
 
+def test_an_html_comment_is_not_a_rendered_line() -> None:
+    """An HTML comment - Outlook's own MSO conditional markup
+    ("<!--[if mso]>...<![endif]-->") is common throughout the fixture
+    corpus - never renders as visible text in any browser or in
+    WeasyPrint, so it must not be treated as content here either.
+    bs4's own get_text() already excludes Comment nodes by default (they
+    are a NavigableString *subclass*, but not NavigableString itself, and
+    get_text()'s default `types` restricts to {NavigableString, CData});
+    _rendered_lines must match that, not just check `isinstance(...,
+    NavigableString)`, which is also true for a Comment and would let
+    conditional-comment markup leak into content_ratio scoring and
+    scripts/derive_chrome.py's frequency counts alike."""
+    from bs4 import BeautifulSoup
+
+    from shabbat_print.clean import _rendered_lines
+
+    html = "<div>Real text<!--[if mso]>hidden mso markup<![endif]--><p>More.</p></div>"
+    soup = BeautifulSoup(html, "lxml")
+    assert _rendered_lines(soup.div) == ["Real text", "More."]
+
+
 def test_block_level_siblings_are_separate_rendered_lines() -> None:
     """Two sibling <p> tags are two real, separate lines - the fix must
     not collapse genuine block-level structure along with the inline-tag
