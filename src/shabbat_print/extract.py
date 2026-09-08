@@ -110,7 +110,7 @@ def _date(message: Message) -> datetime:
     if raw:
         try:
             parsed = email.utils.parsedate_to_datetime(raw)
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             parsed = None
         if parsed is not None:
             if parsed.tzinfo is None:

@@ -41,3 +41,11 @@ filterwarnings = [
     "error",
     "ignore:builtin type .* has no __module__ attribute:DeprecationWarning",
 ]
+
+[tool.ruff]
+# ruff infers py314 from requires-python and rewrites `except (A, B):` into
+# PEP 758's unparenthesized `except A, B:`. That is valid 3.14, but mypy
+# 1.18 cannot parse it and bails on the first file it hits - which left
+# type checking silently covering nothing at all. Pinning the formatter one
+# version back keeps the parentheses until mypy catches up.
+target-version = "py313"

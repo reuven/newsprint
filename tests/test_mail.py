@@ -33,6 +33,11 @@ class FakeIMAP:
         # simply omitted from the response, the way a real server would
         # answer for a uid it does not have.
         self.sizes: dict[int, int] = {}
+        # UIDVALIDITY is what a reconnect compares to decide whether the
+        # uids it is still holding mean anything on the new connection.
+        self.uidvalidity = b"1"
+        self.logout_error: BaseException | None = None
+        self.shutdown_error: BaseException | None = None
         self.list_response = [
             b'(\\HasNoChildren) "/" "INBOX/toprint"',
             b'(\\HasNoChildren \\Trash) "/" "INBOX/Trash"',
@@ -90,8 +95,19 @@ class FakeIMAP:
         self.calls.append(("list",))
         return ("OK", self.list_response)
 
+    def response(self, code: str):
+        self.calls.append(("response", code))
+        return (code, [self.uidvalidity])
+
+    def shutdown(self):
+        self.calls.append(("shutdown",))
+        if self.shutdown_error is not None:
+            raise self.shutdown_error
+
     def logout(self):
         self.calls.append(("logout",))
+        if self.logout_error is not None:
+            raise self.logout_error
         return ("BYE", [b"bye"])
 
 
@@ -452,6 +468,9 @@ class FailingIMAP:
     def list(self):
         return ("NO", [b"failure"])
 
+    def response(self, code: str):
+        return (code, [b"1"])
+
     def logout(self):
         return ("BYE", [b"bye"])
 
@@ -752,3 +771,136 @@ def test_retire_with_no_uids_touches_nothing() -> None:
 
     # The folder was never reopened writable, so nothing could have changed.
     assert fake.selected == ("INBOX/toprint", True)
+
+
+class _DropsOnce:
+    """Mixin: the first FETCH raises instead of answering.
+
+    Models what the user's real server did between the picker prompt and
+    the fetch of the picked uids: the connection had been sitting idle
+    while a human read a scrollable list, and the write that followed
+    landed on a socket the server had already closed. imaplib surfaces
+    that as BrokenPipeError (or, once the SSL layer notices, IMAP4.abort)
+    from inside uid(), not as a NO status - so no amount of checking
+    `status != "OK"` can see it.
+    """
+
+    def __init__(self, host: str) -> None:
+        super().__init__(host)
+        self.drop_on_fetch = True
+        self.error: BaseException = BrokenPipeError(32, "Broken pipe")
+
+    def uid(self, command: str, *args):
+        if command == "FETCH" and self.drop_on_fetch:
+            self.drop_on_fetch = False
+            raise self.error
+        return super().uid(command, *args)
+
+
+class DroppingIMAP(_DropsOnce, MultiFetchIMAP):
+    """Drops its first body fetch, then behaves like MultiFetchIMAP."""
+
+
+class DroppingSizesIMAP(_DropsOnce, FakeIMAP):
+    """Drops its first fetch, then answers RFC822.SIZE like FakeIMAP -
+    which MultiFetchIMAP cannot do, since its FETCH override serves
+    bodies out of `messages` for every request shape."""
+
+
+def reconnecting_mailbox(fakes: list[FakeIMAP]) -> Mailbox:
+    """A Mailbox whose factory hands out `fakes` in order, so a test can
+    tell the connection it reconnected to apart from the one that died."""
+    remaining = iter(fakes)
+    return Mailbox(
+        host="imap.example.com",
+        user="someone@example.com",
+        password="secret",
+        folder="INBOX/toprint",
+        imap_factory=lambda host: next(remaining),
+    )
+
+
+def test_fetch_many_reconnects_after_a_dropped_connection() -> None:
+    dead, live = DroppingIMAP("h"), MultiFetchIMAP("h")
+    for fake in (dead, live):
+        fake.messages = {7: RAW}
+    with reconnecting_mailbox([dead, live]) as box:
+        assert box.fetch_many([7]) == {7: RAW}
+    assert ("login", "someone@example.com", "secret") in live.calls
+    assert live.selected == ("INBOX/toprint", True)
+
+
+def test_fetch_sizes_reconnects_after_a_dropped_connection() -> None:
+    dead, live = DroppingSizesIMAP("h"), FakeIMAP("h")
+    for fake in (dead, live):
+        fake.sizes = {7: 4096}
+    with reconnecting_mailbox([dead, live]) as box:
+        assert box.fetch_sizes([7]) == {7: 4096}
+
+
+def test_reconnect_survives_an_imap_abort() -> None:
+    dead, live = DroppingIMAP("h"), MultiFetchIMAP("h")
+    dead.error = imaplib.IMAP4.abort("socket error: [SSL: BAD_LENGTH] bad length")
+    for fake in (dead, live):
+        fake.messages = {7: RAW}
+    with reconnecting_mailbox([dead, live]) as box:
+        assert box.fetch_many([7]) == {7: RAW}
+
+
+def test_reconnect_closes_a_socket_that_cannot_be_closed() -> None:
+    """Shutting down the socket that just died usually fails too, and
+    that must not stop the reconnect it is clearing the way for."""
+    dead, live = DroppingIMAP("h"), MultiFetchIMAP("h")
+    dead.shutdown_error = OSError("socket is not connected")
+    for fake in (dead, live):
+        fake.messages = {7: RAW}
+    with reconnecting_mailbox([dead, live]) as box:
+        assert box.fetch_many([7]) == {7: RAW}
+
+
+def test_reconnect_refuses_when_uidvalidity_changed() -> None:
+    """A reconnect that lands on a renumbered folder must not fetch.
+
+    UIDVALIDITY changing means every uid this run is holding now names a
+    different message - or nothing. Retrying the fetch against the new
+    numbering would silently print the wrong newsletters, which is worse
+    than the crash this retry exists to prevent.
+    """
+    dead, live = DroppingIMAP("h"), MultiFetchIMAP("h")
+    live.uidvalidity = b"999"
+    for fake in (dead, live):
+        fake.messages = {7: RAW}
+    with (
+        reconnecting_mailbox([dead, live]) as box,
+        pytest.raises(MailError, match="renumbered"),
+    ):
+        box.fetch_many([7])
+
+
+def test_a_second_drop_is_not_retried() -> None:
+    """One retry, not a loop - a server that keeps dropping should
+    surface as a failed run, not an endless reconnect."""
+    dead, also_dead = DroppingIMAP("h"), DroppingIMAP("h")
+    with reconnecting_mailbox([dead, also_dead]) as box, pytest.raises(BrokenPipeError):
+        box.fetch_many([7])
+
+
+def test_exit_swallows_a_failed_logout() -> None:
+    """A dead socket must not raise from __exit__.
+
+    The user's crash report carried two tracebacks: the real
+    BrokenPipeError, and a second one from logout() on the way out, which
+    is the one Python reports as the active exception. Closing a
+    connection that is already gone is a no-op, not an error.
+    """
+    fake = FakeIMAP("h")
+    fake.logout_error = BrokenPipeError(32, "Broken pipe")
+    with mailbox(fake):
+        pass
+
+
+def test_exit_does_not_mask_the_original_error() -> None:
+    fake = FakeIMAP("h")
+    fake.logout_error = imaplib.IMAP4.abort("socket error")
+    with pytest.raises(ValueError, match="the real problem"), mailbox(fake):
+        raise ValueError("the real problem")

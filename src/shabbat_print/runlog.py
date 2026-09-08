@@ -50,6 +50,6 @@ def last_successful_run(state_dir: Path | None = None) -> datetime | None:
             # string; TypeError covers fromisoformat() being handed a
             # non-string "at" value; KeyError covers "at" being absent.
             stamps.append(datetime.fromisoformat(entry["at"]))
-        except OSError, ValueError, TypeError, KeyError:
+        except (OSError, ValueError, TypeError, KeyError):
             continue
     return max(stamps) if stamps else None
