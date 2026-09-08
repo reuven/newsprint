@@ -192,7 +192,16 @@ def main(
         )
         for block in item.document.blocks_dropped:
             preview = textwrap.shorten(block.text, width=70, placeholder="...")
-            click.echo(f"    removed block: {preview!r}")
+            # A duplicate-title removal is not data loss - see
+            # DroppedBlock.kind's own docstring and the derive-chrome
+            # spec's part E - and must not be reported the same way a
+            # genuine chrome removal is, which reads as data loss.
+            label = (
+                "removed duplicate title"
+                if block.kind == "duplicate_title"
+                else "removed block"
+            )
+            click.echo(f"    {label}: {preview!r}")
     for failure in failed:
         if isinstance(failure.error, TeaserSkippedError):
             # H2: visible, never silent, and specifically on stdout - a

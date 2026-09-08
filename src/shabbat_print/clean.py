@@ -857,7 +857,10 @@ def _strip_duplicate_title_block(
         # document - the same guard the leading/trailing runs apply.
         return ()
 
-    dropped = tuple(DroppedBlock(text=leaf.get_text(" ", strip=True)) for leaf in block)
+    dropped = tuple(
+        DroppedBlock(text=leaf.get_text(" ", strip=True), kind="duplicate_title")
+        for leaf in block
+    )
     for leaf in block:
         leaf.decompose()
     return dropped

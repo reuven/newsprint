@@ -36,9 +36,21 @@ class DroppedBlock:
     Kept for reporting, so a wrong removal is visible rather than
     invisible - the same principle trim.py already applies to a dropped
     cell.
+
+    `kind` distinguishes a genuine chrome removal (the default,
+    "chrome" - text that is gone from the printed output entirely) from
+    "duplicate_title" (clean.py's _strip_duplicate_title_block): that
+    text is not lost, only de-duplicated - render.py synthesises its own
+    headline from the message's Subject regardless, so the exact same
+    text still appears in the printout. Reporting both the same way
+    alarmed the user for real ('removed block: "This isn't just about
+    Jaguar Land Rover (or VW)"' was the message's own subject, not data
+    loss); see cli.py's own use of this field, and the derive-chrome
+    spec's part E.
     """
 
     text: str
+    kind: Literal["chrome", "duplicate_title"] = "chrome"
 
 
 @dataclass(frozen=True, slots=True)

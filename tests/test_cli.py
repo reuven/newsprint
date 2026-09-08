@@ -697,6 +697,48 @@ def test_a_dropped_chrome_block_is_reported(monkeypatch, tmp_path: Path) -> None
     assert "unsubscribe" in result.output.lower()
 
 
+def test_a_dropped_duplicate_title_is_reported_distinctly(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Part E of the derive-chrome spec (2026-09-07): a duplicate-title
+    removal is not a wrong removal - the text reappears in the printout
+    as render.py's own synthesised headline - so reporting it as a plain
+    "removed block" reads as data loss when it is not. That is exactly
+    what alarmed the user for real: 'removed block: "This isn't just
+    about Jaguar Land Rover (or VW)"' was Ed Conway's own subject line,
+    removed as part of clean.py's duplicate-title block and printed
+    anyway as the page's own headline."""
+    from datetime import datetime
+
+    from shabbat_print.models import Document, Origin
+
+    html = (
+        "<div><h2>An Issue</h2><p>A subtitle</p><p>By The Author</p>"
+        "<p>Sep 7</p>"
+        f"<p>{LONG_PROSE}</p></div>"
+    )
+    document = Document(
+        origin=Origin(kind="email", identifier="<t@example.com>", uid=10),
+        publication="Test Weekly",
+        title="An Issue",
+        date=datetime(2026, 9, 5, tzinfo=UTC),
+        html=html,
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--dry-run", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+    )
+    assert result.exit_code == 0
+    assert "removed duplicate title" in result.output
+    assert "an issue" in result.output.lower()
+    # Never reported the alarming way - a plain "removed block".
+    assert "removed block: 'An Issue'" not in result.output
+
+
 def test_a_document_that_cannot_be_built_is_reported(
     monkeypatch, tmp_path: Path
 ) -> None:
