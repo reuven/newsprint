@@ -156,6 +156,62 @@ def test_an_address_quoted_inside_a_real_sentence_is_not_chrome() -> None:
     assert is_definite_chrome_line(line) is False
 
 
+# Derive-chrome spec (2026-09-07), part D: the self-promotional trailing
+# paragraph reported live in edconway-substack-com.eml. Each phrase was
+# checked against the live archive individually - see PHRASES' own comment
+# for the evidence each one is or is not based on.
+@pytest.mark.parametrize(
+    "line",
+    [
+        (
+            "Material World is a free newsletter, mostly about topics "
+            "relevant to my recent book."
+        ),
+        (
+            "But if you enjoyed this post, you can tell Simon Willison's "
+            "Newsletter that their writing is valuable."
+        ),
+        "If you enjoyed this post, please do share it with friends.",
+        "Please share it with friends and colleagues.",
+    ],
+)
+def test_ed_conway_self_promo_phrases_are_definite_chrome(line: str) -> None:
+    assert is_definite_chrome_line(line) is True
+
+
+def test_order_a_copy_of_pre_order_and_let_me_know_were_checked_and_declined() -> None:
+    """Requested alongside the phrases above, from the same reported
+    block, and checked the same way against the live archive - each
+    found colliding with genuine editorial content, not a hypothetical:
+
+    - "order a copy of" and "pre-order" both appear in real book/cookbook
+      recommendations unrelated to self-promotion.
+    - "let me know what you think" is a common authorial engagement
+      closer used about real article content, not just self-promotion.
+
+    None of the three are in PHRASES; is_definite_chrome_line must still
+    say False for all of them."""
+    assert (
+        is_definite_chrome_line(
+            "Amazon (pre-order of Kindle ebook and print paperback)"
+        )
+        is False
+    )
+    assert (
+        is_definite_chrome_line(
+            "You can order a copy of the book directly from the publisher."
+        )
+        is False
+    )
+    assert (
+        is_definite_chrome_line(
+            "If you take a look, let me know what you think. And enjoy the "
+            "World Cup final!"
+        )
+        is False
+    )
+
+
 def test_need_help_brand_partnerships_and_watch_now_were_tried_and_reverted() -> None:
     """All three were requested (need help?/brand partnerships from the
     spec's own suggestions and a second read of the user's real output;
@@ -189,6 +245,39 @@ def test_need_help_brand_partnerships_and_watch_now_were_tried_and_reverted() ->
         is_definite_chrome_line(
             "AI moved fast while I was away, so this chapter begins with the "
             "trends creators should watch now."
+        )
+        is False
+    )
+
+
+def test_puck_faq_block_as_a_whole_line_was_also_tried_and_reverted() -> None:
+    """Round 4 (derive-chrome spec, 2026-09-07): the Puck FAQ/brand-
+    partnerships paragraph the user reported was tried a second time, as a
+    full, exact is_full_line_chrome literal rather than the two PHRASES
+    substrings round 2 already declined - on the theory that a whole-line
+    match is a different, safer mechanism, since it cannot lower any
+    OTHER block's content_ratio score the way a substring can.
+
+    Measured directly against jon-puck-news.eml, it reproduced the exact
+    same regression round 2 found, by a different route: once
+    _strip_line_chrome deletes this paragraph outright as its own atomic
+    line, it is simply gone from the document before the trailing walk
+    ever runs - so that walk's new last leaf becomes the real sign-off
+    right before it ("Have a great weekend, / Jon"), a genuine short,
+    unpunctuated two-line sign-off with no protection of its own (see
+    clean.py's _is_protected_heading, whose own comment documents this
+    exact gap), and it is destroyed all over again. The mechanism
+    (deleting one atomic line vs. lowering a block's ratio) really is
+    different, as claimed - but "cannot affect another block's SCORE"
+    turned out not to be the same guarantee as "cannot affect what the
+    trailing walk reaches", which is what actually matters here. Declined
+    for the same reason round 2 declined it, confirmed against the same
+    fixture; is_full_line_chrome must say False for the exact paragraph
+    text."""
+    assert (
+        is_full_line_chrome(
+            "Need help? Review our\nFAQ page or contact us for assistance. "
+            "For brand partnerships, email ads@puck.news."
         )
         is False
     )
@@ -442,3 +531,216 @@ def test_a_delimiter_separated_navigation_row_is_chrome(line: str) -> None:
 )
 def test_a_mixed_or_non_chrome_delimited_row_survives(line: str) -> None:
     assert is_full_line_chrome(line) is False
+
+
+# Round 4 (derive-chrome spec, 2026-09-07): literals derived by
+# scripts/derive_chrome.py ranking lines that survive clean_document() by
+# how many distinct publications and messages each appears in, over the
+# full local archive. See the derive-chrome report for the count each one
+# cleared, and PHRASES' and _FULL_LINE_CHROME's own comments for why each
+# is safe as a whole-line match.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Upgrade to paid",
+        "Leave a comment",
+        "Preview",
+        "Subscribed",
+        "Paid",
+        "Invite Friends",
+        "Invite your friends and earn rewards",
+        "Change Your EmailPrivacy PolicyContact UsCalifornia Notices",
+        "Connect with us on:",
+        "If you received this newsletter from someone else, subscribe here.",
+        "Need help? Review our newsletter help page or contact us for assistance.",
+        "The New York Times Company. 620 Eighth Avenue New York, NY 10018",
+        "A subscription gets you:",
+        "Copyright © The Economist Newspaper Limited 2026. All rights reserved.",
+        "Registered in England and Wales. No. 236383.",
+        "Subscribe to The TimesGet The New York Times app",
+        "Follow Axios on social media:",
+        "Download our app for iOS and Android",
+        "For subscribers",
+        "Get it in your inbox.",
+        "Get it in your inbox",
+        "Claim my free post",
+        "Continue reading this post for free in the Substack app",
+        "Or upgrade your subscription. Upgrade to paid",
+        "Update your email preferences or unsubscribe  here",
+        "Pledge your support",
+        "Watch now",
+        "Watch on demand",
+        "Next show",
+        "All upcoming shows",
+        "Add to calendar",
+        "Download from the App Store or Google Play",
+        "View email online     Privacy Policy \n  Terms & Conditions",
+        "Unsubscribe     Contact us \n  Update your details",
+        "PHOTO: GETTY IMAGES",
+        "Read full story",
+        "Read more",
+        "Buy Trade World",
+    ],
+)
+def test_round_4_full_line_chrome_literals(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+# The "watch now" addition's own load-bearing distinction: the real
+# sentence a PHRASES *substring* match would have destroyed
+# (pete-aidailybrief-io.eml, see PHRASES' own comment and
+# test_need_help_brand_partnerships_and_watch_now_were_tried_and_reverted)
+# is never, itself, equal to the bare two-word line "watch now".
+def test_watch_now_as_a_substring_of_a_real_sentence_still_survives() -> None:
+    assert (
+        is_full_line_chrome(
+            "AI moved fast while I was away, so this chapter begins with the "
+            "trends creators should watch now."
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "you’re currently a free subscriber to Prof G Media.",
+        "You’re currently a free subscriber to Behind the Craft.",
+        "this email was sent by: The Economist Newspaper Ltd.",
+        "This email was sent to: reuven@lerner.co.il",
+        (
+            "This email has been sent to   reuven@lerner.co.il    because you "
+            "signed up for this newsletter."
+        ),
+    ],
+)
+def test_round_4_prefix_matches(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "∙",
+        "·",
+    ],
+)
+def test_a_bare_separator_character_is_chrome(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+def test_a_separator_character_beside_real_content_is_not_bare() -> None:
+    """The bare-separator match requires the ENTIRE line to be nothing but
+    the glyph - a real delimited row using the same character (already
+    covered by _is_delimited_chrome_row) is a different code path, and a
+    genuine sentence merely containing one must survive untouched."""
+    assert is_full_line_chrome("38:00 ∙ Preview") is False
+    assert is_full_line_chrome("A · shaped keycap is unusual for a phone.") is False
+
+
+@pytest.mark.parametrize("line", ["1", "2", "3", "17", "99", "042"])
+def test_a_bare_footnote_number_is_chrome(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "2026",  # a bare 4-digit year is deliberately not covered
+        "I have 2 cats and a dog.",
+        "Chapter 12",
+    ],
+)
+def test_a_number_inside_real_content_survives(line: str) -> None:
+    assert is_full_line_chrome(line) is False
+
+
+@pytest.mark.parametrize("line", ["0:00", "38:00", "51:11", "1:05:30"])
+def test_a_bare_duration_is_chrome(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+def test_a_duration_inside_real_content_survives() -> None:
+    assert (
+        is_full_line_chrome("The meeting is scheduled for 3:00 this afternoon.")
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "© 2026 Prof G Media",
+        "© Condé Nast 2026",
+        "© 2026 Test Weekly. All rights reserved.",
+    ],
+)
+def test_a_line_opening_with_the_copyright_glyph_is_chrome(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+def test_a_mid_sentence_copyright_mention_survives() -> None:
+    """The copyright pattern matches only the START of the line - a real
+    sentence that happens to mention a © notice partway through must not
+    be swept up."""
+    assert (
+        is_full_line_chrome("The company (© Acme Corp) makes replacement parts.")
+        is False
+    )
+
+
+def test_powered_by_a_platform_is_chrome() -> None:
+    assert is_full_line_chrome("Powered by beehiiv") is True
+
+
+def test_powered_by_inside_real_content_survives() -> None:
+    assert is_full_line_chrome("The rocket is powered by liquid hydrogen.") is False
+
+
+def test_get_more_publication_in_your_inbox_is_chrome() -> None:
+    assert is_full_line_chrome("Get more New Yorker in your inbox.") is True
+    assert is_full_line_chrome("Get more Bulwark content in your inbox") is True
+
+
+def test_get_more_in_your_inbox_requires_the_whole_line() -> None:
+    assert (
+        is_full_line_chrome(
+            "She promised to get more of the story into her inbox before noon."
+        )
+        is False
+    )
+
+
+# NYT Cooking's photo-credit pattern. The load-bearing negative case is a
+# genuine sentence that happens to end "... for The New York Times." -
+# only a short, Title Case name before it (what every real byline in the
+# archive actually is) qualifies; ordinary prose, full of lowercase
+# function words, does not.
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Christopher Testani for The New York Times. Food Stylist: Simon Andrews.",
+        (
+            "David Malosh for The New York Times. Food Stylist. Simon Andrews. "
+            "Prop Stylist: Paige Hicks."
+        ),
+        (
+            "Kelly Marshall for The New York Times. Food Stylist: Roscoe "
+            "Betsill. Prop Stylist: Paige Hicks."
+        ),
+        "Armando Rafael for The New York Times",
+    ],
+)
+def test_nyt_photo_credit_lines_are_chrome(line: str) -> None:
+    assert is_full_line_chrome(line) is True
+
+
+def test_a_real_sentence_ending_for_the_new_york_times_survives() -> None:
+    assert is_full_line_chrome("She used to write for The New York Times.") is False
+    assert (
+        is_full_line_chrome(
+            "He spent a decade reporting for The New York Times before "
+            "starting this newsletter."
+        )
+        is False
+    )

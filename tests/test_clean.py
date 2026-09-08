@@ -1250,6 +1250,23 @@ def test_cleaning_every_fixture_never_raises() -> None:
         in cleaned_by_name[mandarin].html
     )
 
+    # Round 4 (derive-chrome spec, 2026-09-07): a second, newer regression
+    # guard, the same shape as the one above but found while deriving new
+    # chrome rules rather than while auditing existing ones. Adding the
+    # Puck FAQ/brand-partnerships paragraph to _FULL_LINE_CHROME (see
+    # boilerplate.py's own comment and
+    # test_puck_faq_block_as_a_whole_line_was_also_tried_and_reverted) was
+    # tried, measured against the full fixture corpus, and reverted here
+    # for the same reason: it deletes the paragraph that had been the
+    # trailing walk's stopping point, so the walk continues one leaf
+    # further back and destroys the real sign-off right before it. Pinned
+    # against the live fixture, not just the unit-level check, so a
+    # future change that reintroduces this by some other route is also
+    # caught here.
+    puck = "jon-puck-news.eml"
+    assert puck in cleaned_by_name, "fixture corpus changed: re-pin this test"
+    assert "Have a great weekend" in cleaned_by_name[puck].html
+
 
 # Round 3, section E: elements with no visible text - a spacer/image-
 # placeholder cell left empty once its image is stripped, or a

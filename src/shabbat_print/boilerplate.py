@@ -110,6 +110,45 @@ PHRASES: tuple[str, ...] = (
     "visit our help center",
     "set up your personal rss feed",
     "is exclusively for members of",
+    # Derive-chrome spec (2026-09-07), part D: a trailing self-promotional
+    # paragraph reported live (edconway-substack-com.eml's "Material World
+    # is a free newsletter... If you enjoyed this post, please do share it
+    # with friends... Buy Trade World"). Frequency analysis alone would
+    # never find this - the exact wording appears in only one publication
+    # - but each phrase below is a sign-off convention, not one author's
+    # voice, so it was checked against the corpus the same way any other
+    # phrase here is:
+    #
+    # - "if you enjoyed this post" is Substack's OWN platform-generated
+    #   pledge sentence ("X is free today. But if you enjoyed this post,
+    #   you can tell X that their writing is valuable by pledging a
+    #   future subscription.") - confirmed appearing verbatim across
+    #   several unrelated authors' newsletters (Bite Code!, Simon
+    #   Willison, Data Science Education Program), which is what makes it
+    #   templated chrome rather than personal wording.
+    # - "share it with friends" is the same shape as the already-accepted
+    #   "share this" and "forward to a friend" above.
+    # - "is a free newsletter" is an about-this-newsletter meta-sentence,
+    #   the same shape as the already-accepted "is published by".
+    #
+    # "order a copy of", "pre-order", and "let me know what you think"
+    # were also requested but are deliberately NOT here - each was
+    # checked against the live archive and found colliding with genuine
+    # editorial content: "order a copy of" and "pre-order" both appear in
+    # real book/cookbook recommendations and announcements unrelated to
+    # self-promotion (Sebastian Raschka's own reading list, "five
+    # weeknight dishes"' own cookbook-release announcement - core
+    # editorial content for a cooking newsletter, not incidental chrome);
+    # "let me know what you think" is a common, versatile authorial
+    # engagement closer used constantly about real article content (David
+    # Epstein: "If you take a look, let me know what you think. And enjoy
+    # the World Cup final!"; Peter Yang: "Get my free /no-ai-slop skill on
+    # Github and let me know what you think!"). Adding any of these three
+    # would strike real content exactly the way "watch now" did as a
+    # substring, above.
+    "if you enjoyed this post",
+    "share it with friends",
+    "is a free newsletter",
 )
 
 _URL_ONLY = re.compile(r"^(https?://\S+|www\.\S+)$", re.IGNORECASE)
@@ -221,6 +260,125 @@ _FULL_LINE_CHROME: frozenset[str] = frozenset(
         # frozenset's existing style.
         "read to me",
         "listen now",
+        # Round 4 (derive-chrome spec, 2026-09-07): every literal below
+        # was found by scripts/derive_chrome.py ranking lines that
+        # SURVIVE clean_document() by how many distinct publications and
+        # messages each appears in, over the full local archive (2,159
+        # messages) - chrome repeats across publications that share no
+        # editorial content, article prose does not (see that script's
+        # own docstring and the derive-chrome report for the exact counts
+        # and evidence for each). Several of these already match an
+        # EXISTING PHRASES substring for ratio scoring (e.g. "unsubscribe"
+        # or "privacy policy" appear inside them) but were still
+        # surviving in practice: that is the documented gap in
+        # clean.py's _is_protected_heading (a single rendered line longer
+        # than SHORT_LINE gets no dilution to rely on when its own block
+        # has too little other text) - promoting the exact observed line
+        # to a whole-line match here, deleted by _strip_line_chrome
+        # regardless of position or surrounding ratio, is what actually
+        # reaches it. "Watch now" was requested by the user and
+        # previously declined only as a PHRASES *substring* (it struck a
+        # real sentence ending "...trends, tools, and opportunities
+        # creators should watch now." in pete-aidailybrief-io.eml,
+        # confirmed still true above in
+        # test_need_help_brand_partnerships_and_watch_now_were_tried_and_
+        # reverted) - as a *whole line* it is safe, following the exact
+        # precedent "listen now" already sets: confirmed against 9 live
+        # occurrences, always a bare CTA button immediately after a
+        # "Recorded on ... · NN min" line, zero collisions, and that
+        # 150-character real sentence is never, itself, equal to the two
+        # words "watch now".
+        "upgrade to paid",
+        "leave a comment",
+        "preview",
+        "subscribed",
+        "paid",
+        "invite friends",
+        "invite your friends and earn rewards",
+        "change your emailprivacy policycontact uscalifornia notices",
+        "connect with us on:",
+        "if you received this newsletter from someone else, subscribe here.",
+        "need help? review our newsletter help page or contact us for assistance.",
+        # The Puck FAQ/brand-partnerships block the user reported ("Need
+        # help? Review our FAQ page or contact us for assistance. For
+        # brand partnerships, email ads@puck.news.") is deliberately NOT
+        # here, even as a full, exact whole-line match. Round 2 declined
+        # "need help?" and "brand partnerships" as PHRASES *substrings*
+        # after they made this paragraph newly chrome and let the
+        # trailing walk continue one leaf further into a real sign-off
+        # ("Have a great weekend, / Jon") - see PHRASES' own comment. This
+        # literal was tried anyway, on the theory that a full-line match
+        # is a different, safer mechanism (it cannot lower any OTHER
+        # block's ratio) - and measured directly against
+        # jon-puck-news.eml in the derive-chrome measurement, where it
+        # reproduced the EXACT same regression by a different route: once
+        # _strip_line_chrome deletes this leaf outright, it is simply
+        # gone from the tree before the trailing walk ever runs, so that
+        # walk's new last leaf becomes "Have a great weekend, / Jon"
+        # instead - a genuine short, unpunctuated two-line sign-off with
+        # no protection of its own (see _is_protected_heading's own
+        # comment on this exact gap), destroyed all over again. The
+        # mechanism was different; the outcome was identical. Declined
+        # for the same reason Round 2 declined it, confirmed against the
+        # same fixture.
+        "the new york times company. 620 eighth avenue new york, ny 10018",
+        "a subscription gets you:",
+        "copyright © the economist newspaper limited 2026. all rights reserved.",
+        "registered in england and wales. no. 236383.",
+        "subscribe to the timesget the new york times app",
+        "follow axios on social media:",
+        "download our app for ios and android",
+        # A paywall/section badge ("For subscribers") that sits directly
+        # beside a masthead's own title/subtitle/date lines (The
+        # Economist's "Insider"/"Money Talks"/"Drum Tower" editions) -
+        # never a plausible complete sentence on its own.
+        "for subscribers",
+        "get it in your inbox.",
+        "get it in your inbox",
+        "claim my free post",
+        "continue reading this post for free in the substack app",
+        "or upgrade your subscription. upgrade to paid",
+        "update your email preferences or unsubscribe here",
+        "pledge your support",
+        "watch now",
+        "watch on demand",
+        "next show",
+        "all upcoming shows",
+        "add to calendar",
+        "download from the app store or google play",
+        (
+            "download the app to stream events on the go, watch picture-in-picture, "
+            "and get real-time notifications so you never miss a moment"
+        ),
+        (
+            "visit the hub to see all upcoming events and to submit questions to "
+            "our editors ahead of the discussion."
+        ),
+        "visit insider hub →",
+        "view email online privacy policy terms & conditions",
+        "unsubscribe contact us update your details",
+        "photo: getty images",
+        "read full story",
+        "read more",
+        # Not from the frequency table (a single publication, so
+        # frequency alone could never surface it) - the trailing
+        # self-promotional block reported live in
+        # edconway-substack-com.eml (see PHRASES' own comment for the
+        # rest of that block). "Buy Trade World" is Substack's own
+        # ButtonCreateButton widget text (confirmed in the raw HTML:
+        # `data-component-name="ButtonCreateButton"`), not a sentence -
+        # without this, it is protected as a short, unpunctuated single
+        # line the same way a genuine short subtitle is (clean.py's
+        # _is_protected_heading), which stops the trailing walk right
+        # there and leaves the whole self-promotional paragraph behind it
+        # untouched. A general "Buy <title>" pattern was considered and
+        # declined: "buy" is too common an imperative in ordinary prose
+        # ("Buy the ticket, take the ride") for a shape that short to be
+        # safe: this is a publication-specific literal because no safe
+        # general pattern was found, the same way "Get the Bulwark app"
+        # was declined as a literal in favour of the narrower "... app"
+        # shape - here even that narrower shape is not safe.
+        "buy trade world",
     }
 )
 
@@ -290,7 +448,23 @@ def _is_delimited_chrome_row(text: str) -> bool:
 # is deliberately the longer, more specific opening, since a prefix match
 # is a stronger commitment than a substring match and this is the one
 # used to delete a whole line.)
-_FULL_LINE_CHROME_PREFIXES: tuple[str, ...] = ("you received this email because",)
+_FULL_LINE_CHROME_PREFIXES: tuple[str, ...] = (
+    "you received this email because",
+    # Round 4 (derive-chrome spec, 2026-09-07): each of these always
+    # continues with something newsletter-specific (a publication name, a
+    # recipient's own email address, a sender's own postal address), so
+    # none can be a fixed phrase - but the opening words alone are
+    # distinctive bulk-mail disclosure language no genuine editorial
+    # sentence plausibly starts with, the same reasoning as the original
+    # entry above. "You're currently a free subscriber to" was Part A's
+    # own top-ranked sample hit (18 publications, 83 messages, in the
+    # spec's own worked example) - the publication name that follows it
+    # is exactly why a fixed phrase could not have caught it.
+    "you’re currently a free subscriber to",
+    "this email was sent by:",
+    "this email was sent to:",
+    "this email has been sent to",
+)
 
 # "Get the Bulwark app" - the user's own report names one publication, but
 # the shape "Get the <name> app" is a general CTA-button pattern, not
@@ -301,6 +475,97 @@ _FULL_LINE_CHROME_PREFIXES: tuple[str, ...] = ("you received this email because"
 # ending keeps the generalization past the one named publication without
 # reintroducing that risk.
 _GET_THE_APP_LINE = re.compile(r"^get the [\w' .-]+ app$", re.IGNORECASE)
+
+# Round 4 (derive-chrome spec, 2026-09-07): the remaining frequency-derived
+# rules are shapes, not literals - see scripts/derive_chrome.py's own
+# docstring for the signal and the derive-chrome report for the count each
+# one cleared in the live archive (2,159 messages).
+
+# A single character that is nothing but a bullet/separator glyph, used by
+# a podcast/audio-player widget to divide adjacent metadata ("38:00 ∙
+# Preview", "51:11 ∙ Paid") rather than punctuate a sentence. '∙' (BULLET
+# OPERATOR, U+2219, 16 publications/165 messages) and '·' (MIDDLE DOT,
+# U+00B7, 5/8) are the two the live archive actually contains; only those
+# two are listed - a line cannot be shorter or more information-free than
+# one bare punctuation character, so no realistic sentence collides, but
+# nothing else is guessed at without its own evidence.
+_BARE_SEPARATOR_CHARS: frozenset[str] = frozenset({"∙", "·"})
+
+# A bare footnote-reference number (8 publications/16 messages for "1"
+# alone; "2", "3", and "17" also appear, each individually below the
+# frequency threshold but sharing the same shape). Confirmed against the
+# live archive's own raw HTML, not assumed: Substack's own footnote markup
+# is `<span class="footnote-number">1</span><div class="footnote-content">
+# <p>More on that later – stay tuned!</p></div>` - the numeral is its own
+# rendered line, entirely separate from the footnote's own text (which
+# this pattern can never touch: it only ever matches the bare numeral,
+# never a line with any other character on it). 1-3 digits only, so a
+# 4-digit year ("2026") standing alone is never caught here - if that
+# ever needs its own rule it needs its own evidence.
+_BARE_FOOTNOTE_NUMBER = re.compile(r"\d{1,3}")
+
+# A bare elapsed-time or duration readout from a podcast/video player
+# widget ("0:00", 5 publications/16 messages in the live archive; "38:00",
+# "51:11", "29:09" alongside it in the same messages) - never a real
+# sentence, since it has no words in it at all.
+_BARE_DURATION = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?")
+
+# A copyright line's own opening: "© 2026 Prof G Media" (5 publications/86
+# messages). The company name and year vary by publisher, but no genuine
+# editorial sentence opens with the © glyph. Matches only the START of the
+# line (not fullmatch), so a copyright notice at the head of an otherwise
+# longer line ("© 2026 Prof G Media. All rights reserved.") still
+# qualifies as one whole chrome line once collapsed.
+_COPYRIGHT_LINE_START = re.compile(r"^©")
+
+# "Powered by beehiiv" (5 publications/67 messages). The platform varies,
+# but "Powered by <one platform name>" as a short, complete line is a
+# near-universal newsletter-platform footer credit - the same kind of
+# closed CTA/credit shape _GET_THE_APP_LINE already generalises for an app
+# badge. Only "beehiiv" is in the live archive's own evidence; the pattern
+# generalises past it on the same reasoning _GET_THE_APP_LINE generalised
+# past "Get the Bulwark app".
+_POWERED_BY_LINE = re.compile(r"^powered by [\w.]+$", re.IGNORECASE)
+
+# "Get more New Yorker in your inbox." (4 publications/53 messages, all
+# different New Yorker newsletter editions). The publication name varies;
+# the shape - fixed opening, one name in the middle, fixed close - is the
+# same one _GET_THE_APP_LINE already generalises for "Get the ... app". A
+# trailing period is optional since both forms were observed.
+_GET_MORE_IN_INBOX_LINE = re.compile(
+    r"^get more [\w' .-]+ in your inbox\.?$", re.IGNORECASE
+)
+
+# NYT Cooking's own recipe photo-credit line: "<Photographer> for The New
+# York Times.[ Food Stylist[:.] <Name>.][ Prop Stylist[:.] <Name>.]" - one
+# general pattern rather than the ~20 distinct names the live archive
+# contains (Christopher Testani, David Malosh, Linda Xiao, Julia Gartland,
+# Armando Rafael, ...), each individually too rare on its own to clear the
+# frequency threshold but all sharing this one fixed shape. Every image is
+# already stripped outright by clean.py, Phase 1/7 - no photo is ever
+# rendered - so a credit line for a photo that no longer exists in the
+# printed output is orphaned caption text, not article content; this
+# pattern can only ever match the credit line itself, never a recipe's own
+# text. "Food Stylist"/"Prop Stylist" are each optionally followed by ':'
+# or '.' - the source itself is inconsistent (most read "Food Stylist:
+# Simon Andrews.", at least one has the typo "Food Stylist. Simon
+# Andrews.").
+#
+# Deliberately NOT case-insensitive, unlike every other pattern here: an
+# unconstrained "<any text> for The New York Times." would also match a
+# genuine sentence of real prose ("She used to write for The New York
+# Times."), so each name is instead required to be 1-5 Title Case words -
+# what every observed byline actually is, and what an ordinary sentence
+# (full of lowercase function words like "used", "to", "write") is not.
+# This is matched against the ORIGINAL-case collapsed text (see
+# is_full_line_chrome), not the case-folded one every other check here
+# uses, for exactly this reason.
+_TITLE_CASE_NAME = r"[A-Z][a-zA-Z'-]*(?: [A-Z][a-zA-Z'-]*){0,4}"
+_NYT_PHOTO_CREDIT = re.compile(
+    rf"^{_TITLE_CASE_NAME} for The New York Times\.?"
+    rf"(?: Food Stylist[:.] {_TITLE_CASE_NAME}\.)?"
+    rf"(?: Prop Stylist[:.] {_TITLE_CASE_NAME}\.)?$"
+)
 
 
 def _normalize_full_line(text: str) -> str:
@@ -333,6 +598,13 @@ def is_full_line_chrome(text: str) -> bool:
 
     Also matches a delimiter-separated navigation row (round 3b, item 2) -
     see _is_delimited_chrome_row for the rule and its safety argument.
+
+    Round 4 (derive-chrome spec, 2026-09-07) adds several more shapes,
+    each with its own comment where it is defined: a bare bullet/separator
+    character, a bare footnote number, a bare player duration, a copyright
+    line's own opening, a "Powered by <platform>" credit, a "Get more
+    <publication> in your inbox." CTA, and NYT Cooking's own photo-credit
+    line.
     """
     collapsed = _normalize_full_line(text)
     if not collapsed:
@@ -343,6 +615,20 @@ def is_full_line_chrome(text: str) -> bool:
     if any(normalized.startswith(prefix) for prefix in _FULL_LINE_CHROME_PREFIXES):
         return True
     if _GET_THE_APP_LINE.match(normalized):
+        return True
+    if _GET_MORE_IN_INBOX_LINE.match(normalized):
+        return True
+    if _POWERED_BY_LINE.match(normalized):
+        return True
+    if _NYT_PHOTO_CREDIT.match(collapsed):
+        return True
+    if normalized in _BARE_SEPARATOR_CHARS:
+        return True
+    if _BARE_FOOTNOTE_NUMBER.fullmatch(collapsed):
+        return True
+    if _BARE_DURATION.fullmatch(collapsed):
+        return True
+    if _COPYRIGHT_LINE_START.match(collapsed):
         return True
     if _ADDRESS_LINE.fullmatch(collapsed):
         return True
