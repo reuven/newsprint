@@ -106,6 +106,16 @@ def test_in_newsletter_numbers_restart_per_document(tmp_path: Path) -> None:
         ("Axios Macro", "Axios Macro"),
         ("The Bulwark", "The Bulwark Podcast"),
         ("The Bulwark Podcast", "The Bulwark"),
+        # Neither string contains the other, but they overlap so heavily -
+        # the author repeats the publication's own name verbatim, with one
+        # extra co-author inserted in the middle - that this is still one
+        # person's byline, not two different names that happen to share a
+        # word. Real packet data: contents.py's row for this newsletter
+        # used to wrap onto a second line because of it.
+        (
+            "Ruth Ben-Ghiat from Lucid",
+            "Ruth Ben-Ghiat and Joyce Vance from Lucid",
+        ),
     ],
 )
 def test_author_omitted_when_it_duplicates_the_publication(
@@ -122,6 +132,30 @@ def test_author_omitted_when_it_duplicates_the_publication(
 
 def test_byline_combines_distinct_publication_and_author() -> None:
     assert byline("Money Stuff", "Matt Levine") == "Money Stuff · Matt Levine"
+
+
+def test_byline_does_not_collapse_when_the_publication_has_no_word_characters() -> None:
+    """Guards the word-overlap check's empty-set branch: a publication
+    made entirely of punctuation has no words to compare, so it must
+    neither crash (division by zero) nor be mistaken for a duplicate."""
+    assert byline("!!!", "???") == "!!! · ???"
+
+
+def test_byline_does_not_collapse_when_the_author_has_no_word_characters() -> None:
+    """Same guard, the other argument: an author with no word characters
+    at all must not crash or false-collapse a genuinely distinct
+    publication."""
+    assert byline("Money Stuff", "???") == "Money Stuff · ???"
+
+
+def test_byline_keeps_a_shared_first_name_that_is_only_half_the_words() -> None:
+    """Conservative boundary: exactly half of the shorter name's words
+    overlapping is not "most" of them - a coincidental shared first name
+    must not swallow a genuinely different author."""
+    assert (
+        byline("Weekly Notes by Jane", "Jane Smith")
+        == "Weekly Notes by Jane · Jane Smith"
+    )
 
 
 def test_byline_with_no_author_is_bare_publication() -> None:

@@ -256,6 +256,74 @@ def test_a_long_subject_never_wraps_the_row_in_a_real_render(
     assert len(lines) == 2 + len(built)
 
 
+def test_a_byline_that_is_nearly_a_duplicate_author_never_wraps_the_row(
+    config, tmp_path: Path
+) -> None:
+    """Real packet data: publication and author overlap so heavily -
+    "Ruth Ben-Ghiat from Lucid" byline "Ruth Ben-Ghiat and Joyce Vance
+    from Lucid" - that they used to fail the old contains-check duplicate
+    suppression, produce an un-truncated double-width byline, and wrap
+    onto a second line. Both the widened duplicate suppression and the
+    byline-truncation backstop must prevent that end to end."""
+    from dataclasses import replace
+
+    built = [_built(0, publication="Ruth Ben-Ghiat from Lucid")]
+    built[0] = replace(
+        built[0],
+        document=replace(
+            built[0].document,
+            author="Ruth Ben-Ghiat and Joyce Vance from Lucid",
+        ),
+    )
+    result, converged = build_contents(built, config, PACKET_DATE, tmp_path)
+    assert converged
+    assert result is not None
+    text = page_text(result.pdf, 0)
+    lines = [line for line in text.splitlines() if line.strip()]
+    # Header + summary line + one line for the single newsletter - never
+    # two, which is what a wrapped row would add.
+    assert len(lines) == 2 + len(built)
+
+
+@pytest.mark.parametrize(
+    "publication,author,title",
+    [
+        ("Extraordinarily Long Publication Name " * 4, "Author 0", "Issue 0"),
+        ("Money Stuff", "An Extraordinarily Long Author Name " * 4, "Issue 0"),
+        (
+            "Extraordinarily Long Publication Name " * 4,
+            "An Extraordinarily Long Author Name " * 4,
+            "Issue 0",
+        ),
+        (
+            "Money Stuff",
+            "Author 0",
+            "A Wildly Long Subject Line That Cannot Possibly Fit " * 4,
+        ),
+    ],
+    ids=["long-publication", "long-author", "both-long", "long-subject"],
+)
+def test_no_row_text_ever_exceeds_the_usable_width(
+    publication: str, author: str, title: str
+) -> None:
+    """_row_text is the single choke point every contents row passes
+    through - if its output never exceeds remaining_width_pt, no row can
+    wrap, regardless of how pathological the publication, author, or
+    subject are individually or in combination."""
+    from dataclasses import replace
+
+    from shabbat_print.contents import _row_text, _text_width_pt
+
+    built = _built(0, publication=publication)
+    built = replace(
+        built,
+        document=replace(built.document, author=author, title=title),
+    )
+    remaining_width_pt = 200.0
+    text = _row_text(built, remaining_width_pt=remaining_width_pt, font_size_pt=9.0)
+    assert _text_width_pt(text, font_size_pt=9.0) <= remaining_width_pt
+
+
 def test_the_packet_title_appears_on_the_contents_page(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     path.write_text('[packet]\ntitle = "Family Shabbat Reading"\n')
