@@ -205,6 +205,36 @@ def test_the_packet_title_is_larger_and_bolder_than_the_masthead(config) -> None
     assert "1.4rem" in packet_title_rule
 
 
+def test_figure_placeholder_is_small_and_italic(config) -> None:
+    """clean.py's figure placeholder ("[figure: ...]") is a note about
+    something absent, not content - it must read as visually distinct
+    from body prose: italic, and smaller than the surrounding text."""
+    from shabbat_print.render import _build_html
+
+    html = _build_html(document(PROSE), config, compression=1.0)
+    start = html.index(".figure-placeholder")
+    end = html.index("}", start)
+    rule = html[start : end + 1]
+    assert "italic" in rule
+    assert "em" in rule.split("font-size:")[1].split(";")[0]
+    # Smaller than 1em (the body's own size), not merely re-stated at 1em.
+    size = rule.split("font-size:")[1].split(";")[0].strip()
+    assert size not in ("1em", "1.0em")
+
+
+def test_figure_placeholder_renders_into_the_flow(config, tmp_path: Path) -> None:
+    """No image is ever fetched or rendered - the placeholder is plain
+    text produced by clean.py, and render.py must simply lay it out like
+    any other line, with no image request of any kind."""
+    html = (
+        "<p>The Federal Reserve declined to move rates this month.</p>"
+        '<p class="figure-placeholder">[figure: GDP growth chart]</p>'
+    )
+    pdf = render(document(html), config, out_dir=tmp_path)
+    text = page_text(pdf, 0)
+    assert "figure: gdp growth chart" in text.lower()
+
+
 def test_masthead_appears_only_once_per_newsletter(config, tmp_path: Path) -> None:
     """The masthead is the newsletter's own navigation cue and must appear
     once, on the first cell only - even when the article spans several

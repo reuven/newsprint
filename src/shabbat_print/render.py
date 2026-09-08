@@ -58,6 +58,8 @@ ul, ol { margin: 0 0 5pt; padding-left: 12pt; }
 blockquote { margin: 0 0 5pt 8pt; font-style: italic; }
 a { color: inherit; text-decoration: none; }
 img { max-width: 100%; filter: grayscale(100%); }
+.figure-placeholder { font-style: italic; font-size: 0.85em; color: #444;
+                       margin: 0 0 5pt; }
 </style></head>
 <body>
 $packet_title_html<div class="masthead">$publication &middot; $date</div>

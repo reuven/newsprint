@@ -30,8 +30,18 @@ judged by a score, and a single line cannot contain an article. Any change
 here that starts judging a block or a ratio in the middle of the document
 is that same reverted generalization again.
 
-Phase 1 drops every image. Keeping content figures is spec phase 7 and is
-deliberately not implemented here.
+Phase 1 dropped every image outright. Phase 7 (this revision) still drops
+every image - no image is ever fetched or rendered - but for a small,
+carefully chosen subset it leaves a text placeholder in the flow instead
+of vanishing silently: "[figure: US-China trade balances as a percent of
+GDP, 2010-2026]", built from the image's own `alt` attribute. See
+_figure_placeholder_text for the selection rule and why it is deliberately
+narrow (measured against the fixture corpus: a loose width+alt-length
+rule yields roughly 1.6 placeholders per newsletter, dominated by
+decorative illustrations and machine-generated alt text; restricting to
+alt text that reads as data - a chart, a survey, a GDP figure - cuts that
+to roughly one every five newsletters, which is the version implemented
+here).
 """
 
 import re
@@ -95,6 +105,165 @@ _INLINE_TAGS = frozenset(
 )
 
 _IMAGES_DEFERRED = "images deferred to phase 7"
+_IMAGE_PLACEHOLDER = "kept as a text placeholder (figure)"
+
+# Below this, an image reads as a spacer, an icon, or a tracking pixel,
+# never a chart or figure worth a placeholder. Present on ~96% of images
+# in the fixture corpus, so requiring it costs very little coverage.
+_FIGURE_MIN_WIDTH_PX = 300
+
+# How much of the alt text a placeholder keeps before truncating with an
+# ellipsis - long enough that the user's own worked example ("US-China
+# trade balances as a percent of GDP, 2010-2026", 57 characters) survives
+# untouched, short enough to stay a one-line note rather than a caption.
+_FIGURE_ALT_MAX_CHARS = 70
+
+# Explicit, high-confidence chrome alt text the corpus shows is highly
+# stereotyped - matched by exact (casefolded) equality, not substring, the
+# same discipline is_full_line_chrome uses for a whole-line match rather
+# than PHRASES' substring match: an "Ad" here is a bare CTA label, not a
+# real word appearing inside a longer, legitimate alt text.
+_CHROME_ALT_TEXT: frozenset[str] = frozenset(
+    text.casefold()
+    for text in (
+        "Ad",
+        "Filled Star",
+        "Share on Facebook",
+        "Tweet this Story",
+        "Post to LinkedIn",
+        "Email this Story",
+        "Text this Story",
+        "Start writing",
+        "Article Image",
+    )
+)
+
+# A width attribute's leading digits, tolerating a trailing unit ("600px")
+# or surrounding whitespace. Anything that does not start with a digit
+# (e.g. "auto", "100%") is not a pixel width this rule can judge, and the
+# image is treated the same as one with no width attribute at all.
+_WIDTH_PX = re.compile(r"\s*(\d+)")
+
+# Found scanning the fixture corpus (the "verify" pass, not the design
+# spec): Axios's own section-banner illustrations describe themselves as
+# "Illustration of bar chart columns forming a briefcase" and "Animated
+# illustration of a pair of sparkles moving up a stock chart, leaving
+# trendlines behind them" - decorative motif art that happens to mention a
+# chart, not a real data figure. Self-describing as an "illustration" is a
+# more reliable signal of decorative art than a data word is a signal of
+# real data, so it overrides a _DATA_ALT_PATTERN match rather than
+# competing with it as just another exclusion.
+_ILLUSTRATION_ALT = re.compile(r"\billustrations?\b", re.IGNORECASE)
+
+# Alt text that reads as data - a chart, a survey, a GDP figure - rather
+# than a decorative illustration or a machine-generated caption. This is
+# deliberately the narrow list from the design spec, not a broader family:
+# matched with \b so "graph" cannot match inside "paragraph" or
+# "biography", the same false-positive shape PHRASES' bare substring
+# matching would invite here. A few simple plurals are included
+# (charts, graphs, ...) since substring matching is not doing that work
+# for us anymore; irregular or rarer inflections are deliberately left
+# out rather than guessed at.
+_DATA_ALT_TERMS: tuple[str, ...] = (
+    "chart",
+    "charts",
+    "graph",
+    "graphs",
+    "figure",
+    "figures",
+    "plot",
+    "plots",
+    "index",
+    "indexes",
+    "indices",
+    "yield",
+    "yields",
+    "inflation",
+    "unemployment",
+    "gdp",
+    "percent",
+    "percentage",
+    "percentages",
+    "share of",
+    "trend",
+    "trends",
+    "survey",
+    "surveys",
+)
+_DATA_ALT_PATTERN = re.compile(
+    r"\b(?:" + "|".join(_DATA_ALT_TERMS) + r")\b", re.IGNORECASE
+)
+
+# Also found scanning the corpus: an alt text that is nothing but a bare
+# category word ("Figure") names the *kind* of thing an image is, not
+# what it shows - no more informative than "Article Image", already
+# excluded above on the same grounds. Only the category nouns a real alt
+# text could plausibly be reduced to alone are listed here (not "gdp" or
+# "inflation", which are never themselves a whole alt text in the corpus,
+# only ever part of a real description).
+_BARE_GENERIC_ALT: frozenset[str] = frozenset(
+    {"chart", "charts", "graph", "graphs", "figure", "figures", "plot", "plots"}
+)
+
+
+def _image_width_px(image: Tag) -> int | None:
+    raw = image.get("width")
+    if raw is None:
+        return None
+    match = _WIDTH_PX.match(str(raw))
+    return int(match.group(1)) if match else None
+
+
+def _figure_placeholder_text(image: Tag, publication: str) -> str | None:
+    """The text placeholder for `image`, or None if it does not qualify.
+
+    Three conditions, all required: the image is wide enough to plausibly
+    be a figure rather than a spacer or icon (_FIGURE_MIN_WIDTH_PX), its
+    alt text is present and is not one of the known chrome labels or a
+    bare repeat of the publication's own name, and that alt text reads as
+    data (_DATA_ALT_PATTERN) rather than a decorative or machine-generated
+    caption.
+
+    Deliberately narrow, on the user's own explicit choice: a looser rule
+    (width and alt length alone, no content judgement) was measured
+    against 900 archived messages at 1.61 placeholders per newsletter,
+    dominated by decorative illustration alt text ("Illustration of a
+    burger with star-shaped pickles") and machine-generated captions
+    ("Image may contain: Logo, Symbol, and Electronics") - clutter, not
+    signal. This rule was measured at roughly 0.2 per newsletter instead:
+    rare enough that a placeholder appearing means something.
+
+    Two further exclusions - self-described illustrations
+    (_ILLUSTRATION_ALT) and bare generic labels (_BARE_GENERIC_ALT) - were
+    not in the original design spec; they were added after actually
+    reading every placeholder the rule above produced across the 268-
+    fixture corpus (the "verify" pass) and finding two real false
+    positives: Axios's own decorative section-banner art, which mentions
+    "chart" purely as a motif, and a lone "Figure" alt text with no
+    description at all. See those constants' own comments for the
+    evidence.
+    """
+    width = _image_width_px(image)
+    if width is None or width < _FIGURE_MIN_WIDTH_PX:
+        return None
+    alt = " ".join((image.get("alt") or "").split())
+    if not alt:
+        return None
+    lowered = alt.casefold()
+    if lowered in _CHROME_ALT_TEXT:
+        return None
+    if lowered == publication.strip().casefold():
+        return None
+    if lowered.rstrip(".") in _BARE_GENERIC_ALT:
+        return None
+    if _ILLUSTRATION_ALT.search(alt):
+        return None
+    if not _DATA_ALT_PATTERN.search(alt):
+        return None
+    if len(alt) > _FIGURE_ALT_MAX_CHARS:
+        alt = alt[: _FIGURE_ALT_MAX_CHARS - 1].rstrip() + "…"
+    return f"[figure: {alt}]"
+
 
 # Sender layout attributes stripped from every retained tag. We supply our
 # own typography and page box, so inheriting a sender's fixed widths is
@@ -121,11 +290,31 @@ def _content_root(soup: BeautifulSoup) -> Tag:
         return node
 
 
-def _strip_images(root: Tag) -> tuple[int, tuple[DroppedImage, ...]]:
+def _strip_images(root: Tag, publication: str) -> tuple[int, tuple[DroppedImage, ...]]:
+    """Remove every image. No image is ever kept, fetched, or rendered -
+    only its `src` is recorded, for reporting, never dereferenced.
+
+    Must run before _strip_presentational_attrs: the placeholder judgement
+    in _figure_placeholder_text reads the `width` attribute that pass
+    later strips (see this module's docstring on _PRESENTATIONAL_ATTRS and
+    clean_document's ordering comments). For the small subset that
+    qualifies, the <img> is replaced with a small, textual placeholder
+    element (see _figure_placeholder_text) rather than simply removed, so
+    it keeps its place in the document's flow like any other line; every
+    other image is decomposed exactly as before.
+    """
     dropped = []
     for image in root.find_all("img"):
-        dropped.append(DroppedImage(src=image.get("src", ""), reason=_IMAGES_DEFERRED))
-        image.decompose()
+        src = image.get("src", "")
+        placeholder_text = _figure_placeholder_text(image, publication)
+        if placeholder_text is None:
+            dropped.append(DroppedImage(src=src, reason=_IMAGES_DEFERRED))
+            image.decompose()
+            continue
+        placeholder = image.new_tag("p", attrs={"class": "figure-placeholder"})
+        placeholder.string = placeholder_text
+        image.replace_with(placeholder)
+        dropped.append(DroppedImage(src=src, reason=_IMAGE_PLACEHOLDER))
     return 0, tuple(dropped)
 
 
@@ -699,7 +888,11 @@ def clean_document(document: Document) -> Document:
             tag.decompose()
 
     root = _content_root(soup)
-    kept, dropped_images = _strip_images(root)
+    # Must run before _strip_presentational_attrs, below: the figure-
+    # placeholder judgement inside _strip_images reads the `width`
+    # attribute that pass strips. Confirmed here, not assumed - see
+    # _strip_images's own docstring.
+    kept, dropped_images = _strip_images(root, document.publication)
     # Round 2, F3: the line-level phrase pass runs first, on the untouched
     # tree. It matches explicit text rather than a score, so running it
     # early is always safe (see _strip_line_chrome's docstring) and can

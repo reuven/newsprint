@@ -9,10 +9,15 @@ from shabbat_print.models import Document, Origin
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def document(html: str, title: str = "An Issue", author: str | None = None) -> Document:
+def document(
+    html: str,
+    title: str = "An Issue",
+    author: str | None = None,
+    publication: str = "Test Weekly",
+) -> Document:
     return Document(
         origin=Origin(kind="email", identifier="<x@example.com>"),
-        publication="Test Weekly",
+        publication=publication,
         title=title,
         date=datetime(2026, 9, 5, tzinfo=UTC),
         html=html,
@@ -89,6 +94,236 @@ def test_images_are_dropped_and_recorded() -> None:
         "https://example.com/pixel.gif",
         "https://example.com/chart.png",
     }
+
+
+def test_wide_data_image_gets_a_text_placeholder() -> None:
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here.</p>"
+        '<img src="https://example.com/chart.png" width="600" '
+        'alt="US-China trade balances as a percent of GDP, 2010-2026">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "<img" not in cleaned.html
+    assert (
+        "[figure: US-China trade balances as a percent of GDP, 2010-2026]"
+        in cleaned.html
+    )
+    assert 'class="figure-placeholder"' in cleaned.html
+
+
+def test_narrow_data_image_is_dropped_with_no_placeholder() -> None:
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here.</p>"
+        '<img src="https://example.com/chart.png" width="299" '
+        'alt="US-China trade balances as a percent of GDP">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "<img" not in cleaned.html
+    assert "figure-placeholder" not in cleaned.html
+    assert "[figure:" not in cleaned.html
+
+
+def test_wide_image_at_exactly_the_threshold_gets_a_placeholder() -> None:
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here.</p>"
+        '<img src="https://example.com/chart.png" width="300" '
+        'alt="Unemployment trend by quarter">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "figure-placeholder" in cleaned.html
+
+
+def test_decorative_image_alt_text_is_dropped_with_no_placeholder() -> None:
+    """A wide, alt-bearing image is not enough on its own - the alt text
+    must also read as data. This is the narrow rule the user chose over a
+    looser one (width + alt length alone), which the corpus showed
+    produces mostly decorative and machine-generated clutter."""
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here.</p>"
+        '<img src="https://example.com/burger.png" width="600" '
+        'alt="Illustration of a burger with star-shaped pickles">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "figure-placeholder" not in cleaned.html
+
+
+def test_image_with_no_alt_text_is_dropped_with_no_placeholder() -> None:
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here.</p>"
+        '<img src="https://example.com/chart.png" width="600">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "figure-placeholder" not in cleaned.html
+
+
+def test_image_with_unparseable_width_is_dropped_with_no_placeholder() -> None:
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here.</p>"
+        '<img src="https://example.com/chart.png" width="auto" '
+        'alt="GDP growth chart">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "figure-placeholder" not in cleaned.html
+
+
+@pytest.mark.parametrize(
+    "alt_text",
+    [
+        "Ad",
+        "Filled Star",
+        "Share on Facebook",
+        "Tweet this Story",
+        "Post to LinkedIn",
+        "Email this Story",
+        "Text this Story",
+        "Start writing",
+        "Article Image",
+    ],
+)
+def test_known_chrome_alt_text_is_excluded_even_when_wide(alt_text: str) -> None:
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here.</p>"
+        f'<img src="https://example.com/x.png" width="600" alt="{alt_text}">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "figure-placeholder" not in cleaned.html
+
+
+@pytest.mark.parametrize(
+    "alt_text",
+    [
+        "Illustration of bar chart columns forming a briefcase.",
+        (
+            "Animated illustration of a pair of sparkles moving up a stock "
+            "chart, leaving trendlines behind them."
+        ),
+    ],
+)
+def test_a_decorative_illustration_is_excluded_even_when_it_mentions_a_chart(
+    alt_text: str,
+) -> None:
+    """Found in the fixture corpus (round 1 of the "verify" pass): Axios's
+    own section-banner illustrations describe themselves in words like
+    "bar chart" or "stock chart" purely as decorative motifs, not as a
+    real data figure - self-describing as an "illustration" is a stronger
+    and more reliable signal of decorative art than the presence of a data
+    word is a signal of real data, so it overrides a data-term match."""
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here.</p>"
+        f'<img src="https://example.com/x.png" width="600" alt="{alt_text}">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "figure-placeholder" not in cleaned.html
+
+
+def test_a_bare_generic_alt_label_is_excluded() -> None:
+    """Found in the fixture corpus: an alt text that is nothing but the
+    generic category word itself ("Figure") carries no information beyond
+    what "Article Image" already carries, and is excluded on the same
+    grounds - a name for the *kind* of thing an image is, not a
+    description of what it shows."""
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here.</p>"
+        '<img src="https://example.com/x.png" width="600" alt="Figure">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "figure-placeholder" not in cleaned.html
+
+
+def test_bare_publication_name_alt_text_is_excluded() -> None:
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here.</p>"
+        '<img src="https://example.com/logo.png" width="600" alt="Test Weekly">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html, publication="Test Weekly"))
+    assert "figure-placeholder" not in cleaned.html
+
+
+def test_long_alt_text_is_truncated_with_an_ellipsis() -> None:
+    long_caption = (
+        "A very long chart caption describing quarterly GDP growth trends "
+        "across a dozen different economies over the past two decades in "
+        "exhaustive, unnecessary detail"
+    )
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here.</p>"
+        f'<img src="https://example.com/chart.png" width="600" alt="{long_caption}">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "…" in cleaned.html
+    assert long_caption not in cleaned.html
+
+
+def test_placeholder_still_records_a_dropped_image() -> None:
+    """A placeholder is a presentation choice, not an exemption from the
+    same reporting every other dropped image gets - a wrong call here must
+    stay just as visible as a wrong chrome removal."""
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here.</p>"
+        '<img src="https://example.com/chart.png" width="600" '
+        'alt="Inflation by sector">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 0
+    assert len(cleaned.images_dropped) == 1
+    assert cleaned.images_dropped[0].src == "https://example.com/chart.png"
+
+
+def test_placeholder_survives_the_trailing_chrome_walk() -> None:
+    """The placeholder sits at the very end of the document - the same
+    position a real trailing-chrome run gets removed from - and must
+    survive: it is short, single-line, and not itself a chrome phrase (see
+    clean.py's _is_protected_heading)."""
+    html = (
+        "<html><body><div>"
+        "<p>The Federal Reserve declined to move rates this month, which "
+        "surprised almost nobody who had been paying attention.</p>"
+        '<img src="https://example.com/chart.png" width="600" '
+        'alt="GDP growth chart">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "[figure: GDP growth chart]" in cleaned.html
+
+
+def test_long_placeholder_also_survives_at_the_document_end() -> None:
+    html = (
+        "<html><body><div>"
+        "<p>The Federal Reserve declined to move rates this month, which "
+        "surprised almost nobody who had been paying attention.</p>"
+        '<img src="https://example.com/chart.png" width="600" '
+        'alt="US-China trade balances as a percent of GDP, 2010-2026">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert (
+        "[figure: US-China trade balances as a percent of GDP, 2010-2026]"
+        in cleaned.html
+    )
 
 
 def test_style_attribute_is_stripped() -> None:
