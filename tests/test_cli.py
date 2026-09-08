@@ -1168,7 +1168,9 @@ def test_summary_disabled_by_default_never_touches_build_summary_pages(
     """The tracked default is [summary].enabled = false - main() must not
     even call build_summary_pages, let alone read a key or hit the
     network, so a run with no such config section behaves exactly as it
-    did before this feature existed."""
+    did before this feature existed. But unlike before, the run must now
+    say plainly that the summary pages were skipped - the user's original
+    complaint was silence, not just the missing pages."""
 
     def explode(*args, **kwargs):
         raise AssertionError("build_summary_pages must not be called when disabled")
@@ -1183,7 +1185,121 @@ def test_summary_disabled_by_default_never_touches_build_summary_pages(
         ["--dry-run", "--no-preview", "--config", str(tmp_path / "absent.toml")],
     )
     assert result.exit_code == 0
-    assert "Summary" not in result.output
+    assert "Summary: disabled" in result.output
+
+
+def test_summary_flag_enables_it_even_though_config_says_off(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """--summary must override a config default of false - the flag wins
+    over the config file, matching --no-preview/--no-retire's precedence."""
+    from shabbat_print.summarize import SummaryOutcome
+
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.build_summary_pages",
+        lambda built, config, packet_date, out_dir: (
+            calls.append(True)
+            or SummaryOutcome(
+                pages=(),
+                reason="no API key: stub",
+                elapsed_seconds=0.1,
+                input_tokens=None,
+                output_tokens=None,
+            )
+        ),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--summary",
+            "--dry-run",
+            "--no-preview",
+            "--config",
+            str(tmp_path / "absent.toml"),
+        ],
+    )
+    assert result.exit_code == 0
+    assert calls == [True]
+    assert "Summary skipped: no API key" in result.output
+
+
+def test_no_summary_flag_disables_it_even_though_config_says_on(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """--no-summary must override a config default of true - and the run
+    must still say clearly that summaries were skipped."""
+
+    def explode(*args, **kwargs):
+        raise AssertionError("build_summary_pages must not be called with --no-summary")
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli.build_summary_pages", explode)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--no-summary",
+            "--dry-run",
+            "--no-preview",
+            "--config",
+            str(_summary_config(tmp_path)),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Summary: disabled" in result.output
+
+
+def test_summary_flag_absent_lets_config_decide(monkeypatch, tmp_path: Path) -> None:
+    """With neither --summary nor --no-summary given, the config file's
+    [summary].enabled value must be the one that decides - the same
+    behaviour as before these flags existed."""
+    from shabbat_print.summarize import SummaryOutcome
+
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.build_summary_pages",
+        lambda built, config, packet_date, out_dir: (
+            calls.append(True)
+            or SummaryOutcome(
+                pages=(),
+                reason="no API key: stub",
+                elapsed_seconds=0.1,
+                input_tokens=None,
+                output_tokens=None,
+            )
+        ),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--dry-run",
+            "--no-preview",
+            "--config",
+            str(_summary_config(tmp_path)),
+        ],
+    )
+    assert result.exit_code == 0
+    assert calls == [True]
+
+
+def test_help_explains_summary_needs_a_key_and_adds_time() -> None:
+    result = CliRunner().invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "--summary" in result.output
+    assert "--no-summary" in result.output
+    assert "API key" in result.output
+    assert "time" in result.output
 
 
 def _summary_config(tmp_path: Path) -> Path:

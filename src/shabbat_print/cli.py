@@ -132,12 +132,25 @@ def retire_printed(config: Config, uids: list[int], trash: str) -> RetireResult:
     ),
 )
 @click.option("--no-preview", is_flag=True, help="Skip opening the PDF in Preview.")
+@click.option(
+    "--summary/--no-summary",
+    "summary",
+    default=None,
+    help=(
+        "Generate the two AI summary pages (a topic summary and Bamboo "
+        "Weekly candidates). Needs an Anthropic API key and adds time to "
+        "the run - one Claude API call over the whole packet's text. "
+        "Overrides [summary] enabled in config.toml; with neither flag "
+        "given, the config value decides."
+    ),
+)
 def main(
     paper: str | None,
     config_path: Path,
     dry_run: bool,
     no_retire: bool,
     no_preview: bool,
+    summary: bool | None,
 ) -> None:
     """Print this week's starred newsletters, four to a side, duplex."""
     try:
@@ -213,8 +226,15 @@ def main(
 
     packet_date = datetime.now(UTC).date()
 
+    # The flag overrides the config; with neither --summary nor
+    # --no-summary given, summary is None and the config's [summary]
+    # enabled value decides. This applies identically on a dry run: a dry
+    # run previews what will print, and a preview missing the summary
+    # pages is not a preview of the real packet.
+    summary_enabled = config.summary.enabled if summary is None else summary
+
     summary_pages: list[Built] = []
-    if config.summary.enabled:
+    if summary_enabled:
         outcome = build_summary_pages(built, config, packet_date, work_dir / "summary")
         summary_pages = list(outcome.pages)
         if outcome.reason is not None:
@@ -237,6 +257,14 @@ def main(
                 f"  Summary: {len(summary_pages)} page(s) in "
                 f"{outcome.elapsed_seconds:.1f}s{tokens}"
             )
+    else:
+        # H4: the user's original complaint - no summary pages and no
+        # indication why. Visible on every run where they are off, not
+        # just the ones where they were attempted and degraded.
+        click.echo(
+            "  Summary: disabled (pass --summary to enable; needs an API "
+            "key and adds time to the run)."
+        )
 
     summary_cells = sum(item.cells for item in summary_pages)
     contents_built, contents_converged = build_contents(
