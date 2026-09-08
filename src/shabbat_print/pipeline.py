@@ -84,12 +84,7 @@ def build_one(
                 f"{document.publication}: nothing left after cleaning"
             )
         count = teaser_word_count(cleaned)
-        # force_include: the one case where a document under
-        # packet.min_words must still reach the PDF - a caller that
-        # already confirmed "include it anyway" with the user before
-        # this Document reached the pipeline. Re-skipping it here would
-        # silently undo that choice.
-        if count < config.packet.min_words and not cleaned.force_include:
+        if count < config.packet.min_words:
             raise TeaserSkippedError(count, config.packet.min_words)
         # Threaded into every render_fn call below for this one document -
         # including trim.fit's compression retries, which re-render the

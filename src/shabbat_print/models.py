@@ -66,9 +66,3 @@ class Document:
     images_kept: int = 0
     images_dropped: tuple[DroppedImage, ...] = ()
     blocks_dropped: tuple[DroppedBlock, ...] = ()
-    # Set when a caller has already confirmed a thin document should be
-    # kept despite looking like a teaser. pipeline.build_one() is the
-    # only reader - it lets this one document past the packet.min_words
-    # teaser check (see teaser.py and pipeline.TeaserSkippedError) that
-    # would otherwise skip it. False for every other document, always.
-    force_include: bool = False
