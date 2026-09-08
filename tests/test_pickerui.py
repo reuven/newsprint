@@ -7,8 +7,14 @@ printer.spool's `runner` or mail.Mailbox's `imap_factory`, so the whole
 wrapper (building the right Separator/Choice list, returning what the
 "user" picked, treating a cancelled prompt as nothing selected) is
 covered without prompt_toolkit's own event loop ever running.
+`terminal_size` is injected the same way, for the same reason - a real
+terminal's width is not something a test should depend on (see
+picker.py's own tests for the actual column-width/truncation logic;
+this module has no formatting decisions of its own left to make).
 """
 
+import os
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import questionary
@@ -26,6 +32,13 @@ def _doc(publication: str, title: str, day: str, uid: int = 1) -> Document:
         date=datetime.fromisoformat(day).replace(tzinfo=UTC),
         html="<p>x</p>",
     )
+
+
+def _fixed_width(columns: int) -> Callable[[], os.terminal_size]:
+    def factory() -> os.terminal_size:
+        return os.terminal_size((columns, 24))
+
+    return factory
 
 
 class _FakeQuestion:
@@ -48,7 +61,7 @@ def _fake_checkbox(calls: list[tuple], result: list[Document] | None):
     return factory
 
 
-def test_builds_one_separator_per_group_and_one_choice_per_row() -> None:
+def test_builds_a_blank_and_a_heading_separator_before_each_groups_rows() -> None:
     candidates = [
         _doc("Money Stuff", "Issue A", "2026-09-02", uid=1),
         _doc("The Economist", "Issue B", "2026-09-03", uid=2),
@@ -56,21 +69,53 @@ def test_builds_one_separator_per_group_and_one_choice_per_row() -> None:
     picklist = build_picklist(candidates, sizes={1: 20_000, 2: 200_000})
 
     calls: list[tuple] = []
-    questionary_prompt(picklist, checkbox=_fake_checkbox(calls, result=[]))
+    questionary_prompt(
+        picklist,
+        checkbox=_fake_checkbox(calls, result=[]),
+        terminal_size=_fixed_width(80),
+    )
 
     assert len(calls) == 1
     _message, choices = calls[0]
     kinds = [type(choice).__name__ for choice in choices]
-    assert kinds == ["Separator", "Choice", "Separator", "Choice"]
-    assert choices[0].line == "Money Stuff"
-    assert "Issue A" in choices[1].title
-    assert "short" in choices[1].title
-    assert choices[2].line == "The Economist"
-    assert "Issue B" in choices[3].title
-    assert "long" in choices[3].title
+    # blank, heading, row per group - see picker.py's layout_picklist.
+    assert kinds == [
+        "Separator",
+        "Separator",
+        "Choice",
+        "Separator",
+        "Separator",
+        "Choice",
+    ]
+    assert choices[0].line == " "
+    assert "MONEY STUFF" in choices[1].line
+    assert "Issue A" in choices[2].title
+    assert "short" in choices[2].title
+    assert choices[3].line == " "
+    assert "THE ECONOMIST" in choices[4].line
+    assert "Issue B" in choices[5].title
+    assert "long" in choices[5].title
     # The Choice's value is the real Document - checkbox() itself, not
     # index math, is what tells the caller which documents were picked.
-    assert choices[1].value is picklist.groups[0].rows[0].document
+    assert choices[2].value is picklist.groups[0].rows[0].document
+
+
+def test_a_blank_separator_line_is_a_single_space_not_the_library_default() -> None:
+    """questionary.Separator("") falls back to its own 15-dash default
+    line (a falsy-string check in Separator.__init__ - verified by
+    reading questionary 2.1.1's own source, not assumed) - a real blank
+    line needs a non-empty-but-invisible string instead."""
+    candidates = [_doc("Money Stuff", "Issue A", "2026-09-02", uid=1)]
+    picklist = build_picklist(candidates, sizes={1: 20_000})
+
+    calls: list[tuple] = []
+    questionary_prompt(
+        picklist,
+        checkbox=_fake_checkbox(calls, result=[]),
+        terminal_size=_fixed_width(80),
+    )
+    _message, choices = calls[0]
+    assert choices[0].line != questionary.Separator.default_separator
 
 
 def test_returns_exactly_what_the_checkbox_returned() -> None:
@@ -78,7 +123,11 @@ def test_returns_exactly_what_the_checkbox_returned() -> None:
     picklist = build_picklist(candidates, sizes={1: 20_000})
     picked = [picklist.groups[0].rows[0].document]
 
-    result = questionary_prompt(picklist, checkbox=_fake_checkbox([], result=picked))
+    result = questionary_prompt(
+        picklist,
+        checkbox=_fake_checkbox([], result=picked),
+        terminal_size=_fixed_width(80),
+    )
     assert result == picked
 
 
@@ -91,7 +140,11 @@ def test_cancelling_returns_none() -> None:
     candidates = [_doc("Money Stuff", "Issue A", "2026-09-02", uid=1)]
     picklist = build_picklist(candidates, sizes={1: 20_000})
 
-    result = questionary_prompt(picklist, checkbox=_fake_checkbox([], result=None))
+    result = questionary_prompt(
+        picklist,
+        checkbox=_fake_checkbox([], result=None),
+        terminal_size=_fixed_width(80),
+    )
     assert result is None
 
 
@@ -100,7 +153,10 @@ def test_skips_the_library_entirely_when_there_is_nothing_to_offer() -> None:
         raise AssertionError("checkbox must not be called with nothing to offer")
 
     picklist = build_picklist([], sizes={})
-    assert questionary_prompt(picklist, checkbox=explode) == []
+    assert (
+        questionary_prompt(picklist, checkbox=explode, terminal_size=_fixed_width(80))
+        == []
+    )
 
 
 def test_the_default_checkbox_factory_is_questionarys_own() -> None:
@@ -113,3 +169,34 @@ def test_the_default_checkbox_factory_is_questionarys_own() -> None:
 
     default = inspect.signature(prompt_function).parameters["checkbox"].default
     assert default is questionary.checkbox
+
+
+def test_the_default_terminal_size_factory_is_shutils_own() -> None:
+    """Same proof as the checkbox default, for the other injected
+    side-effecting call: production really reads the real terminal
+    width via shutil.get_terminal_size, not a hardcoded guess."""
+    import inspect
+    import shutil
+
+    from shabbat_print.pickerui import questionary_prompt as prompt_function
+
+    default = inspect.signature(prompt_function).parameters["terminal_size"].default
+    assert default is shutil.get_terminal_size
+
+
+def test_a_narrow_terminal_still_produces_the_same_number_of_choices() -> None:
+    """Just proof the injected width actually reaches the layout - the
+    real column-width degradation logic is picker.py's own layout_
+    picklist, exercised there against many widths without any of this
+    module's machinery."""
+    candidates = [_doc("Money Stuff", "Issue A", "2026-09-02", uid=1)]
+    picklist = build_picklist(candidates, sizes={1: 20_000})
+
+    calls: list[tuple] = []
+    questionary_prompt(
+        picklist,
+        checkbox=_fake_checkbox(calls, result=[]),
+        terminal_size=_fixed_width(20),
+    )
+    _message, choices = calls[0]
+    assert len(choices) == 3

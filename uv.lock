@@ -899,6 +899,7 @@ dependencies = [
     { name = "pymupdf" },
     { name = "pypdf" },
     { name = "questionary" },
+    { name = "wcwidth" },
     { name = "weasyprint" },
 ]
 
@@ -920,6 +921,7 @@ requires-dist = [
     { name = "pymupdf", specifier = ">=1.28.2" },
     { name = "pypdf", specifier = ">=6.17.0" },
     { name = "questionary", specifier = ">=2.1.1" },
+    { name = "wcwidth", specifier = ">=0.8.3" },
     { name = "weasyprint", specifier = ">=69.0" },
 ]
 
