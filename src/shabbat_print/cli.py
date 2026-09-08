@@ -7,9 +7,10 @@ content actually reached it.
 
 import imaplib
 import subprocess
+import sys
 import tempfile
 import textwrap
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import click
@@ -27,9 +28,10 @@ from .extract import extract
 from .impose import impose
 from .mail import Mailbox, MailError, RetireResult, password_for
 from .models import Document, Verdict
+from .picker import SelectionError, build_listing, parse_selection, window_since
 from .pipeline import Built, Failure, TeaserSkippedError, build_one
 from .printer import PrintError, spool
-from .stamp import stamp_packet
+from .stamp import format_packet_date, stamp_packet
 from .summarize import build_summary_pages
 
 
@@ -58,6 +60,96 @@ def fetch_queue(config: Config) -> tuple[list[Document], str | None]:
                 box.trash_folder() if config.mail.trash == "auto" else config.mail.trash
             )
     return documents, trash
+
+
+def fetch_unstarred(config: Config, since: date) -> tuple[list[Document], str | None]:
+    """The unstarred review window, read-only: everything unflagged since
+    `since`.
+
+    Extracted with the same extract() the starred queue uses - it parses
+    headers and picks the message body apart, but never cleans or renders
+    it - never pipeline.build_one(), which is reserved for whatever the
+    user actually picks. Most of what this returns will never be picked,
+    so doing that heavier work for all of it here would make a large
+    window slow for no reason.
+    """
+    config.require_mail()
+    password = password_for(config.mail.host, config.mail.user)
+    names = load_publication_names()
+    with Mailbox(
+        host=config.mail.host,
+        user=config.mail.user,
+        password=password,
+        folder=config.mail.folder,
+    ) as box:
+        uids = box.search_unflagged_since(since)
+        documents = [extract(box.fetch(uid), uid=uid, names=names) for uid in uids]
+        trash = None
+        if uids:
+            trash = (
+                box.trash_folder() if config.mail.trash == "auto" else config.mail.trash
+            )
+    return documents, trash
+
+
+def _stdin_is_tty() -> bool:
+    return sys.stdin.isatty()
+
+
+def _offer_picks(config: Config, dry_run: bool) -> tuple[list[Document], str | None]:
+    """Show what else arrived since the last successful run and let the
+    user add some to the packet.
+
+    Item 5 of the original request - "I sometimes want to print some of
+    the week's non-starred newsletters, too." Runs before anything is
+    built or rendered, so a pick joins the pipeline exactly like a
+    starred document: same cleaning, rendering, trimming, contents entry,
+    footer, and retirement, with no special case needed anywhere for it.
+
+    Any problem reaching mail here (no account configured, a network
+    blip) is reported and swallowed rather than aborting the run - the
+    starred queue this run was already going to build must still print.
+    """
+    try:
+        config.require_mail()
+        since = window_since(config.fallback_days, datetime.now(UTC).date())
+        candidates, trash = fetch_unstarred(config, since)
+    except (MailError, ConfigError) as error:
+        click.echo(f"  Could not check for unstarred newsletters: {error}", err=True)
+        return [], None
+
+    when = format_packet_date(since)
+    if not candidates:
+        click.echo(f"  No unstarred newsletters since {when}.")
+        return [], trash
+
+    listing = build_listing(candidates)
+    click.echo(f"\n  Newsletters since {when} you haven't starred:")
+    click.echo(listing.text)
+
+    interactive = not dry_run and _stdin_is_tty()
+    if not interactive:
+        reason = "dry run" if dry_run else "stdin is not a terminal"
+        click.echo(f"  Skipping the selection prompt ({reason}).")
+        return [], trash
+
+    while True:
+        response = click.prompt(
+            "  Add any to the packet? (e.g. 3 7-9; Enter to skip)",
+            default="",
+            show_default=False,
+        )
+        try:
+            indices = parse_selection(response, len(listing.documents))
+        except SelectionError as error:
+            click.echo(f"  {error}", err=True)
+            continue
+        break
+
+    picked = [listing.documents[index - 1] for index in indices]
+    if picked:
+        click.echo(f"  Added {len(picked)} newsletter(s) from the unstarred list.")
+    return picked, trash
 
 
 def _open_preview(pdf: Path) -> None:
@@ -133,6 +225,11 @@ def retire_printed(config: Config, uids: list[int], trash: str) -> RetireResult:
 )
 @click.option("--no-preview", is_flag=True, help="Skip opening the PDF in Preview.")
 @click.option(
+    "--no-pick",
+    is_flag=True,
+    help=("Skip the prompt to add this week's unstarred newsletters, for a fast run."),
+)
+@click.option(
     "--summary/--no-summary",
     "summary",
     default=None,
@@ -150,6 +247,7 @@ def main(
     dry_run: bool,
     no_retire: bool,
     no_preview: bool,
+    no_pick: bool,
     summary: bool | None,
 ) -> None:
     """Print this week's starred newsletters, four to a side, duplex."""
@@ -158,6 +256,13 @@ def main(
         documents, trash = fetch_queue(config)
     except (MailError, ConfigError) as error:
         raise click.ClickException(str(error)) from error
+
+    if not no_pick:
+        picked, picked_trash = _offer_picks(config, dry_run)
+        if picked:
+            documents = [*documents, *picked]
+        if trash is None:
+            trash = picked_trash
 
     if not documents:
         click.echo("Nothing starred in the queue.")

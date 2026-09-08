@@ -1,5 +1,5 @@
 import re
-from datetime import UTC
+from datetime import UTC, date
 from pathlib import Path
 from typing import ClassVar, Self
 
@@ -64,6 +64,10 @@ class _FakeBox:
 
     def search_flagged(self) -> list[int]:
         return [1, 2]
+
+    def search_unflagged_since(self, since) -> list[int]:
+        self.since_arg = since
+        return []
 
     def fetch(self, uid: int) -> bytes:
         return RAW_MESSAGE
@@ -183,6 +187,32 @@ def _queued(identifier: str = "<d@example.com>", uid: int = 4):
         title="An Issue",
         date=datetime(2026, 9, 5, tzinfo=UTC),
         html=f"<div><p>{LONG_PROSE}</p></div>",
+    )
+
+
+def _candidate(
+    uid: int,
+    publication: str,
+    title: str = "Extra Issue",
+    buildable: bool = False,
+):
+    """A message the picker might offer from the unstarred review window.
+
+    buildable=False (the default) is enough for tests that only check the
+    listing/prompt itself; buildable=True gives it LONG_PROSE body text so
+    that, if picked, it clears packet.min_words and actually builds into a
+    real cell rather than being skipped as a teaser (H2)."""
+    from datetime import datetime
+
+    from shabbat_print.models import Document, Origin
+
+    html = f"<div><p>{LONG_PROSE}</p></div>" if buildable else "<p>short</p>"
+    return Document(
+        origin=Origin(kind="email", identifier=f"<{uid}@example.com>", uid=uid),
+        publication=publication,
+        title=title,
+        date=datetime(2026, 9, 4, tzinfo=UTC),
+        html=html,
     )
 
 
@@ -969,6 +999,70 @@ def test_fetch_queue_still_discovers_trash_when_configured_as_auto(
     assert trash == "INBOX/Trash"
 
 
+def test_fetch_unstarred_extracts_the_review_window(monkeypatch, mail_config) -> None:
+    """Mirrors test_fetch_queue_extracts_the_flagged_messages: fetch_unstarred
+    must open the mailbox read-only, search UNFLAGGED SINCE the given date,
+    extract a Document per uid, and discover Trash - exactly like the
+    starred fetch, just against the other search."""
+    from datetime import date
+
+    from shabbat_print.cli import fetch_unstarred
+
+    class _UnstarredBox(_FakeBox):
+        def search_unflagged_since(self, since) -> list[int]:
+            self.since_arg = since
+            return [5, 6]
+
+    _FakeBox.instances.clear()
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _UnstarredBox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+
+    documents, trash = fetch_unstarred(mail_config, date(2026, 9, 1))
+
+    assert len(documents) == 2
+    assert all(document.title == "This Week" for document in documents)
+    assert trash == "INBOX/Trash"
+    assert _FakeBox.instances[0].since_arg == date(2026, 9, 1)
+
+
+def test_fetch_unstarred_skips_trash_lookup_when_the_window_is_empty(
+    monkeypatch, mail_config
+) -> None:
+    """No point discovering Trash for a window with nothing unflagged in
+    it - mirrors fetch_queue's same optimisation for an empty starred
+    search."""
+    from datetime import date
+
+    from shabbat_print.cli import fetch_unstarred
+
+    class _EmptyUnstarredBox(_FakeBox):
+        def search_unflagged_since(self, since) -> list[int]:
+            return []
+
+        def trash_folder(self) -> str:
+            raise AssertionError("trash_folder must not be called for an empty window")
+
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _EmptyUnstarredBox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+
+    documents, trash = fetch_unstarred(mail_config, date(2026, 9, 1))
+    assert documents == []
+    assert trash is None
+
+
+def test_fetch_unstarred_requires_mail_configuration(tmp_path: Path) -> None:
+    """Like fetch_queue, fetch_unstarred must fail fast and clearly rather
+    than trying to open a mailbox with nothing configured."""
+    from datetime import date
+
+    from shabbat_print.cli import fetch_unstarred
+    from shabbat_print.config import ConfigError, load_config
+
+    config = load_config(tmp_path / "absent.toml")
+    with pytest.raises(ConfigError, match="mail.host and mail.user"):
+        fetch_unstarred(config, date(2026, 9, 1))
+
+
 def test_retire_printed_moves_messages_with_no_failures(
     monkeypatch, mail_config
 ) -> None:
@@ -1619,3 +1713,408 @@ def test_summary_pages_shift_the_contents_starting_numbers(
     assert result.exit_code == 0
     summary_cells = int(_TOTAL_CELLS_RE.search(result.output).group(1))
     assert summary_cells == baseline_cells + 2
+
+
+# ---------------------------------------------------------------------------
+# The unstarred-newsletter picker (phase6-picker.md)
+# ---------------------------------------------------------------------------
+
+
+def test_no_pick_flag_never_calls_fetch_unstarred(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+
+    def explode(config, since):
+        raise AssertionError("fetch_unstarred must not be called with --no-pick")
+
+    monkeypatch.setattr("shabbat_print.cli.fetch_unstarred", explode)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--no-pick",
+            "--dry-run",
+            "--no-preview",
+            "--config",
+            str(tmp_path / "absent.toml"),
+        ],
+    )
+    assert result.exit_code == 0
+
+
+def test_an_unconfigured_picker_is_skipped_with_a_message_not_a_crash(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """No mail account configured for the picker's own lookup must not
+    abort a run that would otherwise succeed - the starred queue this run
+    was already going to build must still print, exactly like a summary
+    failure degrades (H3) rather than aborting."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--dry-run", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+    )
+    assert result.exit_code == 0
+    assert "Could not check for unstarred newsletters" in result.output
+    assert "Dry run" in result.output
+
+
+def test_dry_run_shows_the_unstarred_window_and_skips_the_prompt(
+    monkeypatch, mail_config
+) -> None:
+    """Verify bullet: 'The live queue in dry-run: how many unstarred
+    messages the window finds, and that the list renders sensibly
+    grouped.' Nothing shown here may be built - dry-run always skips the
+    selection prompt."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.window_since",
+        lambda fallback_days, today: date(2026, 9, 1),
+    )
+    picks = [_candidate(uid=20, publication="Money Stuff", title="Extra Issue")]
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_unstarred",
+        lambda config, since: (picks, "INBOX/Trash"),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--dry-run", "--no-preview", "--config", str(mail_config.path)],
+    )
+    assert result.exit_code == 0
+    assert "Money Stuff" in result.output
+    assert "Extra Issue" in result.output
+    assert "dry run" in result.output.lower()
+    # Shown, but never built: the build report line has a colon after the
+    # publication name ("Test Weekly: N cells"); the listing's group
+    # heading never does.
+    assert "Money Stuff: " not in result.output
+
+
+def test_a_non_interactive_run_skips_the_prompt_and_does_not_hang(
+    monkeypatch, mail_config
+) -> None:
+    """No --dry-run here, and no `input=` is given at all - if the prompt
+    were reached despite stdin not being a terminal, CliRunner's stdin
+    would be exhausted and the run would abort or hang rather than finish
+    cleanly with exit_code 0."""
+    monkeypatch.setattr("shabbat_print.cli.fetch_queue", lambda config: ([], None))
+    monkeypatch.setattr(
+        "shabbat_print.cli.window_since",
+        lambda fallback_days, today: date(2026, 9, 1),
+    )
+    picks = [_candidate(uid=20, publication="Money Stuff")]
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_unstarred", lambda config, since: (picks, None)
+    )
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(mail_config.path)]
+    )
+    assert result.exit_code == 0
+    assert "not a terminal" in result.output.lower()
+    assert "Nothing starred" in result.output
+
+
+def test_no_candidates_in_the_window_says_so_and_skips_the_prompt(
+    monkeypatch, mail_config
+) -> None:
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.window_since",
+        lambda fallback_days, today: date(2026, 9, 1),
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_unstarred", lambda config, since: ([], "INBOX/Trash")
+    )
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(mail_config.path)]
+    )
+    assert result.exit_code == 0
+    assert "No unstarred newsletters since" in result.output
+
+
+def test_selecting_a_range_adds_exactly_those_newsletters(
+    monkeypatch, mail_config, tmp_path: Path
+) -> None:
+    """Verify bullet: 'Selecting a range adds exactly those newsletters
+    to the packet.' Row 3 ('Charlie Weekly') is deliberately left out of
+    the '1-2' selection and must not be built."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.window_since",
+        lambda fallback_days, today: date(2026, 9, 1),
+    )
+    picks = [
+        _candidate(
+            uid=21, publication="Alpha Weekly", title="Pick One", buildable=True
+        ),
+        _candidate(
+            uid=22, publication="Bravo Weekly", title="Pick Two", buildable=True
+        ),
+        _candidate(
+            uid=23, publication="Charlie Weekly", title="Not Picked", buildable=True
+        ),
+    ]
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_unstarred",
+        lambda config, since: (picks, "INBOX/Trash"),
+    )
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    # Declining the print confirm below still calls runlog.record("cancelled")
+    # for real - route it to tmp_path, not the user's actual state directory.
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(mail_config.path)],
+        input="1-2\nn\n",
+    )
+    assert result.exit_code == 0
+    assert "Alpha Weekly: " in result.output
+    assert "Bravo Weekly: " in result.output
+    assert "Charlie Weekly: " not in result.output
+    assert "Added 2 newsletter(s)" in result.output
+
+
+def test_selected_picks_shift_the_contents_starting_numbers(
+    monkeypatch, mail_config, tmp_path: Path
+) -> None:
+    """End to end: a pick must join the exact same contents-numbering
+    pipeline a starred document does, with no special case. Both picks
+    below render identical bodies, so each contributes the same number of
+    cells; picking both must add exactly twice what picking just the
+    first one adds - proof the second pick's presence shifts the
+    contents' starting cell numbers by its own real size, not some fixed
+    or wrong amount.
+    """
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.window_since",
+        lambda fallback_days, today: date(2026, 9, 1),
+    )
+    picks = [
+        _candidate(
+            uid=21, publication="Alpha Weekly", title="Pick One", buildable=True
+        ),
+        _candidate(
+            uid=22, publication="Bravo Weekly", title="Pick Two", buildable=True
+        ),
+    ]
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_unstarred",
+        lambda config, since: (picks, "INBOX/Trash"),
+    )
+    # Both non-dry-run invocations below decline the print confirm, which
+    # calls runlog.record("cancelled") for real - route it to tmp_path, not
+    # the user's actual state directory.
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    baseline = CliRunner().invoke(
+        main,
+        [
+            "--no-pick",
+            "--dry-run",
+            "--no-preview",
+            "--config",
+            str(mail_config.path),
+        ],
+    )
+    assert baseline.exit_code == 0
+    baseline_cells = int(_TOTAL_CELLS_RE.search(baseline.output).group(1))
+
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+
+    one_pick = CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(mail_config.path)],
+        input="1\nn\n",
+    )
+    assert one_pick.exit_code == 0
+    one_pick_cells = int(_TOTAL_CELLS_RE.search(one_pick.output).group(1))
+    per_pick = one_pick_cells - baseline_cells
+    assert per_pick > 0  # the pick must actually have been built, not skipped
+
+    two_picks = CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(mail_config.path)],
+        input="1-2\nn\n",
+    )
+    assert two_picks.exit_code == 0
+    two_pick_cells = int(_TOTAL_CELLS_RE.search(two_picks.output).group(1))
+    assert two_pick_cells == baseline_cells + 2 * per_pick
+
+
+def test_pressing_enter_at_the_prompt_skips_selection(
+    monkeypatch, mail_config, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.window_since",
+        lambda fallback_days, today: date(2026, 9, 1),
+    )
+    picks = [
+        _candidate(uid=21, publication="Alpha Weekly", title="Pick", buildable=True)
+    ]
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_unstarred",
+        lambda config, since: (picks, "INBOX/Trash"),
+    )
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(mail_config.path)],
+        input="\nn\n",
+    )
+    assert result.exit_code == 0
+    assert "Alpha Weekly: " not in result.output
+
+
+def test_an_out_of_range_selection_is_named_and_reprompted(
+    monkeypatch, mail_config, tmp_path: Path
+) -> None:
+    """'Reject out-of-range numbers with a message naming the bad one
+    rather than silently ignoring it' - and the user gets another chance
+    rather than losing the whole run over a typo."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.window_since",
+        lambda fallback_days, today: date(2026, 9, 1),
+    )
+    picks = [
+        _candidate(uid=21, publication="Alpha Weekly", title="Pick", buildable=True)
+    ]
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_unstarred",
+        lambda config, since: (picks, "INBOX/Trash"),
+    )
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(mail_config.path)],
+        input="99\n1\nn\n",
+    )
+    assert result.exit_code == 0
+    assert "no newsletter numbered 99" in result.output
+    assert "Alpha Weekly: " in result.output  # the retry's valid pick still landed
+
+
+def test_a_picked_newsletter_is_retired_like_any_other(
+    monkeypatch, mail_config, tmp_path: Path
+) -> None:
+    """The retirement invariant: a newsletter picked from the unstarred
+    list and printed is retired exactly like a starred one - no special
+    case, because `uids` is derived only from `built`, which the pick now
+    belongs to just like every other document."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.window_since",
+        lambda fallback_days, today: date(2026, 9, 1),
+    )
+    picks = [
+        _candidate(uid=99, publication="Alpha Weekly", title="Pick", buildable=True)
+    ]
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_unstarred",
+        lambda config, since: (picks, "INBOX/Trash"),
+    )
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
+
+    retired_uids: list[list[int]] = []
+
+    def fake_retire_printed(config, uids, trash):
+        retired_uids.append(uids)
+        return RetireResult(retired=tuple(uids), failed=())
+
+    monkeypatch.setattr("shabbat_print.cli.retire_printed", fake_retire_printed)
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(mail_config.path)],
+        input="1\ny\n",
+    )
+    assert result.exit_code == 0
+    assert retired_uids == [[4, 99]]  # the starred uid, then the picked one
+
+
+def test_picker_trash_is_used_when_the_starred_queue_was_empty(
+    monkeypatch, mail_config, tmp_path: Path
+) -> None:
+    """fetch_queue skips discovering Trash when nothing is starred (trash
+    is None) - but a pick can still introduce a uid that needs retiring.
+    The Trash folder the picker itself discovered must be used, or a
+    printed pick would never be retired."""
+    monkeypatch.setattr("shabbat_print.cli.fetch_queue", lambda config: ([], None))
+    monkeypatch.setattr(
+        "shabbat_print.cli.window_since",
+        lambda fallback_days, today: date(2026, 9, 1),
+    )
+    picks = [
+        _candidate(uid=99, publication="Alpha Weekly", title="Pick", buildable=True)
+    ]
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_unstarred",
+        lambda config, since: (picks, "INBOX/Trash"),
+    )
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
+
+    retire_calls: list[tuple] = []
+
+    def fake_retire_printed(config, uids, trash):
+        retire_calls.append((uids, trash))
+        return RetireResult(retired=tuple(uids), failed=())
+
+    monkeypatch.setattr("shabbat_print.cli.retire_printed", fake_retire_printed)
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(mail_config.path)],
+        input="1\ny\n",
+    )
+    assert result.exit_code == 0
+    assert retire_calls == [([99], "INBOX/Trash")]
+
+
+def test_help_mentions_no_pick() -> None:
+    result = CliRunner().invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "--no-pick" in result.output
