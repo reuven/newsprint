@@ -118,6 +118,20 @@ def _row_text(item: Built, remaining_width_pt: float, font_size_pt: float) -> st
     still recognise a truncated headline but gets nothing at all from a
     bare byline; it is dropped only in the extreme case where not even
     one truncated character of it would fit next to the name.
+
+    Whenever there is no room for any subject at all - because the
+    budget for it is non-positive, or because not even one truncated
+    character of it fits - the byline itself is truncated to
+    remaining_width_pt rather than returned as-is. An unusually long
+    publication or author (or one that duplicate suppression failed to
+    collapse) is exactly what would otherwise wrap the row onto a second
+    line; _truncate_to_width already returns text unchanged when it
+    already fits, so the common case is untouched. Only when
+    remaining_width_pt is so small that not even one truncated character
+    of the byline fits either (_truncate_to_width returns "") does the
+    untruncated byline come back regardless - there is nothing narrower
+    to offer instead, and an unreadable sliver is worse than one slightly
+    too wide.
     """
     name = byline(item.document.publication, item.document.author)
     full = f"{name}{_SUBJECT_SEPARATOR}{item.document.title}"
@@ -126,14 +140,13 @@ def _row_text(item: Built, remaining_width_pt: float, font_size_pt: float) -> st
     subject_budget_pt = remaining_width_pt - _text_width_pt(
         f"{name}{_SUBJECT_SEPARATOR}", font_size_pt
     )
-    if subject_budget_pt <= 0:
-        return name
-    fitted_subject = _truncate_to_width(
-        item.document.title, subject_budget_pt, font_size_pt
-    )
-    if not fitted_subject:
-        return name
-    return f"{name}{_SUBJECT_SEPARATOR}{fitted_subject}"
+    if subject_budget_pt > 0:
+        fitted_subject = _truncate_to_width(
+            item.document.title, subject_budget_pt, font_size_pt
+        )
+        if fitted_subject:
+            return f"{name}{_SUBJECT_SEPARATOR}{fitted_subject}"
+    return _truncate_to_width(name, remaining_width_pt, font_size_pt) or name
 
 
 def _contents_document(

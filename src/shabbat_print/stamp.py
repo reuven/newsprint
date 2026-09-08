@@ -11,6 +11,7 @@ before impose - walking the built documents in packet order and stamping
 each page with the running totals as it goes.
 """
 
+import re
 from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
@@ -50,15 +51,48 @@ def byline(publication: str, author: str | None) -> str:
     Compared case-insensitively, and either name containing the other
     counts as a duplicate - "Axios Macro" byline "Axios Macro" and "The
     Bulwark" byline "The Bulwark Podcast" must both collapse to a single
-    name rather than repeating it.
+    name rather than repeating it. Substring containment alone misses a
+    duplicate where the author is the publication's name with something
+    inserted in the middle rather than appended at an end - e.g. "Ruth
+    Ben-Ghiat from Lucid" byline "Ruth Ben-Ghiat and Joyce Vance from
+    Lucid" (a co-author spliced into the middle) - so _shares_most_words
+    also catches substantial word-for-word overlap.
     """
     if not author:
         return publication
     pub = publication.casefold()
     who = author.casefold()
-    if pub in who or who in pub:
+    if pub in who or who in pub or _shares_most_words(pub, who):
         return publication
     return f"{publication} · {author}"
+
+
+def _shares_most_words(a: str, b: str) -> bool:
+    """True when the shorter of two (already casefolded) names has most
+    of its words - strictly more than half - also present in the longer
+    one, order and position ignored.
+
+    Deliberately conservative: a bare majority is required, not "any
+    shared word", so two names that merely share one common word out of
+    two (e.g. two different people who both go by "Jane") stay distinct.
+    Word overlap is order-independent because the extra content in the
+    longer name (an inserted co-author, a trailing affiliation) need not
+    land at either end - a purely prefix/suffix check would miss exactly
+    the "inserted in the middle" case this exists to catch.
+    """
+    words_a = set(re.findall(r"[\w'-]+", a))
+    words_b = set(re.findall(r"[\w'-]+", b))
+    if not words_a or not words_b:
+        return False
+    shorter, longer = (
+        (words_a, words_b)
+        if len(words_a) <= len(words_b)
+        else (
+            words_b,
+            words_a,
+        )
+    )
+    return len(shorter & longer) / len(shorter) > 0.5
 
 
 def _truncate(text: str, max_width_pt: float) -> str:
