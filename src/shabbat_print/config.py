@@ -218,15 +218,40 @@ DEFAULT_PUBLICATIONS_PATH = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class PublicationNames:
+    """The two ways publications.toml can rename a publication.
+
+    List-Id identifies the newsletter; the address only identifies the
+    sending system - one address can send many distinct newsletters (the
+    New York Times sends The Morning, Cooking, DealBook, and its named
+    columnists all from nytdirect@nytimes.com). extract._publication()
+    resolves a List-Id-keyed override before List-Id itself, and only
+    falls back to an address-keyed override when a message carries no
+    List-Id at all - so an address override can no longer blur every
+    newsletter from a shared address into one name.
+    """
+
+    by_address: dict[str, str]
+    by_list_id: dict[str, str]
+
+
 def load_publication_names(
     path: Path = DEFAULT_PUBLICATIONS_PATH,
-) -> dict[str, str]:
-    """Map a sender address to the name that should appear on the cell.
+) -> PublicationNames:
+    """Load both override tables from publications.toml.
 
-    Addresses are compared in lower case, because senders are inconsistent
-    about capitalisation and the mapping should not be.
+    Both keys are compared in lower case, because senders (and users
+    copying a List-Id by hand) are inconsistent about capitalisation and
+    the mapping should not be.
     """
     if not path.exists():
-        return {}
+        return PublicationNames(by_address={}, by_list_id={})
     data = tomllib.loads(path.read_text())
-    return {address.lower(): name for address, name in data.get("names", {}).items()}
+    by_address = {
+        address.lower(): name for address, name in data.get("names", {}).items()
+    }
+    by_list_id = {
+        list_id.lower(): name for list_id, name in data.get("list_id_names", {}).items()
+    }
+    return PublicationNames(by_address=by_address, by_list_id=by_list_id)

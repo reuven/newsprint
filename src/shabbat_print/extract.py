@@ -6,20 +6,34 @@ separate concern and lives in clean.py.
 
 import email
 import email.utils
-from collections.abc import Mapping
 from datetime import UTC, datetime
 from email.header import decode_header, make_header
 from email.message import Message
 from html import escape
 
+from .config import PublicationNames
 from .models import Document, Origin
+
+_EMPTY_NAMES = PublicationNames(by_address={}, by_list_id={})
+
+
+def _decode_words(text: str) -> str:
+    """Decode any RFC 2047 encoded words in `text`.
+
+    Used both for header values straight off the message (via _header
+    below) and for publication names pulled from publications.toml: a
+    hand-edited or seeded override can itself still be a raw encoded word
+    (e.g. copied verbatim from a From header), and it should print as
+    text either way.
+    """
+    return str(make_header(decode_header(text)))
 
 
 def _header(message: Message, name: str, default: str = "") -> str:
     raw = message.get(name)
     if raw is None:
         return default
-    return str(make_header(decode_header(raw)))
+    return _decode_words(raw)
 
 
 def _decode(part: Message) -> str:
@@ -58,16 +72,32 @@ def _body_html(message: Message) -> str:
 
 
 def _publication(
-    message: Message, address: str, display: str, names: Mapping[str, str]
+    message: Message, address: str, display: str, names: PublicationNames
 ) -> str:
-    if address in names:
-        return names[address]
+    """Resolution order: List-Id override -> List-Id -> address override
+    -> From display name -> domain.
 
+    List-Id identifies the newsletter; the address only identifies the
+    sending system. One address can send many distinct newsletters - the
+    New York Times sends The Morning, Cooking, DealBook, Five Weeknight
+    Dishes, The Veggie, and named columnists like David French and
+    Jamelle Bouie all from nytdirect@nytimes.com - so an address-keyed
+    override is only consulted once a message has no List-Id at all to
+    identify a specific newsletter with. A List-Id-keyed override still
+    lets a user rename one specific newsletter.
+    """
     list_id = _header(message, "List-Id")
     if list_id:
         label = list_id.split("<")[0].strip().strip('"').strip()
         if label:
+            override = names.by_list_id.get(label.lower())
+            if override:
+                return _decode_words(override)
             return label
+
+    address_override = names.by_address.get(address)
+    if address_override:
+        return _decode_words(address_override)
 
     if display:
         return display
@@ -92,7 +122,7 @@ def _date(message: Message) -> datetime:
 def extract(
     raw: bytes,
     uid: int | None = None,
-    names: Mapping[str, str] | None = None,
+    names: PublicationNames | None = None,
 ) -> Document:
     message = email.message_from_bytes(raw)
     display, raw_address = email.utils.parseaddr(_header(message, "From"))
@@ -104,7 +134,7 @@ def extract(
             identifier=_header(message, "Message-ID", default=address),
             uid=uid,
         ),
-        publication=_publication(message, address, display, names or {}),
+        publication=_publication(message, address, display, names or _EMPTY_NAMES),
         title=_header(message, "Subject", default="(no subject)"),
         author=display or None,
         date=_date(message),

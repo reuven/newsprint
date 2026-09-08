@@ -228,9 +228,11 @@ def test_summary_settings_are_configurable_and_the_home_tilde_is_expanded(
 
 
 def test_publication_names_default_to_empty(tmp_path: Path) -> None:
-    from shabbat_print.config import load_publication_names
+    from shabbat_print.config import PublicationNames, load_publication_names
 
-    assert load_publication_names(tmp_path / "absent.toml") == {}
+    assert load_publication_names(tmp_path / "absent.toml") == PublicationNames(
+        by_address={}, by_list_id={}
+    )
 
 
 def test_publication_names_are_lowercased(tmp_path: Path) -> None:
@@ -238,4 +240,26 @@ def test_publication_names_are_lowercased(tmp_path: Path) -> None:
 
     path = tmp_path / "publications.toml"
     path.write_text('[names]\n"NoReply@News.Bloomberg.com" = "Money Stuff"\n')
-    assert load_publication_names(path) == {"noreply@news.bloomberg.com": "Money Stuff"}
+    names = load_publication_names(path)
+    assert names.by_address == {"noreply@news.bloomberg.com": "Money Stuff"}
+    assert names.by_list_id == {}
+
+
+def test_publication_names_reads_list_id_table(tmp_path: Path) -> None:
+    """List-Id identifies the newsletter, not the sending address - the
+    NYT sends many distinct newsletters from one address, so
+    publications.toml needs a way to key an override by List-Id too."""
+    from shabbat_print.config import load_publication_names
+
+    path = tmp_path / "publications.toml"
+    path.write_text(
+        '[names]\n"nytdirect@nytimes.com" = "NYT"\n\n'
+        '[list_id_names]\n"Jamelle Bouie" = "Jamelle Bouie"\n'
+        '"the veggie" = "The Veggie"\n'
+    )
+    names = load_publication_names(path)
+    assert names.by_address == {"nytdirect@nytimes.com": "NYT"}
+    assert names.by_list_id == {
+        "jamelle bouie": "Jamelle Bouie",
+        "the veggie": "The Veggie",
+    }
