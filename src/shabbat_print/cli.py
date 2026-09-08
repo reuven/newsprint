@@ -31,7 +31,8 @@ from .extract import extract
 from .impose import impose
 from .mail import FETCH_CHUNK_SIZE, Mailbox, MailError, RetireResult, password_for
 from .models import Document, Verdict
-from .picker import SelectionError, build_listing, parse_selection, window_since
+from .picker import DISPLAY_LIMIT, build_picklist, window_since
+from .pickerui import questionary_prompt
 from .pipeline import Built, Failure, TeaserSkippedError, build_one
 from .printer import PrintError, spool
 from .stamp import format_packet_date, stamp_packet
@@ -177,34 +178,44 @@ def _offer_picks(
         click.echo(f"  No unstarred newsletters since {when}.")
         return [], []
 
-    listing = build_listing(candidates)
-    click.echo(f"\n  Newsletters since {when} you haven't starred:")
-    click.echo(listing.text)
+    candidate_uids = [
+        document.origin.uid
+        for document in candidates
+        if document.origin.uid is not None
+    ]
+    sizes = box.fetch_sizes(candidate_uids)
 
     # --dry-run previews the packet, it is not a non-interactive mode - the
     # whole point of showing this list is letting the user add to it, so a
     # dry run with a real terminal on stdin must still prompt. The only
     # reason to skip it is that stdin genuinely is not a terminal (e.g.
-    # piped input, or a CI run).
+    # piped input, or a CI run). The interactive checkbox is genuinely
+    # scrollable, so only the non-interactive text fallback below still
+    # needs DISPLAY_LIMIT's flood protection - see its own docstring.
     interactive = _stdin_is_tty()
+    picklist = build_picklist(
+        candidates, sizes, limit=None if interactive else DISPLAY_LIMIT
+    )
+    shown = sum(len(group.rows) for group in picklist.groups)
+
+    click.echo(f"\n  Newsletters since {when} you haven't starred:")
+    if picklist.total > shown:
+        click.echo(f"  {picklist.total} found; showing the most recent {shown}.")
+    else:
+        click.echo(f"  {picklist.total} unstarred newsletter(s) found.")
+
     if not interactive:
         click.echo("  Skipping the selection prompt (stdin is not a terminal).")
+        for group in picklist.groups:
+            click.echo(f"  {group.publication}")
+            for row in group.rows:
+                click.echo(f"    {row.document.title}  ({row.when})  [{row.length}]")
         return [], []
 
-    while True:
-        response = click.prompt(
-            "  Add any to the packet? (e.g. 3 7-9; Enter to skip)",
-            default="",
-            show_default=False,
-        )
-        try:
-            indices = parse_selection(response, len(listing.documents))
-        except SelectionError as error:
-            click.echo(f"  {error}", err=True)
-            continue
-        break
-
-    picked_candidates = [listing.documents[index - 1] for index in indices]
+    click.echo(
+        "  Choose newsletters to add (space to toggle, enter to confirm; ctrl-c to cancel)."
+    )
+    picked_candidates = questionary_prompt(picklist) or []
     if not picked_candidates:
         return [], []
 
@@ -242,6 +253,16 @@ def fetch_queue(
     by the starred fetch itself, or by opening the connection at all,
     is not caught - that failure is fatal to the whole run, same as
     always.
+
+    The starred and picked documents are merged in ascending date order,
+    not starred-then-picked - the starred set already arrives in that
+    order (IMAP SEARCH returns uids ascending, and uid order tracks
+    arrival order), so sorting the combined list is what puts a pick
+    between the two starred issues it actually falls between, rather than
+    clumping every pick after every starred document regardless of when
+    it was sent. extract._date() always attaches UTC to a naive parse, so
+    every Document.date is timezone-aware and comparable regardless of
+    the sender's own offset.
     """
     config.require_mail()
     click.echo(f"Connecting to {config.mail.host} as {config.mail.user}...")
@@ -272,7 +293,8 @@ def fetch_queue(
                 )
 
         trash = _resolve_trash(box, config, [*starred_uids, *picked_uids])
-    return [*documents, *picked], trash
+    merged = sorted([*documents, *picked], key=lambda document: document.date)
+    return merged, trash
 
 
 def _open_preview(pdf: Path) -> None:

@@ -63,6 +63,12 @@ class _FakeBox:
         # can be driven end to end over one fake connection.
         self.messages: dict[int, bytes] = {}
         self.fetch_many_calls: list[tuple[tuple[int, ...], str]] = []
+        # RFC822.SIZE per uid, for fetch_sizes() - the picker's length
+        # indicator. A uid with no entry defaults to a "medium" bucket
+        # (see picker.length_label's thresholds) so a test that never
+        # sets this explicitly still gets a sane, non-crashing label.
+        self.sizes: dict[int, int] = {}
+        self.fetch_sizes_calls: list[tuple[int, ...]] = []
         _FakeBox.instances.append(self)
 
     def __enter__(self) -> Self:
@@ -81,6 +87,10 @@ class _FakeBox:
     def fetch_many(self, uids, items: str = "(UID RFC822)") -> dict[int, bytes]:
         self.fetch_many_calls.append((tuple(uids), items))
         return {uid: self.messages.get(uid, RAW_MESSAGE) for uid in uids}
+
+    def fetch_sizes(self, uids) -> dict[int, int]:
+        self.fetch_sizes_calls.append(tuple(uids))
+        return {uid: self.sizes.get(uid, 50_000) for uid in uids}
 
     def trash_folder(self) -> str:
         return "INBOX/Trash"
@@ -2167,6 +2177,30 @@ def test_dry_run_shows_the_unstarred_window_and_skips_the_prompt(
     assert "Money Stuff: " not in result.output
 
 
+def _pick_by_title(*titles: str):
+    """A fake questionary_prompt: picks documents by title out of
+    whatever Picklist cli.py actually built, standing in for
+    space-toggling specific rows in the real checkbox. Injected exactly
+    like printer.spool's `runner` - see pickerui.py's own module
+    docstring."""
+
+    def fake(picklist):
+        by_title = {
+            row.document.title: row.document
+            for group in picklist.groups
+            for row in group.rows
+        }
+        return [by_title[title] for title in titles]
+
+    return fake
+
+
+def _pick_nothing(picklist):
+    """A fake questionary_prompt standing in for confirming the checkbox
+    with nothing checked (or cancelling - both mean "add nothing")."""
+    return []
+
+
 def test_dry_run_still_prompts_when_stdin_is_a_terminal(
     monkeypatch, mail_config
 ) -> None:
@@ -2189,14 +2223,16 @@ def test_dry_run_still_prompts_when_stdin_is_a_terminal(
         lambda fallback_days, today: date(2026, 9, 1),
     )
     monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr(
+        "shabbat_print.cli.questionary_prompt", _pick_by_title("Pick One")
+    )
 
     result = CliRunner().invoke(
         main,
         ["--dry-run", "--no-preview", "--config", str(mail_config.path)],
-        input="1\n",
     )
     assert result.exit_code == 0
-    assert "Add any to the packet?" in result.output
+    assert "Choose newsletters to add" in result.output
     assert "Added 1 newsletter(s)" in result.output
     assert "Alpha Weekly: " in result.output  # the pick was actually built
     assert "Dry run" in result.output
@@ -2255,12 +2291,44 @@ def test_no_candidates_in_the_window_says_so_and_skips_the_prompt(
     assert "No unstarred newsletters since" in result.output
 
 
-def test_selecting_a_range_adds_exactly_those_newsletters(
+def test_a_capped_non_interactive_listing_says_how_many_were_omitted(
+    monkeypatch, mail_config
+) -> None:
+    """Past DISPLAY_LIMIT, the non-interactive text fallback caps the
+    listing and says so - the flood-protection DISPLAY_LIMIT exists for
+    (see picker.py's own docstring). The interactive checkbox does not
+    apply this cap at all, since it is genuinely scrollable."""
+    from shabbat_print.picker import DISPLAY_LIMIT
+
+    count = DISPLAY_LIMIT + 5
+    uids = list(range(100, 100 + count))
+
+    class _Box(_QueueBox):
+        unstarred_uids = tuple(uids)
+        extra_messages: ClassVar[dict[int, bytes]] = {
+            uid: _candidate_raw(uid, "Daily Thing", f"Issue {uid}") for uid in uids
+        }
+
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _Box)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+    monkeypatch.setattr(
+        "shabbat_print.cli.window_since",
+        lambda fallback_days, today: date(2026, 9, 1),
+    )
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(mail_config.path)]
+    )
+    assert result.exit_code == 0
+    assert f"{count} found; showing the most recent {DISPLAY_LIMIT}." in result.output
+
+
+def test_selecting_two_rows_adds_exactly_those_newsletters(
     monkeypatch, mail_config, tmp_path: Path
 ) -> None:
-    """Verify bullet: 'Selecting a range adds exactly those newsletters
-    to the packet.' Row 3 ('Charlie Weekly') is deliberately left out of
-    the '1-2' selection and must not be built."""
+    """Verify bullet: 'Selecting several newsletters adds exactly those
+    to the packet.' 'Charlie Weekly' is deliberately left unchecked and
+    must not be built."""
 
     class _Box(_QueueBox):
         unstarred_uids = (21, 22, 23)
@@ -2277,6 +2345,9 @@ def test_selecting_a_range_adds_exactly_those_newsletters(
         lambda fallback_days, today: date(2026, 9, 1),
     )
     monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr(
+        "shabbat_print.cli.questionary_prompt", _pick_by_title("Pick One", "Pick Two")
+    )
     # Declining the print confirm below still calls runlog.record("cancelled")
     # for real - route it to tmp_path, not the user's actual state directory.
     monkeypatch.setattr(
@@ -2286,7 +2357,7 @@ def test_selecting_a_range_adds_exactly_those_newsletters(
     result = CliRunner().invoke(
         main,
         ["--no-preview", "--config", str(mail_config.path)],
-        input="1-2\nn\n",
+        input="n\n",
     )
     assert result.exit_code == 0
     assert "Alpha Weekly: " in result.output
@@ -2341,30 +2412,41 @@ def test_selected_picks_shift_the_contents_starting_numbers(
     baseline_cells = int(_TOTAL_CELLS_RE.search(baseline.output).group(1))
 
     monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr(
+        "shabbat_print.cli.questionary_prompt", _pick_by_title("Pick One")
+    )
 
     one_pick = CliRunner().invoke(
         main,
         ["--no-preview", "--config", str(mail_config.path)],
-        input="1\nn\n",
+        input="n\n",
     )
     assert one_pick.exit_code == 0
     one_pick_cells = int(_TOTAL_CELLS_RE.search(one_pick.output).group(1))
     per_pick = one_pick_cells - baseline_cells
     assert per_pick > 0  # the pick must actually have been built, not skipped
 
+    monkeypatch.setattr(
+        "shabbat_print.cli.questionary_prompt",
+        _pick_by_title("Pick One", "Pick Two"),
+    )
     two_picks = CliRunner().invoke(
         main,
         ["--no-preview", "--config", str(mail_config.path)],
-        input="1-2\nn\n",
+        input="n\n",
     )
     assert two_picks.exit_code == 0
     two_pick_cells = int(_TOTAL_CELLS_RE.search(two_picks.output).group(1))
     assert two_pick_cells == baseline_cells + 2 * per_pick
 
 
-def test_pressing_enter_at_the_prompt_skips_selection(
+def test_confirming_with_nothing_checked_skips_selection(
     monkeypatch, mail_config, tmp_path: Path
 ) -> None:
+    """The checkbox equivalent of the old numbered list's blank Enter:
+    confirming with nothing checked (or cancelling - questionary_prompt
+    returns [] or None for both) adds nothing to the packet."""
+
     class _Box(_QueueBox):
         unstarred_uids = (21,)
         extra_messages: ClassVar[dict[int, bytes]] = {
@@ -2378,6 +2460,7 @@ def test_pressing_enter_at_the_prompt_skips_selection(
         lambda fallback_days, today: date(2026, 9, 1),
     )
     monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr("shabbat_print.cli.questionary_prompt", _pick_nothing)
     monkeypatch.setattr(
         "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
     )
@@ -2385,44 +2468,10 @@ def test_pressing_enter_at_the_prompt_skips_selection(
     result = CliRunner().invoke(
         main,
         ["--no-preview", "--config", str(mail_config.path)],
-        input="\nn\n",
+        input="n\n",
     )
     assert result.exit_code == 0
     assert "Alpha Weekly: " not in result.output
-
-
-def test_an_out_of_range_selection_is_named_and_reprompted(
-    monkeypatch, mail_config, tmp_path: Path
-) -> None:
-    """'Reject out-of-range numbers with a message naming the bad one
-    rather than silently ignoring it' - and the user gets another chance
-    rather than losing the whole run over a typo."""
-
-    class _Box(_QueueBox):
-        unstarred_uids = (21,)
-        extra_messages: ClassVar[dict[int, bytes]] = {
-            21: _candidate_raw(21, "Alpha Weekly", "Pick", buildable=True)
-        }
-
-    monkeypatch.setattr("shabbat_print.cli.Mailbox", _Box)
-    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
-    monkeypatch.setattr(
-        "shabbat_print.cli.window_since",
-        lambda fallback_days, today: date(2026, 9, 1),
-    )
-    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
-    monkeypatch.setattr(
-        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
-    )
-
-    result = CliRunner().invoke(
-        main,
-        ["--no-preview", "--config", str(mail_config.path)],
-        input="99\n1\nn\n",
-    )
-    assert result.exit_code == 0
-    assert "no newsletter numbered 99" in result.output
-    assert "Alpha Weekly: " in result.output  # the retry's valid pick still landed
 
 
 def test_a_picked_newsletter_is_retired_like_any_other(
@@ -2431,7 +2480,14 @@ def test_a_picked_newsletter_is_retired_like_any_other(
     """The retirement invariant: a newsletter picked from the unstarred
     list and printed is retired exactly like a starred one - no special
     case, because `uids` is derived only from `built`, which the pick now
-    belongs to just like every other document."""
+    belongs to just like every other document.
+
+    _candidate_raw's fixed Date (4 Sep 2026) is earlier than _STARRED_RAW's
+    (5 Sep 2026), so once fetch_queue merges by date (see cli.py's own
+    docstring on why), the pick sorts before the starred document -
+    [99, 4], not [4, 99]. That is the fix under test here, not
+    incidental: the old starred-then-picked order would have hidden a
+    regression back to it."""
 
     class _Box(_QueueBox):
         unstarred_uids = (99,)
@@ -2446,6 +2502,7 @@ def test_a_picked_newsletter_is_retired_like_any_other(
         lambda fallback_days, today: date(2026, 9, 1),
     )
     monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr("shabbat_print.cli.questionary_prompt", _pick_by_title("Pick"))
     monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
 
     retired_uids: list[list[int]] = []
@@ -2462,10 +2519,10 @@ def test_a_picked_newsletter_is_retired_like_any_other(
     result = CliRunner().invoke(
         main,
         ["--no-preview", "--config", str(mail_config.path)],
-        input="1\ny\n",
+        input="y\n",
     )
     assert result.exit_code == 0
-    assert retired_uids == [[4, 99]]  # the starred uid, then the picked one
+    assert retired_uids == [[99, 4]]  # picked (4 Sep) before starred (5 Sep)
 
 
 def test_picker_trash_is_used_when_the_starred_queue_was_empty(
@@ -2496,6 +2553,7 @@ def test_picker_trash_is_used_when_the_starred_queue_was_empty(
         lambda fallback_days, today: date(2026, 9, 1),
     )
     monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr("shabbat_print.cli.questionary_prompt", _pick_by_title("Pick"))
     monkeypatch.setattr("shabbat_print.cli.spool", lambda pdf, config: "Printer-1")
 
     retire_calls: list[tuple] = []
@@ -2512,10 +2570,127 @@ def test_picker_trash_is_used_when_the_starred_queue_was_empty(
     result = CliRunner().invoke(
         main,
         ["--no-preview", "--config", str(mail_config.path)],
-        input="1\ny\n",
+        input="y\n",
     )
     assert result.exit_code == 0
     assert retire_calls == [([99], "INBOX/Trash")]
+
+
+def _dated_raw(uid: int, publication: str, title: str, when: str) -> bytes:
+    return _message(
+        f"""
+From: {publication} <pub{uid}@example.com>
+Subject: {title}
+Date: {when}
+Message-ID: <{uid}@example.com>
+Content-Type: text/html; charset="utf-8"
+""",
+        f"<div><p>{LONG_PROSE}</p></div>",
+    )
+
+
+def test_fetch_queue_merges_a_pick_between_two_starred_documents_by_date(
+    monkeypatch, mail_config
+) -> None:
+    """Picked newsletters must land in ascending date order alongside the
+    starred ones, not appended after them in a block - the user's own
+    complaint was entries 4-222 in date order, then the picks clumped in
+    afterwards at 228, 235, 246... The starred pair here (1 Sep, 5 Sep)
+    bracket the pick's own date (3 Sep); the previous starred-then-picked
+    behaviour would have put the pick last regardless of its date."""
+
+    class _Box(_FakeBox):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(**kwargs)
+            self.messages = {
+                1: _dated_raw(
+                    1, "Alpha Weekly", "First", "Tue, 1 Sep 2026 08:00:00 +0000"
+                ),
+                2: _dated_raw(
+                    2, "Charlie Weekly", "Middle Pick", "Thu, 3 Sep 2026 08:00:00 +0000"
+                ),
+                3: _dated_raw(
+                    3, "Zulu Weekly", "Last", "Sat, 5 Sep 2026 08:00:00 +0000"
+                ),
+            }
+
+        def search_flagged(self) -> list[int]:
+            return [1, 3]
+
+        def search_unflagged_since(self, since) -> list[int]:
+            return [2]
+
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _Box)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+    monkeypatch.setattr(
+        "shabbat_print.cli.window_since",
+        lambda fallback_days, today: date(2026, 9, 1),
+    )
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr(
+        "shabbat_print.cli.questionary_prompt", _pick_by_title("Middle Pick")
+    )
+
+    documents, _trash = fetch_queue(mail_config, no_pick=False)
+    assert [document.title for document in documents] == [
+        "First",
+        "Middle Pick",
+        "Last",
+    ]
+
+
+def test_a_pick_between_two_starred_documents_appears_in_order_on_the_contents_page(
+    tmp_path: Path,
+) -> None:
+    """The other half of the same fix, checked as its own derivation:
+    build_contents renders whatever order `built` arrives in (see
+    test_contents.py), and cli.py now derives `built`'s order from
+    fetch_queue's own date-sorted merge - so a pick landing between two
+    starred documents by date must show up between them on the contents
+    page too, not just in the build report. Two separate checks (this
+    one and test_fetch_queue_merges_a_pick_between_two_starred_documents_
+    by_date above) because they are two separate derivations of the same
+    sequence - one could regress without the other."""
+    from datetime import datetime
+
+    from shabbat_print.contents import build_contents
+    from shabbat_print.models import Document, Origin, Verdict
+    from shabbat_print.pdfutil import page_text
+    from shabbat_print.pipeline import Built
+
+    def _built(uid: int, publication: str, title: str, day: str) -> Built:
+        document = Document(
+            origin=Origin(kind="email", identifier=f"<{uid}@example.com>", uid=uid),
+            publication=publication,
+            title=title,
+            date=datetime.fromisoformat(day).replace(tzinfo=UTC),
+            html="<p>x</p>",
+        )
+        return Built(
+            document=document, pdf=Path("/dev/null"), cells=1, verdict=Verdict.FULL
+        )
+
+    # Already in the order fetch_queue's date-sorted merge would produce -
+    # this test is about build_contents/render honouring that order, not
+    # about the merge itself (covered above).
+    built = [
+        _built(1, "Alpha Weekly", "First", "2026-09-01"),
+        _built(2, "Charlie Weekly", "Middle Pick", "2026-09-03"),
+        _built(3, "Zulu Weekly", "Last", "2026-09-05"),
+    ]
+    config = load_config(tmp_path / "absent.toml")
+    result, converged = build_contents(built, config, date(2026, 9, 5), tmp_path)
+    assert converged
+    assert result is not None
+    text = page_text(result.pdf, 0)
+    rows = re.findall(
+        r"^(\d+)\s+(Alpha Weekly|Charlie Weekly|Zulu Weekly)", text, re.MULTILINE
+    )
+    assert [publication for _cell, publication in rows] == [
+        "Alpha Weekly",
+        "Charlie Weekly",
+        "Zulu Weekly",
+    ]
 
 
 def test_help_mentions_no_pick() -> None:

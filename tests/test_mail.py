@@ -29,6 +29,10 @@ class FakeIMAP:
         self.selected: tuple[str, bool] | None = None
         self.search_results: dict[str, bytes] = {}
         self.expunged: set[str] = set()
+        # RFC822.SIZE per uid, for fetch_sizes() - a uid absent here is
+        # simply omitted from the response, the way a real server would
+        # answer for a uid it does not have.
+        self.sizes: dict[int, int] = {}
         self.list_response = [
             b'(\\HasNoChildren) "/" "INBOX/toprint"',
             b'(\\HasNoChildren \\Trash) "/" "INBOX/Trash"',
@@ -51,6 +55,25 @@ class FakeIMAP:
             criteria = " ".join(str(a) for a in args if a is not None)
             return ("OK", [self.search_results.get(criteria, b"")])
         if command == "FETCH":
+            items = args[1] if len(args) > 1 else ""
+            if "RFC822.SIZE" in items:
+                # RFC822.SIZE carries no literal - unlike a body fetch,
+                # each matched message is one self-contained bytes line,
+                # e.g. b"171 (UID 28310 RFC822.SIZE 44796)", not a
+                # (info, payload) tuple. Real batched UID FETCH response,
+                # measured against the user's own server. A comma-joined
+                # uid set is handled directly here (unlike the literal
+                # FETCH branch below, which MultiFetchIMAP must override
+                # to batch) because there is no literal-payload bookkeeping
+                # to get right.
+                uid_arg = args[0] if args else "1"
+                requested = [int(token) for token in str(uid_arg).split(",")]
+                data = [
+                    f"1 (UID {uid} RFC822.SIZE {self.sizes[uid]})".encode()
+                    for uid in requested
+                    if uid in self.sizes
+                ]
+                return ("OK", data)
             # A real server's UID FETCH response always carries the
             # message's own UID as a data item (RFC 3501) - not just its
             # sequence number - which is how Mailbox.fetch_many() maps a
@@ -169,6 +192,105 @@ def test_fetch_many_with_no_uids_makes_no_call() -> None:
     with mailbox(fake) as box:
         assert box.fetch_many([]) == {}
     assert not [call for call in fake.calls if call[0] == "uid"]
+
+
+# ---------------------------------------------------------------------------
+# fetch_sizes - RFC822.SIZE, for the picker's length indicator
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_sizes_returns_byte_sizes_keyed_by_uid() -> None:
+    fake = FakeIMAP("imap.example.com")
+    fake.sizes = {3: 44796, 17: 14996}
+    with mailbox(fake) as box:
+        assert box.fetch_sizes([3, 17]) == {3: 44796, 17: 14996}
+
+
+def test_fetch_sizes_issues_one_uid_fetch_for_the_whole_set() -> None:
+    """The whole point, same as fetch_many: one round trip, not one per
+    uid - a comma-joined UID set in a single UID FETCH command."""
+    fake = FakeIMAP("imap.example.com")
+    fake.sizes = {3: 100, 17: 200, 204: 300}
+    with mailbox(fake) as box:
+        result = box.fetch_sizes([3, 17, 204])
+    assert result == {3: 100, 17: 200, 204: 300}
+    fetch_calls = [
+        call for call in fake.calls if call[0] == "uid" and call[1] == "FETCH"
+    ]
+    assert len(fetch_calls) == 1
+    assert fetch_calls[0][2] == "3,17,204"
+
+
+def test_fetch_sizes_never_sets_the_seen_flag() -> None:
+    """RFC822.SIZE is server metadata, not a body fetch - it never needs
+    (and never uses) BODY.PEEK, because it never touches the body at
+    all. This asserts the exact items string sent, so a future change
+    that swaps in a body-fetch item by mistake cannot pass silently."""
+    fake = FakeIMAP("imap.example.com")
+    fake.sizes = {3: 100}
+    with mailbox(fake) as box:
+        box.fetch_sizes([3])
+    fetch_calls = [
+        call for call in fake.calls if call[0] == "uid" and call[1] == "FETCH"
+    ]
+    assert fetch_calls[0][3] == "(UID RFC822.SIZE)"
+
+
+def test_fetch_sizes_with_no_uids_makes_no_call() -> None:
+    fake = FakeIMAP("imap.example.com")
+    with mailbox(fake) as box:
+        assert box.fetch_sizes([]) == {}
+    assert not [call for call in fake.calls if call[0] == "uid"]
+
+
+def test_fetch_sizes_raises_on_a_uid_the_server_omitted() -> None:
+    """A uid the server silently skipped must not be undercounted without
+    saying so - the same guarantee fetch_many gives for bodies."""
+    fake = FakeIMAP("imap.example.com")
+    fake.sizes = {3: 100}
+    with mailbox(fake) as box, pytest.raises(MailError, match=r"\[17\]"):
+        box.fetch_sizes([3, 17])
+
+
+def test_fetch_sizes_chunks_above_fetch_chunk_size() -> None:
+    fake = FakeIMAP("imap.example.com")
+    uids = list(range(1, FETCH_CHUNK_SIZE + 21))
+    fake.sizes = {uid: uid * 10 for uid in uids}
+    with mailbox(fake) as box:
+        result = box.fetch_sizes(uids)
+    assert result == {uid: uid * 10 for uid in uids}
+    fetch_calls = [
+        call for call in fake.calls if call[0] == "uid" and call[1] == "FETCH"
+    ]
+    assert len(fetch_calls) == 2
+
+
+def test_fetch_sizes_raises_when_the_server_reports_failure() -> None:
+    with (
+        mailbox(FailingIMAP("imap.example.com")) as box,
+        pytest.raises(MailError, match="fetch failed"),
+    ):
+        box.fetch_sizes([1])
+
+
+def test_parse_size_response_ignores_a_non_bytes_item() -> None:
+    """A SIZE fetch response never carries a (info, payload) tuple - see
+    _parse_size_response's own docstring - but the parser must not crash
+    if one ever showed up (e.g. a server that echoed a literal anyway)."""
+    from shabbat_print.mail import _parse_size_response
+
+    mixed = [(b"1 (RFC822 {5}", b"hello"), b"2 (UID 3 RFC822.SIZE 100)"]
+    assert _parse_size_response(mixed) == {3: 100}
+
+
+def test_parse_size_response_ignores_a_line_with_no_size_data_item() -> None:
+    """A malformed or unrelated FETCH response line must not be
+    attributed to any uid, the same as a server that never answered for
+    it at all - mirrors _parse_fetch_response's own guarantee."""
+    from shabbat_print.mail import _parse_size_response
+
+    malformed = [b"1 (FLAGS (\\Seen))"]
+    assert _parse_size_response(malformed) == {}
 
 
 def test_fetch_many_issues_one_uid_fetch_for_the_whole_set() -> None:

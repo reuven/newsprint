@@ -1,15 +1,12 @@
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-import pytest
-
 from shabbat_print import runlog
 from shabbat_print.models import Document, Origin
 from shabbat_print.picker import (
     DISPLAY_LIMIT,
-    SelectionError,
-    build_listing,
-    parse_selection,
+    build_picklist,
+    length_label,
     window_since,
 )
 
@@ -61,39 +58,79 @@ def test_window_since_ignores_a_no_retire_rehearsal(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# build_listing
+# length_label
+# ---------------------------------------------------------------------------
+#
+# Measured against the user's live 99-message unstarred window (see
+# .superpowers/sdd/2026-09-07-newsletter-pipeline/tui-picker.md): RFC822.SIZE
+# correlates only 0.71 with real cleaned word count, and a 16-64KB
+# BODY.PEEK[]<0.N> partial fetch measured no better (0.58-0.70) while
+# costing 2-7.5s instead of RFC822.SIZE's 0.18s - so a size-based bucket is
+# always going to be approximate, which is exactly why it is presented as a
+# coarse three-way bucket rather than a specific word count or reading time.
+# Thresholds are the size terciles measured on that window (~79KB / ~111KB),
+# rounded for readability.
+
+
+def test_length_label_short_below_the_first_threshold() -> None:
+    assert length_label(20_000) == "short"
+
+
+def test_length_label_medium_between_the_thresholds() -> None:
+    assert length_label(90_000) == "medium"
+
+
+def test_length_label_long_above_the_second_threshold() -> None:
+    assert length_label(200_000) == "long"
+
+
+def test_length_label_boundaries_are_inclusive_of_the_lower_bucket() -> None:
+    assert length_label(80_000) == "medium"
+    assert length_label(110_000) == "long"
+
+
+def test_length_label_unknown_when_no_size_was_fetched() -> None:
+    assert length_label(None) == "length unknown"
+
+
+# ---------------------------------------------------------------------------
+# build_picklist
 # ---------------------------------------------------------------------------
 
 
-def test_build_listing_groups_by_publication_and_numbers_sequentially() -> None:
+def test_build_picklist_groups_by_publication_and_sorts_within_a_group() -> None:
     candidates = [
         _doc("The Economist", "Issue A", "2026-09-03", uid=1),
         _doc("Money Stuff", "Issue B", "2026-09-02", uid=2),
         _doc("Money Stuff", "Issue C", "2026-09-04", uid=3),
     ]
-    listing = build_listing(candidates)
-    assert listing.total == 3
-    assert len(listing.documents) == 3
+    picklist = build_picklist(candidates, sizes={})
+    assert picklist.total == 3
     # Alphabetical group order: Money Stuff before The Economist.
-    assert [document.publication for document in listing.documents] == [
-        "Money Stuff",
+    assert [group.publication for group in picklist.groups] == [
         "Money Stuff",
         "The Economist",
     ]
     # Within a group, oldest first.
-    assert [document.title for document in listing.documents] == [
+    assert [row.document.title for row in picklist.groups[0].rows] == [
         "Issue B",
         "Issue C",
-        "Issue A",
     ]
-    assert "Money Stuff" in listing.text
-    assert "The Economist" in listing.text
-    assert "1." in listing.text
-    assert "2." in listing.text
-    assert "3." in listing.text
 
 
-def test_build_listing_caps_a_large_window_to_the_most_recent(tmp_path: Path) -> None:
+def test_build_picklist_labels_each_row_with_its_length() -> None:
+    candidates = [_doc("Money Stuff", "Issue A", "2026-09-03", uid=1)]
+    picklist = build_picklist(candidates, sizes={1: 20_000})
+    assert picklist.groups[0].rows[0].length == "short"
+
+
+def test_build_picklist_labels_a_row_with_no_known_size() -> None:
+    candidates = [_doc("Money Stuff", "Issue A", "2026-09-03", uid=1)]
+    picklist = build_picklist(candidates, sizes={})
+    assert picklist.groups[0].rows[0].length == "length unknown"
+
+
+def test_build_picklist_caps_a_large_window_to_the_most_recent() -> None:
     base = date(2026, 6, 1)
     count = DISPLAY_LIMIT + 20
     candidates = [
@@ -105,71 +142,41 @@ def test_build_listing_caps_a_large_window_to_the_most_recent(tmp_path: Path) ->
         )
         for n in range(1, count + 1)
     ]
-    listing = build_listing(candidates)
-    assert listing.total == count
-    assert len(listing.documents) == DISPLAY_LIMIT
+    picklist = build_picklist(candidates, sizes={})
+    assert picklist.total == count
+    shown_titles = {
+        row.document.title for group in picklist.groups for row in group.rows
+    }
+    assert len(shown_titles) == DISPLAY_LIMIT
     # Kept the most recent DISPLAY_LIMIT, i.e. the highest-numbered issues.
-    kept_titles = {document.title for document in listing.documents}
-    assert f"Issue {count}" in kept_titles  # the very last (most recent)
-    assert "Issue 1" not in kept_titles
-    assert f"{listing.total}" in listing.text
-    assert str(DISPLAY_LIMIT) in listing.text
+    assert f"Issue {count}" in shown_titles  # the very last (most recent)
+    assert "Issue 1" not in shown_titles
 
 
-def test_build_listing_says_how_many_when_not_capped() -> None:
-    candidates = [_doc("Money Stuff", "Issue A", "2026-09-03", uid=1)]
-    listing = build_listing(candidates)
-    assert "1" in listing.text
+def test_build_picklist_limit_none_shows_everything_uncapped() -> None:
+    """The interactive checkbox is genuinely scrollable, so it does not
+    need the text-listing's flood protection - see picker.py's own
+    DISPLAY_LIMIT docstring for why the cap exists at all."""
+    base = date(2026, 6, 1)
+    count = DISPLAY_LIMIT + 20
+    candidates = [
+        _doc(
+            "Daily Thing",
+            f"Issue {n}",
+            (base + timedelta(days=n)).isoformat(),
+            uid=n,
+        )
+        for n in range(1, count + 1)
+    ]
+    picklist = build_picklist(candidates, sizes={}, limit=None)
+    shown_titles = {
+        row.document.title for group in picklist.groups for row in group.rows
+    }
+    assert len(shown_titles) == count
+    assert picklist.total == count
 
 
-# ---------------------------------------------------------------------------
-# parse_selection
-# ---------------------------------------------------------------------------
-
-
-def test_parse_selection_empty_input_means_skip() -> None:
-    assert parse_selection("", count=10) == []
-    assert parse_selection("   ", count=10) == []
-
-
-def test_parse_selection_accepts_numbers_and_ranges_forgiving_of_spacing() -> None:
-    assert parse_selection("3 7-9 12", count=12) == [3, 7, 8, 9, 12]
-
-
-def test_parse_selection_is_forgiving_of_commas() -> None:
-    assert parse_selection("3, 7-9,12", count=12) == [3, 7, 8, 9, 12]
-
-
-def test_parse_selection_is_forgiving_of_a_leading_or_trailing_comma() -> None:
-    """A leading/trailing comma splits to an empty token (re.split on a
-    string that starts or ends with the separator) - that must be skipped
-    silently rather than raising as though it were a malformed number."""
-    assert parse_selection(",3,7,", count=12) == [3, 7]
-
-
-def test_parse_selection_deduplicates_and_sorts() -> None:
-    assert parse_selection("9 3 3 1-3", count=12) == [1, 2, 3, 9]
-
-
-def test_parse_selection_accepts_a_reversed_range() -> None:
-    assert parse_selection("9-7", count=12) == [7, 8, 9]
-
-
-def test_parse_selection_rejects_an_out_of_range_number_by_name() -> None:
-    with pytest.raises(SelectionError, match="17"):
-        parse_selection("3 17", count=12)
-
-
-def test_parse_selection_rejects_an_out_of_range_range_endpoint_by_name() -> None:
-    with pytest.raises(SelectionError, match="15"):
-        parse_selection("7-15", count=12)
-
-
-def test_parse_selection_rejects_a_malformed_token_by_name() -> None:
-    with pytest.raises(SelectionError, match="abc"):
-        parse_selection("abc", count=12)
-
-
-def test_parse_selection_rejects_zero() -> None:
-    with pytest.raises(SelectionError, match="0"):
-        parse_selection("0", count=12)
+def test_build_picklist_handles_no_candidates() -> None:
+    picklist = build_picklist([], sizes={})
+    assert picklist.total == 0
+    assert picklist.groups == ()
