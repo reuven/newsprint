@@ -100,12 +100,11 @@ def test_a_document_at_or_above_the_threshold_is_built(config, tmp_path: Path) -
 
 
 def test_force_include_bypasses_the_teaser_threshold(config, tmp_path: Path) -> None:
-    """Phase 8: a fetched URL whose extracted word count is implausibly
-    low can still be built when the user explicitly confirmed "include it
-    anyway" at cli.py's own prompt (webextract.py's thin-content check) -
-    the one case where a document below packet.min_words must still reach
-    the PDF rather than being silently re-skipped a second time, which
-    would make that confirmation meaningless."""
+    """A document whose extracted word count is implausibly low can still
+    be built when a caller has already confirmed "include it anyway" with
+    the user - the one case where a document below packet.min_words must
+    still reach the PDF rather than being silently re-skipped a second
+    time, which would make that confirmation meaningless."""
     from dataclasses import replace
 
     teaser = replace(
