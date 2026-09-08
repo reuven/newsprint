@@ -1,7 +1,9 @@
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from shabbat_print.config import load_config
 from shabbat_print.geometry import A4
@@ -246,3 +248,212 @@ def test_masthead_appears_only_once_per_newsletter(config, tmp_path: Path) -> No
     for index in range(1, page_count(pdf)):
         later_page = page_text(pdf, index).replace("\n", " ").lower()
         assert "money stuff" not in later_page
+
+
+# Phase 8 (charts.md, 2026-09-07): a kept <img> (clean.py's own
+# _is_argument_figure) is a remote URL that WeasyPrint fetches itself when
+# the tag survives into the rendered HTML. None of these tests ever touch
+# the network: url_fetcher is fully injectable, the same pattern
+# printer.spool's `runner` and mail.Mailbox's `imap_factory` already use -
+# every test below supplies its own fake fetcher instead.
+
+
+class _FakeResponse:
+    """The minimal shape render.py's fetcher wrapper needs: `.read()`
+    returning raw bytes, matching weasyprint.urls.URLFetcherResponse
+    closely enough to stand in for it in a test."""
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    def read(self) -> bytes:
+        return self._data
+
+
+def _wide_rgb_png(width: int = 900, height: int = 300) -> bytes:
+    """A synthetic in-memory chart-shaped image: wide, colourful, and
+    nothing like a real chart - grayscale conversion is easy to see on a
+    saturated red source, and the width is comfortably past any reasonable
+    cell cap so the resize path is actually exercised."""
+    image = Image.new("RGB", (width, height), color=(220, 30, 30))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _image_document(src: str = "https://example.com/chart.png") -> Document:
+    html = f'<p>Here\'s the chart:</p><img src="{src}"><p>Source: Census Bureau</p>'
+    return document(html)
+
+
+def test_grayscale_and_cap_does_not_upscale_a_narrower_source() -> None:
+    """The resize branch only ever shrinks: a source already narrower than
+    the cap must come out exactly as wide as it went in, not stretched up
+    to fill the cap."""
+    from shabbat_print.render import _grayscale_and_cap
+
+    narrow = Image.new("RGB", (120, 40), color=(30, 120, 200))
+    buffer = BytesIO()
+    narrow.save(buffer, format="PNG")
+
+    processed = _grayscale_and_cap(buffer.getvalue(), max_width_px=600)
+    with Image.open(BytesIO(processed)) as result:
+        assert result.mode == "L"
+        assert result.width == 120
+
+
+def test_a_fetched_image_is_embedded_grayscale_and_capped_to_the_cell(
+    config, tmp_path: Path
+) -> None:
+    import pymupdf
+
+    from shabbat_print.render import _cap_width_px
+
+    fetcher_calls = []
+
+    def fake_fetcher(url: str) -> _FakeResponse:
+        fetcher_calls.append(url)
+        return _FakeResponse(_wide_rgb_png())
+
+    pdf = render(_image_document(), config, out_dir=tmp_path, url_fetcher=fake_fetcher)
+    assert fetcher_calls == ["https://example.com/chart.png"]
+
+    with pymupdf.open(pdf) as opened:
+        images = opened[0].get_images(full=True)
+        assert images, "expected the fetched chart to be embedded on the page"
+        xref = images[0][0]
+        base_image = opened.extract_image(xref)
+    with Image.open(BytesIO(base_image["image"])) as embedded:
+        assert embedded.mode == "L"  # grayscale, not colour
+        assert embedded.width <= _cap_width_px(config)
+
+
+def test_a_failed_fetch_is_dropped_reported_and_does_not_crash(
+    config, tmp_path: Path
+) -> None:
+    """A slow or dead image must not stall or crash a print run: the page
+    still renders, just without that image, and the failure is reported
+    back to the caller rather than silently swallowed."""
+
+    def dying_fetcher(url: str) -> _FakeResponse:
+        raise TimeoutError("simulated network failure")
+
+    failures: list[str] = []
+    pdf = render(
+        _image_document(),
+        config,
+        out_dir=tmp_path,
+        url_fetcher=dying_fetcher,
+        image_fetch_failures=failures,
+    )
+    assert failures == ["https://example.com/chart.png"]
+    # The page still built and still carries the surrounding prose.
+    assert "Source: Census Bureau" in page_text(pdf, 0)
+
+
+def test_a_non_image_response_is_treated_as_a_fetch_failure(
+    config, tmp_path: Path
+) -> None:
+    """Corrupt or unparseable bytes (a dead CDN returning an HTML error
+    page instead of an image, say) must degrade the same way a network
+    failure does, not raise out of render()."""
+
+    def bad_fetcher(url: str) -> _FakeResponse:
+        return _FakeResponse(b"not actually an image")
+
+    failures: list[str] = []
+    render(
+        _image_document(),
+        config,
+        out_dir=tmp_path,
+        url_fetcher=bad_fetcher,
+        image_fetch_failures=failures,
+    )
+    assert failures == ["https://example.com/chart.png"]
+
+
+def test_an_image_cache_avoids_a_second_fetch_of_the_same_url(
+    config, tmp_path: Path
+) -> None:
+    """trim.fit re-renders the same document up to twice more (its
+    compression retries), so without a cache the exact same chart URL is
+    fetched once per attempt - measured live against the real starred
+    queue, 61 requests for only 35 distinct kept images. `image_cache`
+    lets a caller (pipeline.build_one) share one dict across every
+    render() call for one document, so a URL already fetched and
+    processed is reused rather than fetched again."""
+    fetcher_calls = []
+
+    def fake_fetcher(url: str) -> _FakeResponse:
+        fetcher_calls.append(url)
+        return _FakeResponse(_wide_rgb_png())
+
+    cache: dict[str, bytes | None] = {}
+    render(
+        _image_document(),
+        config,
+        out_dir=tmp_path / "one",
+        url_fetcher=fake_fetcher,
+        image_cache=cache,
+    )
+    render(
+        _image_document(),
+        config,
+        out_dir=tmp_path / "two",
+        url_fetcher=fake_fetcher,
+        image_cache=cache,
+    )
+    assert fetcher_calls == ["https://example.com/chart.png"]
+
+
+def test_a_cached_failure_is_not_retried_but_is_still_reported(
+    config, tmp_path: Path
+) -> None:
+    """A dead image should not be re-attempted on every compression retry
+    - each attempt would pay the full timeout again - but each render()
+    call must still report it as a failure so pipeline.build_one's
+    dedup(-and-keep) logic sees it regardless of which attempt produced
+    the final PDF."""
+    fetcher_calls = []
+
+    def dying_fetcher(url: str) -> _FakeResponse:
+        fetcher_calls.append(url)
+        raise TimeoutError("simulated network failure")
+
+    cache: dict[str, bytes | None] = {}
+    failures_one: list[str] = []
+    failures_two: list[str] = []
+    render(
+        _image_document(),
+        config,
+        out_dir=tmp_path / "one",
+        url_fetcher=dying_fetcher,
+        image_cache=cache,
+        image_fetch_failures=failures_one,
+    )
+    render(
+        _image_document(),
+        config,
+        out_dir=tmp_path / "two",
+        url_fetcher=dying_fetcher,
+        image_cache=cache,
+        image_fetch_failures=failures_two,
+    )
+    assert fetcher_calls == ["https://example.com/chart.png"]  # not retried
+    assert failures_one == ["https://example.com/chart.png"]
+    assert failures_two == ["https://example.com/chart.png"]  # still reported
+
+
+def test_no_images_means_no_fetch_is_ever_attempted(config, tmp_path: Path) -> None:
+    """Only kept images are ever fetched - an ordinary document with no
+    <img> at all must never call the fetcher, confirming clean.py's own
+    filtering, not render.py, is what keeps network traffic to a
+    minimum."""
+
+    def exploding_fetcher(url: str) -> _FakeResponse:
+        raise AssertionError(f"unexpected fetch of {url!r}")
+
+    pdf = render(
+        document(PROSE), config, out_dir=tmp_path, url_fetcher=exploding_fetcher
+    )
+    assert "Federal Reserve" in page_text(pdf, 0)

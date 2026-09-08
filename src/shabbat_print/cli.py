@@ -186,10 +186,23 @@ def main(
             Verdict.FULL: "",
         }[item.verdict]
         click.echo(f"  {item.document.publication}: {item.cells} cells{note}")
+        # A fetch failure is reported distinctly from an ordinary drop:
+        # clean.py already decided this image was worth keeping - the
+        # image itself just did not answer, or came back unusable, at
+        # render time. Folding it into "dropped" would blur a deliberate
+        # editorial choice (clean.py's own _is_argument_figure) with an
+        # unrelated network hiccup.
+        fetch_failed = (
+            f", {len(item.image_fetch_failures)} fetch failed"
+            if item.image_fetch_failures
+            else ""
+        )
         click.echo(
             f"    kept {item.document.images_kept} images, "
-            f"dropped {len(item.document.images_dropped)}"
+            f"dropped {len(item.document.images_dropped)}{fetch_failed}"
         )
+        for url in item.image_fetch_failures:
+            click.echo(f"    image fetch failed: {url}")
         for block in item.document.blocks_dropped:
             preview = textwrap.shorten(block.text, width=70, placeholder="...")
             # A duplicate-title removal is not data loss - see

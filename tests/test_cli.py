@@ -670,6 +670,46 @@ def test_image_counts_are_reported(monkeypatch, tmp_path: Path) -> None:
     assert "kept 0 images, dropped 1" in result.output
 
 
+def test_kept_images_are_counted_and_a_fetch_failure_is_reported_distinctly(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A kept image (a colon lead-in, here) whose fetch fails must be
+    reported as a fetch failure, not folded into the ordinary "dropped"
+    count - clean.py already made the editorial call to keep it; the
+    image itself just did not come back usable. The `data:` URI below
+    resolves entirely locally (no socket, no DNS) so this exercises the
+    real render() end to end - not a fake render_fn - while still making
+    no network request at all: it is syntactically a valid data URI but
+    decodes to bytes Pillow cannot open as an image, the same failure
+    shape a dead or malformed CDN response would produce."""
+    from datetime import datetime
+
+    from shabbat_print.models import Document, Origin
+
+    document = Document(
+        origin=Origin(kind="email", identifier="<i@example.com>", uid=12),
+        publication="Test Weekly",
+        title="An Issue",
+        date=datetime(2026, 9, 5, tzinfo=UTC),
+        html=(
+            f"<div><p>{LONG_PROSE} Here's the chart:</p>"
+            '<img src="data:image/png;base64,AAAA" width="600">'
+            "</div>"
+        ),
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--dry-run", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+    )
+    assert result.exit_code == 0
+    assert "kept 1 images, dropped 0, 1 fetch failed" in result.output
+    assert "image fetch failed: data:image/png;base64,AAAA" in result.output
+
+
 def test_a_dropped_chrome_block_is_reported(monkeypatch, tmp_path: Path) -> None:
     """A wrong removal must be visible in the run's own output, not just
     recorded on the Document and never shown to anyone."""

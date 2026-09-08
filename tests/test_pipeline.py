@@ -99,6 +99,71 @@ def test_a_document_at_or_above_the_threshold_is_built(config, tmp_path: Path) -
     assert len(built) == 1
 
 
+# Phase 8 (charts.md): render_fn may now report failed image fetches via
+# an `image_fetch_failures` kwarg (render.py's own contract - a list it
+# appends URLs into, never replaces). build_one() must thread that same
+# list through every render_fn call for one document - including any
+# compression retry trim.fit triggers - and surface the result on Built,
+# deduplicated, so a retry that fails on the same URL twice is reported
+# once, not twice.
+def _render_recording_a_failure(document, config, out_dir=None, **kwargs):
+    failures = kwargs.get("image_fetch_failures")
+    if failures is not None:
+        failures.append("https://example.com/dead-chart.png")
+    from shabbat_print.render import render as real_render
+
+    return real_render(document, config, out_dir=out_dir)
+
+
+def test_image_fetch_failures_are_reported_on_the_built_result(
+    config, tmp_path: Path
+) -> None:
+    built, failed = build(
+        [document(LONG_PROSE, "<f@x>")],
+        config,
+        tmp_path,
+        render_fn=_render_recording_a_failure,
+    )
+    assert failed == []
+    assert len(built) == 1
+    assert built[0].image_fetch_failures == ("https://example.com/dead-chart.png",)
+
+
+def test_a_document_with_no_image_fetch_failures_reports_an_empty_tuple(
+    config, tmp_path: Path
+) -> None:
+    built, _ = build([document(LONG_PROSE, "<g@x>")], config, tmp_path)
+    assert built[0].image_fetch_failures == ()
+
+
+def test_the_same_image_cache_is_shared_across_every_render_fn_call(
+    config, tmp_path: Path
+) -> None:
+    """render.py's own image_cache avoids re-fetching a URL trim.fit's
+    compression retries would otherwise fetch again - measured live, up
+    to 3x over. build_one() must pass the *same* dict object into every
+    render_fn call for one document, not a fresh one per call, or the
+    cache could never do its job."""
+    seen_cache_ids: set[int] = set()
+
+    def _recording_render(document, config, out_dir=None, **kwargs):
+        cache = kwargs.get("image_cache")
+        assert cache is not None, "build_one must pass image_cache"
+        seen_cache_ids.add(id(cache))
+        from shabbat_print.render import render as real_render
+
+        return real_render(document, config, out_dir=out_dir)
+
+    _built, failed = build(
+        [document(LONG_PROSE, "<h@x>")],
+        config,
+        tmp_path,
+        render_fn=_recording_render,
+    )
+    assert failed == []
+    assert len(seen_cache_ids) == 1  # exactly one shared dict, never a fresh one
+
+
 def test_documents_sharing_an_identifier_do_not_collide(config, tmp_path: Path) -> None:
     """render() names its output from the document's identifier, and bulk mail
     without a Message-ID falls back to the sender address in extract.py, so

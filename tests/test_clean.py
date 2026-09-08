@@ -1403,3 +1403,207 @@ def test_br_and_hr_are_never_removed_for_having_no_text() -> None:
     cleaned = clean_document(document(html))
     assert "<br" in cleaned.html
     assert "<hr" in cleaned.html
+
+
+# Phase 8 (charts.md, 2026-09-07): keep an image the author introduced as
+# evidence - a colon lead-in before it, or a Source/Chart/Figure/Fig./
+# Credit/Data: caption after it - rather than dropping every image
+# outright. The width gate is the same one _figure_placeholder_text
+# already uses, reused rather than re-derived.
+def test_a_colon_lead_in_keeps_a_wide_image() -> None:
+    html = (
+        "<html><body><div><p>Real prose sets up the argument, and in the "
+        "best model scores between the two countries:</p>"
+        '<img src="https://example.com/chart.png" width="600">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "<img" in cleaned.html
+    assert cleaned.images_kept == 1
+    assert cleaned.images_dropped == ()
+
+
+def test_a_source_caption_keeps_a_wide_image_with_no_colon_lead_in() -> None:
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here, setting up context but not ending in a colon.</p>"
+        '<img src="https://example.com/chart.png" width="600">'
+        "<p>Source: Census Bureau</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "<img" in cleaned.html
+    assert cleaned.images_kept == 1
+
+
+@pytest.mark.parametrize("caption", ["Source", "Chart", "Figure", "Fig.", "Credit"])
+def test_each_caption_word_keeps_a_preceding_wide_image(caption: str) -> None:
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here, with no colon at the end of this sentence.</p>"
+        '<img src="https://example.com/chart.png" width="600">'
+        f"<p>{caption}: some attribution text.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 1
+
+
+def test_bare_data_word_with_no_colon_does_not_count_as_a_caption() -> None:
+    """`Data` is deliberately required to carry its own colon: the bare
+    word alone starts a lot of ordinary prose ("Data suggests...") in a
+    way "Source" or "Figure" at the very start of a caption line does
+    not."""
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here, with no colon at the end of this sentence.</p>"
+        '<img src="https://example.com/chart.png" width="600">'
+        "<p>Data suggests the trend will continue.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 0
+
+
+def test_data_with_a_colon_does_count_as_a_caption() -> None:
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here, with no colon at the end of this sentence.</p>"
+        '<img src="https://example.com/chart.png" width="600">'
+        "<p>Data: Census Bureau, 2026.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 1
+
+
+def test_a_here_s_the_chart_lead_in_with_no_trailing_colon_still_counts() -> None:
+    html = (
+        "<html><body><div><p>Real prose sets up the moment. Here's the "
+        "chart, drawn from the same underlying dataset as before.</p>"
+        '<img src="https://example.com/chart.png" width="600">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 1
+
+
+def test_a_wide_image_with_neither_cue_is_still_dropped() -> None:
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here, ending in an ordinary period.</p>"
+        '<img src="https://example.com/chart.png" width="600">'
+        "<p>And more prose continues right after it, unrelated to a "
+        "caption of any kind.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "<img" not in cleaned.html
+    assert cleaned.images_kept == 0
+    assert len(cleaned.images_dropped) == 1
+
+
+def test_a_narrow_image_with_a_colon_lead_in_is_still_dropped() -> None:
+    """The width gate applies first, and independently of the lead-in -
+    matching _figure_placeholder_text's own threshold and the design
+    spec's "≥300px" wording exactly."""
+    html = (
+        "<html><body><div><p>Real prose sets up the argument, here's the "
+        "chart:</p>"
+        '<img src="https://example.com/chart.png" width="299">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "<img" not in cleaned.html
+    assert cleaned.images_kept == 0
+
+
+def test_a_kept_image_gets_no_placeholder_even_with_data_reading_alt_text() -> None:
+    """Kept and placeholder are mutually exclusive outcomes for the same
+    image - a kept image is the real thing, so a text stand-in for it
+    would be redundant, not an extra safety net."""
+    html = (
+        "<html><body><div><p>Real prose sets up the argument, here's the "
+        "chart:</p>"
+        '<img src="https://example.com/chart.png" width="600" '
+        'alt="Unemployment trend by quarter">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "<img" in cleaned.html
+    assert "figure-placeholder" not in cleaned.html
+    assert "[figure:" not in cleaned.html
+    assert cleaned.images_kept == 1
+
+
+def test_kept_image_survives_because_width_is_read_before_attrs_are_stripped() -> None:
+    """The literal trap charts.md warns about: clean.py strips width and
+    height from every retained tag (Puck's fixed 600px widths caused a
+    real text-clipping bug), so the argument-figure rule must read
+    `width` before that stripping runs - a rule that runs after it would
+    silently never fire, dropping every image and reporting nothing
+    wrong. Confirmed against clean_document's own source, not assumed:
+    _strip_images (which calls _is_argument_figure) is called before
+    _strip_presentational_attrs there. This test still exercises the
+    order directly - not just the rule - by asserting BOTH that the
+    image survived AND that its width attribute is gone from the
+    output, which only happens if the width was read first and stripped
+    after."""
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here, and here's the chart:</p>"
+        '<img src="https://example.com/chart.png" width="600">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "<img" in cleaned.html
+    assert 'width="600"' not in cleaned.html
+    assert cleaned.images_kept == 1
+
+
+def test_a_kept_image_alone_in_its_cell_is_not_pruned_as_invisible() -> None:
+    """A second trap, not the one charts.md names but the same shape:
+    _prune_invisible_elements (round 3E) treats any element with no
+    visible text as dead layout scaffolding - correct for a spacer or an
+    already-image-stripped placeholder cell, but a kept chart image has
+    no text of its own either, and neither does a <td> that wraps only
+    that image. Without an explicit exception, this later, unrelated
+    pass would quietly undo a keep decision _strip_images made
+    correctly - not the rule failing to fire, but a downstream pass
+    deleting its result anyway."""
+    html = (
+        "<html><body><div>"
+        "<p>Real prose that continues for a good while here, setting up "
+        "the argument the chart is about to make:</p>"
+        '<table><tbody><tr><td><img src="https://example.com/chart.png" '
+        'width="600"></td></tr></tbody></table>'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "<img" in cleaned.html
+    assert cleaned.images_kept == 1
+
+
+@pytest.mark.skipif(not FIXTURES.exists(), reason="run `make fixtures` first")
+def test_noahpinion_charts_are_kept_and_the_gpt6_art_header_is_dropped() -> None:
+    """The specific issue the user reported: "Here's the chart:" followed
+    by "Source: Census Bureau" with no chart in between. This fixture is
+    that newsletter - real data charts, each introduced by a colon-ending
+    sentence and each followed by a "Source:" caption - plus one purely
+    decorative post-header illustration captioned "Art by GPT-6" that
+    carries neither cue (its own preceding text is "READ IN APP", its
+    following text is the caption itself, not a Source/Chart/... label)
+    and must stay dropped. Verified by hand against the raw fixture HTML
+    before writing this pin: image index 7 (the GPT-6 art, asset id
+    cc9c4424...) has no lead-in and no caption; images 8-14 (the real
+    charts) each have both."""
+    from shabbat_print.extract import extract
+
+    path = FIXTURES / "noahpinion-substack-com.eml"
+    assert path.exists(), "fixture corpus changed: re-pin this test"
+    cleaned = clean_document(extract(path.read_bytes()))
+    # The GPT-6 art header's own asset id must not survive as a kept <img>.
+    assert "cc9c4424-d290-4fc1-87ee-396d38fe8efe" not in cleaned.html
+    # A real chart's asset id must survive as a kept <img>.
+    assert "89f09408-433c-4468-9f29-f115bbb36434" in cleaned.html
+    assert cleaned.images_kept >= 6

@@ -30,18 +30,30 @@ judged by a score, and a single line cannot contain an article. Any change
 here that starts judging a block or a ratio in the middle of the document
 is that same reverted generalization again.
 
-Phase 1 dropped every image outright. Phase 7 (this revision) still drops
-every image - no image is ever fetched or rendered - but for a small,
-carefully chosen subset it leaves a text placeholder in the flow instead
-of vanishing silently: "[figure: US-China trade balances as a percent of
-GDP, 2010-2026]", built from the image's own `alt` attribute. See
-_figure_placeholder_text for the selection rule and why it is deliberately
-narrow (measured against the fixture corpus: a loose width+alt-length
-rule yields roughly 1.6 placeholders per newsletter, dominated by
-decorative illustrations and machine-generated alt text; restricting to
-alt text that reads as data - a chart, a survey, a GDP figure - cuts that
-to roughly one every five newsletters, which is the version implemented
-here).
+Phase 1 dropped every image outright. Phase 7 kept every image dropped but
+left a text placeholder in the flow for a small, carefully chosen subset:
+"[figure: US-China trade balances as a percent of GDP, 2010-2026]", built
+from the image's own `alt` attribute. See _figure_placeholder_text for
+that selection rule and why it is deliberately narrow (measured against
+the fixture corpus: a loose width+alt-length rule yields roughly 1.6
+placeholders per newsletter, dominated by decorative illustrations and
+machine-generated alt text; restricting to alt text that reads as data - a
+chart, a survey, a GDP figure - cuts that to roughly one every five
+newsletters, which is the version implemented here).
+
+Phase 8 (this revision, see charts.md) is the first to actually keep an
+image: an earlier survey judged images by alt text, found nothing but ads
+and mastheads, and concluded the archive held no real charts. That was
+wrong - Noahpinion's own charts all carry alt="" and were invisible to it.
+The signal that works is the surrounding TEXT, not the image itself: an
+author introducing a figure as evidence writes a sentence that ends in a
+colon ("Here's a graphical comparison:"), and often follows the image with
+a "Source:" caption. _is_argument_figure implements that rule, reading the
+nearest non-blank text immediately before and after the <img> in document
+order. Measured over 601 archived messages, 10.6% of wide images carry a
+colon lead-in and 0.9% a Source-style caption; 88.5% carry neither - that
+88.5% is the decoration this module has always dropped. See
+_is_argument_figure's own docstring for the exact rule.
 """
 
 import re
@@ -104,7 +116,7 @@ _INLINE_TAGS = frozenset(
     }
 )
 
-_IMAGES_DEFERRED = "images deferred to phase 7"
+_IMAGE_DROPPED = "no lead-in or caption (decoration)"
 _IMAGE_PLACEHOLDER = "kept as a text placeholder (figure)"
 
 # Below this, an image reads as a spacer, an icon, or a tracking pixel,
@@ -214,6 +226,81 @@ def _image_width_px(image: Tag) -> int | None:
     return int(match.group(1)) if match else None
 
 
+# charts.md's colon-lead-in rule, restated as a family: the text right
+# before a figure most often ends in a bare colon ("...between the two
+# countries:"), but a few real lead-ins from the archive keep going after
+# the phrase itself ("Here's the chart below, showing...") with no colon
+# at the very end. Matched anywhere in the preceding text's tail, not just
+# at its end, so either shape counts.
+_LEAD_IN_PHRASE = re.compile(
+    r"here'?s\s+(?:the|a)\s+(?:chart|graph|data|breakdown)\b", re.IGNORECASE
+)
+
+# The other half of the same signal: a caption crediting or labelling an
+# image right after it - "Source: Census Bureau", "Chart: ...", "Fig. 3:
+# ...". `Data` is required to carry its own colon (data must fullmatch
+# "data:", not just start with the word) because the bare word alone
+# starts a lot of ordinary prose in a way "Source" or "Figure" at the very
+# start of a caption line does not.
+_CAPTION_LEAD = re.compile(
+    r"^(?:source\b|chart\b|figure\b|fig\.|credit\b)|^data\s*:", re.IGNORECASE
+)
+
+# Same threshold _figure_placeholder_text uses for the same reason: below
+# this an image reads as a spacer, an icon, or a tracking pixel, never a
+# figure worth keeping - and tracking pixels in particular are <=3px, so
+# they fail this gate (and are never fetched) long before any lead-in or
+# caption text is even examined.
+_ARGUMENT_FIGURE_MIN_WIDTH_PX = _FIGURE_MIN_WIDTH_PX
+
+
+def _nearest_rendered_text(image: Tag, *, forward: bool) -> str | None:
+    """The nearest non-blank text in document order before (forward=False)
+    or after (forward=True) `image` - across sibling and container
+    boundaries alike, since a lead-in sentence and its chart are often in
+    separate but adjacent <p> tags, not the same one.
+
+    Only genuine renderable text counts: an HTML comment (Outlook's own
+    MSO conditional markup) or other non-visible NavigableString subtype
+    is skipped, the same discipline _rendered_lines applies for the same
+    reason (see that function's own comment on
+    Tag.MAIN_CONTENT_STRING_TYPES) - `string=True` alone would also match
+    those.
+    """
+    walker = image.find_all_next if forward else image.find_all_previous
+    for node in walker(string=True):
+        if type(node) not in (NavigableString, CData):
+            continue
+        text = str(node).strip()
+        if text:
+            return text
+    return None
+
+
+def _is_argument_figure(image: Tag) -> bool:
+    """True when `image` is wide enough to be a figure AND the author
+    introduced it as one - see charts.md, "The rule". Two independent
+    gates, either one sufficient once the width gate passes: the nearest
+    text before the image ends in a colon or a "here's the chart"-style
+    phrase (_LEAD_IN_PHRASE), or the nearest text after it opens with a
+    Source/Chart/Figure/Fig./Credit/Data: caption (_CAPTION_LEAD).
+
+    Must be evaluated before _strip_presentational_attrs strips `width` -
+    see this module's docstring and _strip_images's own comment on why
+    that ordering is load-bearing, not incidental.
+    """
+    width = _image_width_px(image)
+    if width is None or width < _ARGUMENT_FIGURE_MIN_WIDTH_PX:
+        return False
+    before = _nearest_rendered_text(image, forward=False)
+    if before is not None and (
+        before.rstrip().endswith(":") or _LEAD_IN_PHRASE.search(before)
+    ):
+        return True
+    after = _nearest_rendered_text(image, forward=True)
+    return after is not None and bool(_CAPTION_LEAD.match(after))
+
+
 def _figure_placeholder_text(image: Tag, publication: str) -> str | None:
     """The text placeholder for `image`, or None if it does not qualify.
 
@@ -291,31 +378,44 @@ def _content_root(soup: BeautifulSoup) -> Tag:
 
 
 def _strip_images(root: Tag, publication: str) -> tuple[int, tuple[DroppedImage, ...]]:
-    """Remove every image. No image is ever kept, fetched, or rendered -
-    only its `src` is recorded, for reporting, never dereferenced.
+    """Decide each image's fate: kept, given a text placeholder, or
+    dropped outright. Most images are still dropped, exactly as before -
+    only the small subset _is_argument_figure recognises as an author's
+    own evidence survives as a real <img>, to be fetched at render time
+    (see render.py). No other image is ever fetched: only its `src` is
+    recorded here, for reporting, never dereferenced.
 
-    Must run before _strip_presentational_attrs: the placeholder judgement
-    in _figure_placeholder_text reads the `width` attribute that pass
+    Must run before _strip_presentational_attrs: both _is_argument_figure
+    and _figure_placeholder_text read the `width` attribute that pass
     later strips (see this module's docstring on _PRESENTATIONAL_ATTRS and
-    clean_document's ordering comments). For the small subset that
-    qualifies, the <img> is replaced with a small, textual placeholder
-    element (see _figure_placeholder_text) rather than simply removed, so
-    it keeps its place in the document's flow like any other line; every
+    clean_document's ordering comments) - the width gate silently never
+    firing is exactly the failure mode charts.md warns this ordering
+    guards against. A kept image is left exactly as-is here (its own
+    width/height/style still get stripped by the later, unconditional
+    pass, same as any other retained tag; render.py's CSS caps its display
+    width instead - see that module). For the smaller, non-overlapping
+    subset _figure_placeholder_text recognises among what is NOT kept, the
+    <img> is replaced with a small, textual placeholder element so it
+    keeps its place in the document's flow like any other line; every
     other image is decomposed exactly as before.
     """
     dropped = []
+    kept = 0
     for image in root.find_all("img"):
         src = image.get("src", "")
+        if _is_argument_figure(image):
+            kept += 1
+            continue
         placeholder_text = _figure_placeholder_text(image, publication)
         if placeholder_text is None:
-            dropped.append(DroppedImage(src=src, reason=_IMAGES_DEFERRED))
+            dropped.append(DroppedImage(src=src, reason=_IMAGE_DROPPED))
             image.decompose()
             continue
         placeholder = image.new_tag("p", attrs={"class": "figure-placeholder"})
         placeholder.string = placeholder_text
         image.replace_with(placeholder)
         dropped.append(DroppedImage(src=src, reason=_IMAGE_PLACEHOLDER))
-    return 0, tuple(dropped)
+    return kept, tuple(dropped)
 
 
 def _is_protected_heading(block: Tag, text: str) -> bool:
@@ -386,6 +486,21 @@ def _strip_chrome_blocks(root: Tag) -> tuple[DroppedBlock, ...]:
     at the top, and unsubscribe blocks at the bottom. Every removal is
     reported, the way trim.py reports a dropped cell, so a wrong removal is
     visible rather than invisible.
+
+    The empty-text branch below predates Phase 8 (charts.md) and was
+    written when every image had already been resolved by _strip_images
+    before this function ever ran - a top-level block with no text was
+    always dead layout scaffolding. That is no longer true: a kept
+    argument figure has no text of its own either, and it, or a table
+    wrapping only it, can easily be root's own direct child (a chart is
+    rarely the very last thing in its own <p>). `block.find("img")` is
+    unambiguous at this point in the pipeline - _strip_images has already
+    run, so the only <img> tags left anywhere are the ones it decided to
+    keep - so this is the third place (with _is_argument_figure's own
+    width-before-stripping ordering, and _has_visible_text below) that
+    would otherwise silently undo a keep decision this module just made.
+    Found the same way as the other two: by reading this pass's own logic
+    against the new keep-path, not by a failing test surfacing it first.
     """
     dropped: list[DroppedBlock] = []
     for block in list(root.children):
@@ -393,6 +508,8 @@ def _strip_chrome_blocks(root: Tag) -> tuple[DroppedBlock, ...]:
             continue
         text = "\n".join(_rendered_lines(block))
         if not text:
+            if block.name == "img" or block.find("img") is not None:
+                continue
             block.decompose()
             continue
         if _is_protected_heading(block, text):
@@ -905,7 +1022,17 @@ def _has_visible_text(tag: Tag) -> bool:
 
     An element with literally no text at all - the empty <td> a spacer
     or an already-image-stripped placeholder leaves behind - is never
-    kept. Beyond that, ordinary whitespace is deliberately left alone
+    kept, UNLESS it contains a kept <img> (Phase 8, charts.md): an image
+    _strip_images decided to keep as an author's own figure has no text
+    of its own, and neither does a <td> or <a> that wraps only that image,
+    so an unqualified "no text -> no visible content" reading would delete
+    the very thing _strip_images just spent a whole rule deciding to keep
+    - not by the rule failing to fire (the width/height ordering trap
+    charts.md warns about), but by a *later*, unrelated pass undoing a
+    rule that fired correctly. Found by reading this pass's own logic
+    against the new keep-path, not by a failing test surfacing it first;
+    see test_a_kept_image_alone_in_its_cell_is_not_pruned_as_invisible.
+    Beyond that, ordinary whitespace is deliberately left alone
     even when it is a tag's *entire* content, however much of it there
     is: it has real rendered width and can be there on purpose - most
     concretely, syntax-highlighted code wraps each token in its own
@@ -926,7 +1053,7 @@ def _has_visible_text(tag: Tag) -> bool:
     """
     text = tag.get_text()
     if not text:
-        return False
+        return tag.find("img") is not None
     if re.sub(rf"[\s{re.escape(_INVISIBLE_CHARS)}]+", "", text):
         return True
     return not any(char in _INVISIBLE_CHARS for char in text)
@@ -940,9 +1067,16 @@ def _prune_invisible_elements(root: Tag) -> int:
     content, headline, dateline, or byline, so there is no threshold and
     no heading guard to apply - the guard exists to protect short
     genuine text from being *mis-scored*, and there is no text here to
-    mis-score. <br> and <hr> are the sole exceptions: both are
-    legitimately textless and carry real meaning (a line break, a rule),
-    so they are never removed for having no text.
+    mis-score. <br>, <hr>, and <img> are the exceptions: <br>/<hr> are
+    legitimately textless and carry real meaning (a line break, a rule);
+    <img> is legitimately textless too, and _has_visible_text's own
+    `tag.find("img")` check protects a *container* wrapping a kept image,
+    but that check looks at descendants, not the tag itself - the <img>
+    element is itself one of the tags find_all(True) visits directly, so
+    it needs its own exemption here the same way <br>/<hr> do (Phase 8,
+    charts.md: before this, every image had already been resolved to a
+    decision by _strip_images, so any <img> reaching this pass was
+    unreachable; now a kept one survives all the way to render.py).
 
     Runs last, after every other pass, so it prunes whatever those passes
     left behind rather than racing them - removing an empty cell earlier
@@ -969,7 +1103,7 @@ def _prune_invisible_elements(root: Tag) -> int:
     """
     removed = 0
     for tag in root.find_all(True):
-        if tag.name in ("br", "hr"):
+        if tag.name in ("br", "hr", "img"):
             continue
         if not _has_visible_text(tag):
             tag.decompose()

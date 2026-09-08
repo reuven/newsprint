@@ -23,6 +23,14 @@ class Built:
     pdf: Path
     cells: int
     verdict: Verdict
+    # A kept image (clean.py's own _is_argument_figure) that failed to
+    # fetch or decode at render time - reported distinctly from an
+    # ordinary drop, which happens earlier, in clean.py, and never
+    # produces a Failure or reaches this field at all. Deduplicated:
+    # trim.fit's compression retries re-render the same document, so the
+    # same dead URL failing on every attempt is reported once, not once
+    # per attempt.
+    image_fetch_failures: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +86,27 @@ def build_one(
         count = teaser_word_count(cleaned)
         if count < config.packet.min_words:
             raise TeaserSkippedError(count, config.packet.min_words)
-        pdf = render_fn(cleaned, config, out_dir=document_dir)
+        # Threaded into every render_fn call below for this one document -
+        # including trim.fit's compression retries, which re-render the
+        # same cleaned document and so may re-attempt the same fetch.
+        # render()'s own contract is to *append* to image_fetch_failures,
+        # never replace it (see render.py's docstring), so one shared list
+        # across every attempt is exactly the accumulation this needs;
+        # deduplication happens once, below, when building Built.
+        # image_cache is the other half of the same sharing: measured
+        # live against the real starred queue, a document needing a
+        # compression retry was fetching the same chart URL up to 3 times
+        # over before this existed - see render._fetch_and_process's own
+        # docstring for the exact numbers.
+        image_fetch_failures: list[str] = []
+        image_cache: dict[str, bytes | None] = {}
+        pdf = render_fn(
+            cleaned,
+            config,
+            out_dir=document_dir,
+            image_fetch_failures=image_fetch_failures,
+            image_cache=image_cache,
+        )
         fitted, verdict = fit(
             pdf,
             config.printing.paper,
@@ -90,7 +118,12 @@ def build_one(
             # keeps the lint clean.
             rerender=lambda compression, cleaned=cleaned, document_dir=document_dir: (
                 render_fn(
-                    cleaned, config, compression=compression, out_dir=document_dir
+                    cleaned,
+                    config,
+                    compression=compression,
+                    out_dir=document_dir,
+                    image_fetch_failures=image_fetch_failures,
+                    image_cache=image_cache,
                 )
             ),
         )
@@ -99,6 +132,7 @@ def build_one(
             pdf=fitted,
             cells=page_count(fitted),
             verdict=verdict,
+            image_fetch_failures=tuple(dict.fromkeys(image_fetch_failures)),
         )
     except Exception as error:  # noqa: BLE001 - one bad newsletter must not stop the run
         return Failure(document=document, error=error)
