@@ -27,6 +27,24 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     # largest teaser (124) from the smallest real article (514), so 250
     # sits comfortably in the middle with no tuning required.
     "packet": {"title": "", "min_words": 250},
+    # Off by default: the tool must work with no API key, no network, and no
+    # configuration, exactly as it did before this section existed. The key
+    # itself is never stored here - only where to find it. api_key_file and
+    # api_key_var name a generic dotenv path and variable name, not any
+    # particular person's file; ~ is expanded at load time in load_config().
+    "summary": {
+        "enabled": False,
+        "api_key_file": "~/.env",
+        "api_key_var": "ANTHROPIC_API_KEY",
+        "model": "claude-opus-5",
+        # 40k input tokens is a realistic packet size, and a non-streaming
+        # request over that much input can sit idle for a while during
+        # the model's own thinking before any bytes come back - measured
+        # against the live queue, 60s was not always enough. summarize.py
+        # calls the API streamed, which avoids the idle-timeout failure
+        # mode; this is headroom for the streamed call's total wall time.
+        "timeout_seconds": 120.0,
+    },
 }
 
 
@@ -46,6 +64,9 @@ _SECTION_KEYS: dict[str, frozenset[str]] = {
     "layout": frozenset({"margin_mm", "font_size_pt", "line_height"}),
     "window": frozenset({"fallback_days"}),
     "packet": frozenset({"title", "min_words"}),
+    "summary": frozenset(
+        {"enabled", "api_key_file", "api_key_var", "model", "timeout_seconds"}
+    ),
 }
 
 
@@ -92,12 +113,30 @@ class PacketConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SummaryConfig:
+    """Where to find the API key, never the key itself.
+
+    api_key_file and api_key_var say which file and which variable name to
+    read the Claude API key from at run time - the key never appears in
+    this dataclass, in config.toml, or anywhere else tracked. See
+    summarize.read_api_key().
+    """
+
+    enabled: bool
+    api_key_file: Path
+    api_key_var: str
+    model: str
+    timeout_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     mail: MailConfig
     printing: PrintConfig
     layout: LayoutConfig
     fallback_days: int
     packet: PacketConfig
+    summary: SummaryConfig
     path: Path
 
     def require_mail(self) -> None:
@@ -161,6 +200,13 @@ def load_config(
             layout=LayoutConfig(**data["layout"]),
             fallback_days=data["window"]["fallback_days"],
             packet=PacketConfig(**data["packet"]),
+            summary=SummaryConfig(
+                enabled=data["summary"]["enabled"],
+                api_key_file=Path(data["summary"]["api_key_file"]).expanduser(),
+                api_key_var=data["summary"]["api_key_var"],
+                model=data["summary"]["model"],
+                timeout_seconds=data["summary"]["timeout_seconds"],
+            ),
             path=path,
         )
     except (ValueError, TypeError, tomllib.TOMLDecodeError) as error:

@@ -32,6 +32,11 @@ def test_missing_file_yields_structural_defaults(tmp_path: Path) -> None:
     assert config.fallback_days == 7
     assert config.packet.title == ""
     assert config.packet.min_words == 250
+    assert config.summary.enabled is False
+    assert config.summary.api_key_file == Path.home() / ".env"
+    assert config.summary.api_key_var == "ANTHROPIC_API_KEY"
+    assert config.summary.model == "claude-opus-5"
+    assert config.summary.timeout_seconds == pytest.approx(120.0)
 
 
 def test_no_personal_data_hides_in_the_defaults() -> None:
@@ -129,7 +134,7 @@ def test_an_unknown_section_is_rejected(tmp_path: Path) -> None:
         load_config(path)
     message = str(exc_info.value)
     assert "prnt" in message
-    for valid_section in ("mail", "print", "layout", "window", "packet"):
+    for valid_section in ("mail", "print", "layout", "window", "packet", "summary"):
         assert valid_section in message
 
 
@@ -191,6 +196,35 @@ def test_malformed_toml_is_rejected_as_a_config_error(tmp_path: Path) -> None:
     path.write_text("this is not = = valid toml")
     with pytest.raises(ConfigError):
         load_config(path)
+
+
+def test_an_unknown_summary_key_is_rejected(tmp_path: Path) -> None:
+    from shabbat_print.config import ConfigError
+
+    path = tmp_path / "config.toml"
+    path.write_text("[summary]\nenbled = true\n")
+    with pytest.raises(ConfigError, match="enbled"):
+        load_config(path)
+
+
+def test_summary_settings_are_configurable_and_the_home_tilde_is_expanded(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "[summary]\n"
+        "enabled = true\n"
+        'api_key_file = "~/.secrets/anthropic.env"\n'
+        'api_key_var = "MY_KEY"\n'
+        'model = "claude-sonnet-5"\n'
+        "timeout_seconds = 30.0\n"
+    )
+    config = load_config(path)
+    assert config.summary.enabled is True
+    assert config.summary.api_key_file == Path.home() / ".secrets" / "anthropic.env"
+    assert config.summary.api_key_var == "MY_KEY"
+    assert config.summary.model == "claude-sonnet-5"
+    assert config.summary.timeout_seconds == pytest.approx(30.0)
 
 
 def test_publication_names_default_to_empty(tmp_path: Path) -> None:

@@ -1,3 +1,4 @@
+import re
 from datetime import UTC
 from pathlib import Path
 from typing import ClassVar, Self
@@ -1128,7 +1129,7 @@ def test_contents_non_convergence_is_reported_not_silently_shipped(
     )
     monkeypatch.setattr(
         "shabbat_print.cli.build_contents",
-        lambda built, config, date, out_dir: (None, False),
+        lambda built, config, date, out_dir, summary_cells=0: (None, False),
     )
 
     result = CliRunner().invoke(
@@ -1159,3 +1160,304 @@ def test_a_successful_run_opens_the_pdf_in_preview(monkeypatch, tmp_path: Path) 
     assert result.exit_code == 0
     assert len(opened) == 1
     assert opened[0][:2] == ["open", "-a"]
+
+
+def test_summary_disabled_by_default_never_touches_build_summary_pages(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The tracked default is [summary].enabled = false - main() must not
+    even call build_summary_pages, let alone read a key or hit the
+    network, so a run with no such config section behaves exactly as it
+    did before this feature existed."""
+
+    def explode(*args, **kwargs):
+        raise AssertionError("build_summary_pages must not be called when disabled")
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr("shabbat_print.cli.build_summary_pages", explode)
+
+    result = CliRunner().invoke(
+        main,
+        ["--dry-run", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+    )
+    assert result.exit_code == 0
+    assert "Summary" not in result.output
+
+
+def _summary_config(tmp_path: Path) -> Path:
+    path = tmp_path / "config.toml"
+    path.write_text("[summary]\nenabled = true\n")
+    return path
+
+
+def test_summary_enabled_success_inserts_pages_and_reports_cost(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A successful call must insert the returned pages into the packet
+    (shifting cell counts and sheets accordingly) and report elapsed time
+    and token counts on stdout."""
+    import pymupdf
+
+    from shabbat_print.summarize import SummaryOutcome
+
+    def fake_page(name: str) -> Path:
+        path = tmp_path / f"{name}.pdf"
+        with pymupdf.open() as pdf:
+            page = pdf.new_page(width=200, height=300)
+            page.insert_text((20, 20), name)
+            pdf.save(path)
+        return path
+
+    from shabbat_print.models import Document, Origin, Verdict
+    from shabbat_print.pipeline import Built
+
+    def fake_built(name: str) -> Built:
+        return Built(
+            document=Document(
+                origin=Origin(kind="url", identifier=name),
+                publication="Summary",
+                title=name,
+                date=_queued().date,
+                html="<p>x</p>",
+            ),
+            pdf=fake_page(name),
+            cells=1,
+            verdict=Verdict.FULL,
+        )
+
+    summary_pages = (fake_built("summary-topics"), fake_built("summary-candidates"))
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.build_summary_pages",
+        lambda built, config, packet_date, out_dir: SummaryOutcome(
+            pages=summary_pages,
+            reason=None,
+            elapsed_seconds=2.5,
+            input_tokens=4000,
+            output_tokens=150,
+        ),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--dry-run",
+            "--no-preview",
+            "--config",
+            str(_summary_config(tmp_path)),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Summary: 2 page(s) in 2.5s" in result.output
+    assert "4000 in / 150 out tokens" in result.output
+    assert "Summary skipped" not in result.output
+
+
+def test_summary_success_without_token_counts_omits_the_token_clause(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Not every SDK response exposes usage - the reported line must still
+    make sense (page count and elapsed time) without a dangling token
+    clause when input_tokens/output_tokens are unavailable."""
+    import pymupdf
+
+    from shabbat_print.models import Document, Origin, Verdict
+    from shabbat_print.pipeline import Built
+    from shabbat_print.summarize import SummaryOutcome
+
+    path = tmp_path / "summary-topics.pdf"
+    with pymupdf.open() as pdf:
+        pdf.new_page(width=200, height=300)
+        pdf.save(path)
+    page = Built(
+        document=Document(
+            origin=Origin(kind="url", identifier="summary-topics"),
+            publication="Summary",
+            title="Topics",
+            date=_queued().date,
+            html="<p>x</p>",
+        ),
+        pdf=path,
+        cells=1,
+        verdict=Verdict.FULL,
+    )
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.build_summary_pages",
+        lambda built, config, packet_date, out_dir: SummaryOutcome(
+            pages=(page,),
+            reason=None,
+            elapsed_seconds=1.5,
+            input_tokens=None,
+            output_tokens=None,
+        ),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--dry-run",
+            "--no-preview",
+            "--config",
+            str(_summary_config(tmp_path)),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Summary: 1 page(s) in 1.5s" in result.output
+    assert "tokens" not in result.output
+
+
+def test_summary_failure_is_reported_on_stdout_and_the_packet_still_prints(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Degradation is not optional: any failure must still let the packet
+    print, with one clear line on stdout (not stderr) saying why."""
+    from shabbat_print.summarize import SummaryOutcome
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.build_summary_pages",
+        lambda built, config, packet_date, out_dir: SummaryOutcome(
+            pages=(),
+            reason="no API key: /tmp/nowhere.env does not exist",
+            elapsed_seconds=0.01,
+            input_tokens=None,
+            output_tokens=None,
+        ),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--dry-run",
+            "--no-preview",
+            "--config",
+            str(_summary_config(tmp_path)),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Summary skipped: no API key" in result.output
+    # Reported on stdout, not stderr - CliRunner mixes them by default, so
+    # assert directly against the exception-free, successful completion
+    # instead: the run must finish and still produce a packet.
+    assert "Dry run" in result.output
+
+
+def test_an_empty_summary_outcome_prints_no_summary_line_at_all(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A successful call that honestly found nothing worth reporting (both
+    lists empty) is not a failure and must not be announced as either a
+    success or a skip - it simply adds nothing."""
+    from shabbat_print.summarize import SummaryOutcome
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.build_summary_pages",
+        lambda built, config, packet_date, out_dir: SummaryOutcome(
+            pages=(),
+            reason=None,
+            elapsed_seconds=1.0,
+            input_tokens=500,
+            output_tokens=10,
+        ),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--dry-run",
+            "--no-preview",
+            "--config",
+            str(_summary_config(tmp_path)),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Summary" not in result.output
+
+
+_TOTAL_CELLS_RE = re.compile(r"(\d+) cells - ")
+
+
+def test_summary_pages_shift_the_contents_starting_numbers(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """End to end: two 1-cell summary pages ahead of the contents-numbered
+    newsletters must add exactly 2 to the packet's total cell count versus
+    the same run with summary disabled - the fixed-point interaction the
+    spec calls out as the riskiest part of this feature."""
+    import pymupdf
+
+    from shabbat_print.models import Document, Origin, Verdict
+    from shabbat_print.pipeline import Built
+    from shabbat_print.summarize import SummaryOutcome
+
+    def fake_page(name: str) -> Path:
+        path = tmp_path / f"{name}.pdf"
+        with pymupdf.open() as pdf:
+            pdf.new_page(width=200, height=300)
+            pdf.save(path)
+        return path
+
+    def fake_built(name: str) -> Built:
+        return Built(
+            document=Document(
+                origin=Origin(kind="url", identifier=name),
+                publication="Summary",
+                title=name,
+                date=_queued().date,
+                html="<p>x</p>",
+            ),
+            pdf=fake_page(name),
+            cells=1,
+            verdict=Verdict.FULL,
+        )
+
+    summary_pages = (fake_built("summary-topics"), fake_built("summary-candidates"))
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+
+    baseline = CliRunner().invoke(
+        main,
+        ["--dry-run", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+    )
+    assert baseline.exit_code == 0
+    baseline_cells = int(_TOTAL_CELLS_RE.search(baseline.output).group(1))
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.build_summary_pages",
+        lambda built, config, packet_date, out_dir: SummaryOutcome(
+            pages=summary_pages,
+            reason=None,
+            elapsed_seconds=0.1,
+            input_tokens=1,
+            output_tokens=1,
+        ),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--dry-run",
+            "--no-preview",
+            "--config",
+            str(_summary_config(tmp_path)),
+        ],
+    )
+    assert result.exit_code == 0
+    summary_cells = int(_TOTAL_CELLS_RE.search(result.output).group(1))
+    assert summary_cells == baseline_cells + 2

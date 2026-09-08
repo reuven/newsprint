@@ -54,11 +54,16 @@ _ELLIPSIS = "…"
 _SUBJECT_FIT_SAFETY = 0.75
 
 
-def _starting_cells(built: Sequence[Built], contents_cells: int) -> list[int]:
+def _starting_cells(
+    built: Sequence[Built], contents_cells: int, summary_cells: int = 0
+) -> list[int]:
     """Each newsletter's first packet cell number, assuming the contents
-    page occupies exactly `contents_cells` cells at the very front."""
+    page occupies exactly `contents_cells` cells at the very front, and the
+    (already-generated, already fixed-length) summary pages occupy
+    `summary_cells` cells right after it - see build_contents for why the
+    summary is never part of this function's own fixed point."""
     starts: list[int] = []
-    offset = contents_cells
+    offset = contents_cells + summary_cells
     for item in built:
         starts.append(offset + 1)
         offset += item.cells
@@ -183,6 +188,7 @@ def build_contents(
     packet_date: date,
     out_dir: Path,
     render_fn: Callable[..., Path] = render,
+    summary_cells: int = 0,
 ) -> tuple[Built | None, bool]:
     """Render the contents page, iterating to a fixed point on its own
     length.
@@ -196,12 +202,20 @@ def build_contents(
     Built and True. If it never settles within the cap, returns (None,
     False) rather than ship numbers nobody can trust - a missing contents
     page is a smaller problem than a wrong one.
+
+    summary_cells is the cell count of the generated summary pages
+    (summarize.py), which sit between contents and the first newsletter.
+    It is a plain addend, not a second fixed point: the summary is
+    generated first and its length does not depend on any number contents
+    prints, so there is nothing here to iterate on. It shifts every
+    starting-cell number and the total exactly the way contents' own
+    assumed length does - see _starting_cells.
     """
     newsletters_cells = sum(item.cells for item in built)
     assumed = 1
     for attempt in range(CONVERGENCE_CAP):
-        starts = _starting_cells(built, assumed)
-        total_cells = assumed + newsletters_cells
+        starts = _starting_cells(built, assumed, summary_cells)
+        total_cells = assumed + summary_cells + newsletters_cells
         document = _contents_document(built, starts, packet_date, total_cells, config)
         pdf = render_fn(
             document,

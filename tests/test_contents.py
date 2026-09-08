@@ -280,6 +280,39 @@ def test_an_empty_packet_title_renders_nothing_on_the_contents_page(
     assert config.packet.title == ""
 
 
+def test_summary_cells_shift_the_starting_numbers_too(config, tmp_path: Path) -> None:
+    """summary_cells stands in for pages (the generated summary) that sit
+    between contents and the first newsletter - contents must count them
+    into every starting-cell number and into its own total, without
+    running a second fixed point over them."""
+    built = [_built(0, cells=3), _built(1, cells=3)]
+    result, converged = build_contents(
+        built, config, PACKET_DATE, tmp_path, summary_cells=2
+    )
+    assert converged
+    assert result is not None
+    assert result.cells == 1
+    text = page_text(result.pdf, 0)
+    starts = re.findall(r"^(\d+)\s+Newsletter", text, re.MULTILINE)
+    # 1 (contents) + 2 (summary) = 3, so the first newsletter starts at 4.
+    assert starts == ["4", "7"]
+    assert "9 cells" in text  # 1 contents + 2 summary + 6 newsletter cells
+
+
+def test_summary_cells_default_to_zero_and_change_nothing(
+    config, tmp_path: Path
+) -> None:
+    """With the feature disabled, summary_cells is never passed - the
+    default of 0 must reproduce today's numbers exactly."""
+    built = [_built(0, cells=3), _built(1, cells=3)]
+    result, converged = build_contents(built, config, PACKET_DATE, tmp_path)
+    assert converged
+    assert result is not None
+    text = page_text(result.pdf, 0)
+    starts = re.findall(r"^(\d+)\s+Newsletter", text, re.MULTILINE)
+    assert starts == ["2", "5"]
+
+
 def test_non_convergence_within_the_cap_reports_rather_than_hangs(
     config, tmp_path: Path
 ) -> None:

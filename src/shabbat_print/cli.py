@@ -30,6 +30,7 @@ from .models import Document, Verdict
 from .pipeline import Built, Failure, TeaserSkippedError, build_one
 from .printer import PrintError, spool
 from .stamp import stamp_packet
+from .summarize import build_summary_pages
 
 
 def fetch_queue(config: Config) -> tuple[list[Document], str | None]:
@@ -211,13 +212,44 @@ def main(
         return
 
     packet_date = datetime.now(UTC).date()
+
+    summary_pages: list[Built] = []
+    if config.summary.enabled:
+        outcome = build_summary_pages(built, config, packet_date, work_dir / "summary")
+        summary_pages = list(outcome.pages)
+        if outcome.reason is not None:
+            # H3: degradation is not optional - no key, no network, an API
+            # error, a malformed response, or a timeout must all still let
+            # the packet print, just without these two pages. Reported on
+            # stdout (not stderr), the same channel as every other line
+            # describing what this run actually did.
+            click.echo(
+                f"  Summary skipped: {outcome.reason} "
+                f"(after {outcome.elapsed_seconds:.1f}s)"
+            )
+        elif summary_pages:
+            tokens = ""
+            if outcome.input_tokens is not None and outcome.output_tokens is not None:
+                tokens = (
+                    f", {outcome.input_tokens} in / {outcome.output_tokens} out tokens"
+                )
+            click.echo(
+                f"  Summary: {len(summary_pages)} page(s) in "
+                f"{outcome.elapsed_seconds:.1f}s{tokens}"
+            )
+
+    summary_cells = sum(item.cells for item in summary_pages)
     contents_built, contents_converged = build_contents(
-        built, config, packet_date, work_dir / "contents"
+        built,
+        config,
+        packet_date,
+        work_dir / "contents",
+        summary_cells=summary_cells,
     )
     if contents_built is not None:
-        packet_built = [contents_built, *built]
+        packet_built = [contents_built, *summary_pages, *built]
     else:
-        packet_built = list(built)
+        packet_built = [*summary_pages, *built]
     if not contents_converged:
         click.echo(
             "  Contents: could not compute reliable starting cell numbers "
