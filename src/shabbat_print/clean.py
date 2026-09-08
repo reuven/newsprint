@@ -337,6 +337,38 @@ def _is_protected_heading(block: Tag, text: str) -> bool:
       line of prose is spared too, *unless* that line is itself a
       confident chrome signal (a known phrase, or a bare URL) - a phrase
       match like "Unsubscribe" must still be removed however short it is.
+
+    Known, documented gap (found while fixing the derive-chrome spec's
+    part B, the get_text("\\n", ...) line-fragmentation bug - see
+    _rendered_lines): this only protects a single line UNDER SHORT_LINE.
+    A block or leaf that is a single line LONGER than that - a real,
+    substantial sentence that happens to mention a PHRASES word once in
+    passing ("...there is an unsubscribe link somewhere below...") - gets
+    no such protection, and content_ratio (whose per-line scoring is
+    otherwise "one bad line among several good lines just lowers a
+    block's score, never deletes anything", see is_definite_chrome_line's
+    docstring) has nothing else to dilute against when there is only the
+    one line. This was already true before the part B fix, confirmed by
+    hand against a version of the adversarial sentence with no inline
+    tags at all - fragmentation only ever accidentally shielded the
+    tagged case, never fixed the underlying gap - and is unaffected by
+    that fix in either direction. It costs nothing across the 268-fixture
+    corpus (see the derive-chrome measurement: zero real newsletters are
+    shaped like "a single paragraph and nothing else"), and no safe
+    general fix was found: widening this guard to any single line (not
+    just a short one) was tried and reverted, because it also spares
+    genuine one-paragraph disclosure footers ("You received this email
+    because you signed up for newsletters from Axios...") that must still
+    be removed and have no other line to be diluted against either - the
+    same shape as the sentence this gap is about, just with the opposite
+    correct answer. Like the "Have a great weekend, / Jon" gap in
+    boilerplate.py's PHRASES comment, this is left as a documented risk
+    rather than patched with an untested heuristic; see
+    test_leaf_tags_are_kept_whole_not_fragmented for how the tests handle
+    it (a lone paragraph with nothing around it is not how any real
+    newsletter in the corpus is shaped, so the test uses a realistic
+    multi-paragraph document instead of asserting a guarantee that was
+    never actually available).
     """
     if block.find(_HEADING_TAGS) is not None:
         return True
@@ -359,7 +391,7 @@ def _strip_chrome_blocks(root: Tag) -> tuple[DroppedBlock, ...]:
     for block in list(root.children):
         if not isinstance(block, Tag):
             continue
-        text = block.get_text("\n", strip=True)
+        text = "\n".join(_rendered_lines(block))
         if not text:
             block.decompose()
             continue
@@ -424,7 +456,7 @@ def _strip_trailing_chrome_run(root: Tag) -> tuple[DroppedBlock, ...]:
     leaves = list(_iter_text_elements(root))
     removed: list[tuple[Tag, str]] = []
     for leaf in reversed(leaves):
-        text = leaf.get_text("\n", strip=True)
+        text = "\n".join(_rendered_lines(leaf))
         if _is_protected_heading(leaf, text) or content_ratio(text) >= CHROME_RATIO:
             break
         removed.append((leaf, text))
@@ -463,7 +495,7 @@ def _strip_leading_chrome_run(root: Tag) -> tuple[DroppedBlock, ...]:
     leaves = list(_iter_text_elements(root))
     removed: list[tuple[Tag, str]] = []
     for leaf in leaves:
-        text = leaf.get_text("\n", strip=True)
+        text = "\n".join(_rendered_lines(leaf))
         if _is_protected_heading(leaf, text) or content_ratio(text) >= CHROME_RATIO:
             break
         removed.append((leaf, text))
@@ -537,6 +569,62 @@ def _is_standalone_line(node: Tag | NavigableString) -> bool:
         if not isinstance(parent, Tag) or parent.name not in _INLINE_TAGS:
             return True
         current = parent
+
+
+def _rendered_lines(tag: Tag) -> list[str]:
+    """`tag`'s text, split into lines the way a browser actually renders
+    it: a new line starts only at a genuine block boundary - an explicit
+    <br>, or a non-inline tag (_is_line_boundary, already used by
+    _is_standalone_line for the same "what shares a rendered line" idea) -
+    never at an inline tag's own start or end.
+
+    This replaces plain `tag.get_text("\\n", strip=True)`, which inserts
+    its separator between every text fragment bs4 finds regardless of the
+    tag structure between them - so a single sentence broken up by <em>,
+    <a>, or <strong> (e.g. "...in France, and later in Spain") was coming
+    out as several separate pseudo-lines ("in France", ", and later", "in
+    Spain"), each short and unpunctuated enough for is_boilerplate_line's
+    short-line fallback to score it as chrome on its own. That degraded
+    content_ratio for every block containing ordinary inline markup,
+    throughout this module and in scripts/derive_chrome.py, which walks
+    the same cleaned output looking for chrome by frequency (derive-chrome
+    spec, part B).
+
+    Implemented as an explicit stack of open lines rather than reusing
+    get_text: only a text-accumulation pass that tracks "am I inside a
+    line-starting element right now" can tell an inline tag's boundary
+    apart from a block one, and bs4's own separator-joining has no such
+    concept.
+    """
+    lines: list[str] = []
+    current: list[str] = []
+
+    def flush() -> None:
+        text = "".join(current).strip()
+        if text:
+            lines.append(text)
+        current.clear()
+
+    def walk(node: Tag | NavigableString) -> None:
+        if isinstance(node, NavigableString):
+            current.append(str(node))
+            return
+        # tag.children only ever yields Tag or NavigableString (and
+        # NavigableString subclasses, e.g. Comment) - nothing else reaches
+        # this branch, so `node` is a Tag here with no further check
+        # needed.
+        boundary = _is_line_boundary(node)
+        if boundary:
+            flush()
+        for child in node.children:
+            walk(child)
+        if boundary:
+            flush()
+
+    for child in tag.children:
+        walk(child)
+    flush()
+    return lines
 
 
 def _strip_line_chrome(root: Tag) -> tuple[DroppedBlock, ...]:

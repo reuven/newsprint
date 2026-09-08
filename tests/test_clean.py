@@ -362,13 +362,127 @@ def test_an_all_chrome_document_comes_back_empty() -> None:
     assert clean_document(document(html)).html.strip() == ""
 
 
-def test_leaf_tags_are_kept_whole_not_fragmented() -> None:
-    """A paragraph must not be torn apart looking for its worst line."""
+# Part B of the 2026-09-07 derive-chrome spec: get_text("\n", strip=True)
+# inserts a separator between every text fragment bs4 finds, including
+# fragments split apart only by an inline tag like <em>/<a>/<strong> - so a
+# single flowing sentence like "...in France, and later in Spain" was being
+# torn into several pseudo-"lines" ("in France", ", and later", "in Spain")
+# purely because of inline markup, well before is_boilerplate_line ever
+# sees it. _rendered_lines is the fix: lines split at true block
+# boundaries (a block-level tag, or an explicit <br>) as the existing
+# _is_line_boundary predicate already defines for _is_standalone_line,
+# never at an inline tag's own start or end.
+def test_inline_tags_do_not_fragment_a_rendered_line() -> None:
+    from bs4 import BeautifulSoup
+
+    from shabbat_print.clean import _rendered_lines
+
     html = (
-        "<html><body><div><p>The chapter closes on a long, thoughtful note "
+        "<div><p>The launch happened first <em>in France</em>, and later "
+        '<a href="https://example.com/x">in Spain</a>, before spreading '
+        "everywhere else.</p></div>"
+    )
+    soup = BeautifulSoup(html, "lxml")
+    assert _rendered_lines(soup.div) == [
+        (
+            "The launch happened first in France, and later in Spain, "
+            "before spreading everywhere else."
+        ),
+    ]
+
+
+def test_a_br_still_starts_a_new_rendered_line() -> None:
+    """Unlike an inline tag's own boundary, an explicit <br> is a genuine
+    line break and must still split the text on either side of it."""
+    from bs4 import BeautifulSoup
+
+    from shabbat_print.clean import _rendered_lines
+
+    html = "<div><p>Line one<br>Line two</p></div>"
+    soup = BeautifulSoup(html, "lxml")
+    assert _rendered_lines(soup.div) == ["Line one", "Line two"]
+
+
+def test_block_level_siblings_are_separate_rendered_lines() -> None:
+    """Two sibling <p> tags are two real, separate lines - the fix must
+    not collapse genuine block-level structure along with the inline-tag
+    fragmentation it removes."""
+    from bs4 import BeautifulSoup
+
+    from shabbat_print.clean import _rendered_lines
+
+    html = "<div><p>First paragraph.</p><p>Second paragraph.</p></div>"
+    soup = BeautifulSoup(html, "lxml")
+    assert _rendered_lines(soup.div) == ["First paragraph.", "Second paragraph."]
+
+
+def test_rendered_lines_of_an_empty_tag_is_empty() -> None:
+    from bs4 import BeautifulSoup
+
+    from shabbat_print.clean import _rendered_lines
+
+    html = "<div>   </div>"
+    soup = BeautifulSoup(html, "lxml")
+    assert _rendered_lines(soup.div) == []
+
+
+def test_inline_fragmentation_no_longer_scores_a_sentence_as_chrome() -> None:
+    """The concrete harm named in the derive-chrome spec, part B: because
+    is_boilerplate_line treats any line under 40 characters without
+    terminal punctuation as chrome, a sentence fragmented at inline tag
+    boundaries produced several such short, unpunctuated "lines" purely as
+    an artifact of markup - degrading content_ratio for a block that is,
+    read as a whole, ordinary prose. This reproduces that mechanism
+    directly and confirms the fix restores a content_ratio of 1.0 for text
+    that is entirely real prose, however many inline tags interrupt it."""
+    from bs4 import BeautifulSoup
+
+    from shabbat_print.boilerplate import content_ratio
+    from shabbat_print.clean import _rendered_lines
+
+    names = ["Chen", "Okafor", "Silva", "Park", "Novak", "Haddad", "Liu"]
+    links = ", ".join(f"<a>{name}</a>" for name in names)
+    html = (
+        f"<div><p>The report cites work from {links}, each of whom "
+        "contributed a distinct strand of evidence to the final published "
+        "study.</p></div>"
+    )
+    soup = BeautifulSoup(html, "lxml")
+    text = "\n".join(_rendered_lines(soup.div))
+    assert content_ratio(text) == pytest.approx(1.0)
+
+
+def test_leaf_tags_are_kept_whole_not_fragmented() -> None:
+    """A paragraph must not be torn apart looking for its worst line.
+
+    Placed among two other real paragraphs in the same containing block,
+    the way an actual article body reads - not as the newsletter's *only*
+    content. That distinction matters after the derive-chrome spec's part
+    B fix (inline tags no longer fragment a line): content_ratio's "one
+    bad line among several good lines just lowers a block's score, never
+    deletes anything" promise (see is_definite_chrome_line's docstring)
+    depends on there being several lines to dilute against. A newsletter
+    whose *entire* body is this one paragraph was never covered by that
+    promise - confirmed by hand, with no inline tags at all so B's fix
+    changes nothing about it - and remains a known, documented gap (see
+    the comment above _is_protected_heading) rather than something
+    papered over here.
+    """
+    html = (
+        "<html><body>"
+        "<div><h1>Headline</h1></div>"
+        "<div>"
+        "<p>The opening paragraph lays out the news of the week in plenty "
+        "of detail, giving readers enough context to follow along.</p>"
+        "<p>The chapter closes on a long, thoughtful note "
         "about markets and memory, and if it moved you at all, there is an "
         '<a href="https://example.com/u">unsubscribe</a> link somewhere '
-        "below, which almost nobody ever clicks.</p></div></body></html>"
+        "below, which almost nobody ever clicks.</p>"
+        "<p>The newsletter then continues for several more paragraphs of "
+        "real analysis, wrapping up with a closing thought about what "
+        "comes next for readers who made it this far.</p>"
+        "</div>"
+        "</body></html>"
     )
     cleaned = clean_document(document(html))
     assert "unsubscribe" in cleaned.html
@@ -682,15 +796,27 @@ def test_a_bare_inline_chrome_link_that_stands_alone_is_removed() -> None:
 
 def test_an_inline_chrome_word_embedded_in_a_real_sentence_survives() -> None:
     """The adversarial case F3 exists to avoid: 'unsubscribe' as one word
-    inside a real sentence, not a line by itself, must not be touched -
-    matches the existing leaf-level protection in
-    test_leaf_tags_are_kept_whole_not_fragmented, now also checked against
-    the new whole-document line pass."""
+    inside a real sentence, not a line by itself, must not be touched by
+    _strip_line_chrome's whole-document pass - matches the existing
+    leaf-level protection in test_leaf_tags_are_kept_whole_not_fragmented,
+    including that test's same real-document shape (see its docstring for
+    why a lone paragraph, with no other content around it, is a separate,
+    documented gap rather than what this checks)."""
     html = (
-        "<html><body><div><p>The chapter closes on a long, thoughtful note "
+        "<html><body>"
+        "<div><h1>Headline</h1></div>"
+        "<div>"
+        "<p>The opening paragraph lays out the news of the week in plenty "
+        "of detail, giving readers enough context to follow along.</p>"
+        "<p>The chapter closes on a long, thoughtful note "
         "about markets and memory, and if it moved you at all, there is an "
         '<a href="https://example.com/u">unsubscribe</a> link somewhere '
-        "below, which almost nobody ever clicks.</p></div></body></html>"
+        "below, which almost nobody ever clicks.</p>"
+        "<p>The newsletter then continues for several more paragraphs of "
+        "real analysis, wrapping up with a closing thought about what "
+        "comes next for readers who made it this far.</p>"
+        "</div>"
+        "</body></html>"
     )
     cleaned = clean_document(document(html))
     assert "unsubscribe" in cleaned.html
@@ -748,12 +874,29 @@ def test_a_bare_text_node_sharing_a_line_with_real_content_survives() -> None:
     it shares its actual rendered line (the same <br>-delimited run,
     rather than its parent's whole child list) with a real sentence
     continuing right after it with no line break in between, so it must
-    not be pulled out."""
+    not be pulled out by _strip_line_chrome.
+
+    Same real-document shape as test_leaf_tags_are_kept_whole_not_
+    fragmented, and for the same reason (see that test's docstring): the
+    paragraph sits among other real ones rather than being the
+    newsletter's only content, so content_ratio's cross-line dilution -
+    unrelated to the bare-text-node mechanism this test actually
+    exercises - has real other lines to dilute against.
+    """
     html = (
-        "<html><body><div><p>Please read on.<br>Unsubscribe"
+        "<html><body>"
+        "<div><h1>Headline</h1></div>"
+        "<div>"
+        "<p>The opening paragraph lays out the news of the week in plenty "
+        "of detail, giving readers enough context to follow along.</p>"
+        "<p>Please read on.<br>Unsubscribe"
         "<span> is not the only way to leave a mailing list, our editor "
         "explained in detail near the end of the letter.</span></p>"
-        "</div></body></html>"
+        "<p>The newsletter then continues for several more paragraphs of "
+        "real analysis, wrapping up with a closing thought about what "
+        "comes next for readers who made it this far.</p>"
+        "</div>"
+        "</body></html>"
     )
     cleaned = clean_document(document(html))
     assert "is not the only way to leave a mailing list" in cleaned.html
