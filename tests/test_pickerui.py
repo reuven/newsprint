@@ -200,3 +200,71 @@ def test_a_narrow_terminal_still_produces_the_same_number_of_choices() -> None:
     )
     _message, choices = calls[0]
     assert len(choices) == 3
+
+
+class _RealLayoutQuestion:
+    """A stub that carries a *real* questionary Question's layout.
+
+    The heading-visibility fix reaches into prompt_toolkit's own object
+    graph, so a hand-rolled fake would prove nothing about it - this
+    builds the genuine application questionary would have built, while
+    keeping .ask() a stub so no event loop or terminal is involved.
+    """
+
+    def __init__(self, message: str, choices) -> None:
+        self.application = questionary.checkbox(message, choices).application
+
+    def ask(self) -> list[Document]:
+        return []
+
+
+def _choice_list_window(question: _RealLayoutQuestion):
+    from prompt_toolkit.layout.containers import Window
+    from questionary.prompts.common import InquirerControl
+
+    windows = [
+        container
+        for container in question.application.layout.walk()
+        if isinstance(container, Window)
+        and isinstance(container.content, InquirerControl)
+    ]
+    assert len(windows) == 1, f"expected one choice-list window, found {len(windows)}"
+    return windows[0]
+
+
+def test_the_group_heading_stays_on_screen_when_the_cursor_reaches_a_first_row() -> (
+    None
+):
+    """Pressing up from the top row and back down used to leave the
+    cursor correct but its publication heading scrolled off, because
+    prompt_toolkit only keeps the cursor line itself visible."""
+    built: list[_RealLayoutQuestion] = []
+
+    def factory(message: str, choices):
+        built.append(_RealLayoutQuestion(message, choices))
+        return built[-1]
+
+    picklist = build_picklist(
+        [_doc("Axios Macro", "New trade stakes", "2026-09-08")], sizes={1: 4096}
+    )
+    questionary_prompt(picklist, checkbox=factory, terminal_size=_fixed_width(100))
+
+    offsets = _choice_list_window(built[0]).scroll_offsets
+    assert offsets.top >= 1, "no context kept above the cursor - heading can scroll off"
+
+
+def test_a_checkbox_that_is_not_questionarys_own_is_left_alone() -> None:
+    """The injected fakes elsewhere in this file are bare stubs with no
+    .application at all; adjusting the layout must not require one."""
+    calls: list[tuple] = []
+    picklist = build_picklist(
+        [_doc("Axios Macro", "New trade stakes", "2026-09-08")], sizes={1: 4096}
+    )
+    assert (
+        questionary_prompt(
+            picklist,
+            checkbox=_fake_checkbox(calls, result=[]),
+            terminal_size=_fixed_width(100),
+        )
+        == []
+    )
