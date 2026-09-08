@@ -48,7 +48,7 @@ class _FakeBox:
     fetch_queue and retire_printed, so those functions can be exercised
     without ever opening a real IMAP connection."""
 
-    instances: ClassVar[list[_FakeBox]] = []
+    instances: ClassVar[list["_FakeBox"]] = []
 
     def __init__(self, **kwargs) -> None:
         self.kwargs = kwargs

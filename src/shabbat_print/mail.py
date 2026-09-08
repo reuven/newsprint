@@ -87,7 +87,7 @@ def _message_count(data: Sequence[bytes | None]) -> int:
     """
     try:
         return int(data[0])
-    except IndexError, TypeError, ValueError:
+    except (IndexError, TypeError, ValueError):
         return 0
 
 
@@ -244,7 +244,7 @@ class Mailbox:
         # rather than silently skipping the close.
         try:
             self._connection.shutdown()
-        except imaplib.IMAP4.error, OSError:
+        except (imaplib.IMAP4.error, OSError):
             # The socket this is closing is the one that just failed, so
             # closing it failing too is the expected case, not an error.
             pass
@@ -280,7 +280,7 @@ class Mailbox:
         if self._imap is not None:
             try:
                 self._imap.logout()
-            except imaplib.IMAP4.error, OSError:
+            except (imaplib.IMAP4.error, OSError):
                 # Closing a connection the server has already closed is a
                 # no-op, not a failure - and raising here would replace
                 # whatever real error sent us out of the block (in the
