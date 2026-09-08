@@ -46,6 +46,23 @@ class MailError(Exception):
     """Something went wrong talking to the mail server."""
 
 
+def _message_count(data: Sequence[bytes | None]) -> int:
+    """The folder's EXISTS count, already carried in the SELECT response.
+
+    imaplib's own select() hands back this count as data[0] - a bytes
+    string of digits, straight off the server's "* <n> EXISTS" line (RFC
+    3501) - so reading it here costs nothing extra: no second round trip
+    (e.g. STATUS) is needed just to report how many messages a folder
+    holds. Falls back to 0 for a well-formed OK reply that nonetheless
+    does not carry a parseable count, rather than crashing an otherwise
+    successful SELECT over a cosmetic number.
+    """
+    try:
+        return int(data[0])
+    except IndexError, TypeError, ValueError:
+        return 0
+
+
 def _quote_mailbox(name: str) -> str:
     """IMAP-quote a mailbox name for use as a raw command argument.
 
@@ -98,16 +115,21 @@ class Mailbox:
         self._folder = folder
         self._factory = imap_factory
         self._imap: imaplib.IMAP4 | None = None
+        # How many messages the folder holds - set by __enter__ from the
+        # SELECT response itself, so a caller reporting progress can show
+        # it without a second round trip. 0 until the folder is opened.
+        self.message_count: int = 0
 
     def __enter__(self) -> Self:
         imap = self._factory(self._host)
         status, _ = imap.login(self._user, self._password)
         if status != "OK":
             raise MailError(f"login failed for {self._user} at {self._host}: {status}")
-        status, _ = imap.select(self._folder, readonly=True)
+        status, data = imap.select(self._folder, readonly=True)
         if status != "OK":
             raise MailError(f"could not open folder {self._folder!r}: {status}")
         self._imap = imap
+        self.message_count = _message_count(data)
         return self
 
     def __exit__(

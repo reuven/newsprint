@@ -20,6 +20,7 @@ from .config import (
     DEFAULT_CONFIG_PATH,
     Config,
     ConfigError,
+    PublicationNames,
     load_config,
     load_publication_names,
 )
@@ -35,15 +36,51 @@ from .stamp import format_packet_date, stamp_packet
 from .summarize import build_summary_pages
 
 
-def fetch_queue(config: Config) -> tuple[list[Document], str | None]:
-    """Fetch the starred messages, read-only, and resolve the Trash folder.
+def _fetch_with_progress(
+    box: Mailbox, uids: list[int], names: PublicationNames
+) -> list[Document]:
+    """Fetch each message, with a progress bar.
+
+    Measured against the live queue, this loop is the bulk of a run's
+    wall time - about 0.24s per message - so it is the one silent stretch
+    most worth making visible. click.progressbar hides its own rendering
+    when the output is not a terminal, exactly like the build bar's.
+    """
+    documents: list[Document] = []
+    with click.progressbar(
+        uids,
+        label="  Fetching",
+        item_show_func=lambda uid: str(uid) if uid else None,
+    ) as bar:
+        for uid in bar:
+            documents.append(extract(box.fetch(uid), uid=uid, names=names))
+    return documents
+
+
+def _resolve_trash(box: Mailbox, config: Config, uids: list[int]) -> str | None:
+    """Discover or use the configured Trash folder, and say which.
 
     config.mail.trash lets a user name the Trash folder literally, for a
     server without the SPECIAL-USE extension trash_folder() depends on to
     discover it automatically - without an escape hatch, such a server
     would abort every run. "auto", the default, keeps discovering it.
+    Skipped entirely when there is nothing to retire.
     """
+    if not uids:
+        return None
+    if config.mail.trash == "auto":
+        trash = box.trash_folder()
+        click.echo(f"  Discovered Trash folder: {trash}")
+    else:
+        trash = config.mail.trash
+        click.echo(f"  Using configured Trash folder: {trash}")
+    return trash
+
+
+def fetch_queue(config: Config) -> tuple[list[Document], str | None]:
+    """Fetch the starred messages, read-only, and resolve the Trash folder."""
     config.require_mail()
+    click.echo(f"Connecting to {config.mail.host} as {config.mail.user}...")
     password = password_for(config.mail.host, config.mail.user)
     names = load_publication_names()
     with Mailbox(
@@ -52,13 +89,11 @@ def fetch_queue(config: Config) -> tuple[list[Document], str | None]:
         password=password,
         folder=config.mail.folder,
     ) as box:
+        click.echo(f"  Opened {config.mail.folder} ({box.message_count} messages).")
         uids = box.search_flagged()
-        documents = [extract(box.fetch(uid), uid=uid, names=names) for uid in uids]
-        trash = None
-        if uids:
-            trash = (
-                box.trash_folder() if config.mail.trash == "auto" else config.mail.trash
-            )
+        click.echo(f"  {len(uids)} starred message(s) found.")
+        documents = _fetch_with_progress(box, uids, names)
+        trash = _resolve_trash(box, config, uids)
     return documents, trash
 
 
@@ -74,6 +109,7 @@ def fetch_unstarred(config: Config, since: date) -> tuple[list[Document], str | 
     window slow for no reason.
     """
     config.require_mail()
+    click.echo(f"Connecting to {config.mail.host} as {config.mail.user}...")
     password = password_for(config.mail.host, config.mail.user)
     names = load_publication_names()
     with Mailbox(
@@ -82,13 +118,14 @@ def fetch_unstarred(config: Config, since: date) -> tuple[list[Document], str | 
         password=password,
         folder=config.mail.folder,
     ) as box:
+        click.echo(f"  Opened {config.mail.folder} ({box.message_count} messages).")
         uids = box.search_unflagged_since(since)
-        documents = [extract(box.fetch(uid), uid=uid, names=names) for uid in uids]
-        trash = None
-        if uids:
-            trash = (
-                box.trash_folder() if config.mail.trash == "auto" else config.mail.trash
-            )
+        click.echo(
+            f"  {len(uids)} unstarred message(s) found since "
+            f"{format_packet_date(since)}."
+        )
+        documents = _fetch_with_progress(box, uids, names)
+        trash = _resolve_trash(box, config, uids)
     return documents, trash
 
 
@@ -96,7 +133,7 @@ def _stdin_is_tty() -> bool:
     return sys.stdin.isatty()
 
 
-def _offer_picks(config: Config, dry_run: bool) -> tuple[list[Document], str | None]:
+def _offer_picks(config: Config) -> tuple[list[Document], str | None]:
     """Show what else arrived since the last successful run and let the
     user add some to the packet.
 
@@ -127,10 +164,14 @@ def _offer_picks(config: Config, dry_run: bool) -> tuple[list[Document], str | N
     click.echo(f"\n  Newsletters since {when} you haven't starred:")
     click.echo(listing.text)
 
-    interactive = not dry_run and _stdin_is_tty()
+    # --dry-run previews the packet, it is not a non-interactive mode - the
+    # whole point of showing this list is letting the user add to it, so a
+    # dry run with a real terminal on stdin must still prompt. The only
+    # reason to skip it is that stdin genuinely is not a terminal (e.g.
+    # piped input, or a CI run).
+    interactive = _stdin_is_tty()
     if not interactive:
-        reason = "dry run" if dry_run else "stdin is not a terminal"
-        click.echo(f"  Skipping the selection prompt ({reason}).")
+        click.echo("  Skipping the selection prompt (stdin is not a terminal).")
         return [], trash
 
     while True:
@@ -171,6 +212,7 @@ def _open_preview(pdf: Path) -> None:
 
 
 def retire_printed(config: Config, uids: list[int], trash: str) -> RetireResult:
+    click.echo(f"\nRetiring {len(uids)} message(s) to {trash}...")
     password = password_for(config.mail.host, config.mail.user)
     with Mailbox(
         host=config.mail.host,
@@ -251,6 +293,7 @@ def main(
     summary: bool | None,
 ) -> None:
     """Print this week's starred newsletters, four to a side, duplex."""
+    click.echo(f"Reading config: {config_path}")
     try:
         config = load_config(config_path, paper_override=paper)
         documents, trash = fetch_queue(config)
@@ -258,7 +301,7 @@ def main(
         raise click.ClickException(str(error)) from error
 
     if not no_pick:
-        picked, picked_trash = _offer_picks(config, dry_run)
+        picked, picked_trash = _offer_picks(config)
         if picked:
             documents = [*documents, *picked]
         if trash is None:
@@ -393,6 +436,12 @@ def main(
             "key and adds time to the run)."
         )
 
+    # Contents, stamping, and imposing were the one stretch left silent
+    # after the fetch and build bars were added - measured at up to several
+    # seconds with nothing printed, none of it broken into a per-item loop
+    # a progress bar could wrap. Each step announces itself instead, so the
+    # packet total never appears out of a multi-second silence.
+    click.echo("\n  Building the contents page...")
     summary_cells = sum(item.cells for item in summary_pages)
     contents_built, contents_converged = build_contents(
         built,
@@ -412,6 +461,7 @@ def main(
             err=True,
         )
 
+    click.echo(f"  Stamping {len(packet_built)} page(s)...")
     stamped = stamp_packet(
         packet_built,
         packet_date,
@@ -420,6 +470,7 @@ def main(
         work_dir / "stamped",
     )
 
+    click.echo("  Imposing onto sheets...")
     sheets_pdf = work_dir / "sheets.pdf"
     sides = impose(stamped, config.printing.paper, sheets_pdf)
     cells = sum(item.cells for item in packet_built)

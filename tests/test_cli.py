@@ -54,6 +54,9 @@ class _FakeBox:
         self.kwargs = kwargs
         self.retire_calls: list[tuple] = []
         self.retire_result = RetireResult(retired=(), failed=())
+        # Mirrors Mailbox.message_count, set by a real SELECT response -
+        # 2226 matches FakeIMAP's own default in test_mail.py.
+        self.message_count = 2226
         _FakeBox.instances.append(self)
 
     def __enter__(self) -> Self:
@@ -91,6 +94,22 @@ def test_help_names_the_paper_switch() -> None:
     result = CliRunner().invoke(main, ["--help"])
     assert result.exit_code == 0
     assert "--paper" in result.output
+
+
+def test_the_config_path_is_reported_before_anything_else(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The user's original complaint was 10-20s of total silence before
+    anything appears. The config path - known before any network call -
+    must be the very first thing printed, so a run gives feedback
+    immediately."""
+    monkeypatch.setattr("shabbat_print.cli.fetch_queue", lambda config: ([], None))
+    config_path = tmp_path / "absent.toml"
+
+    result = CliRunner().invoke(main, ["--config", str(config_path)])
+    assert result.exit_code == 0
+    lines = [line for line in result.output.splitlines() if line.strip()]
+    assert lines[0] == f"Reading config: {config_path}"
 
 
 def test_an_empty_queue_says_so(monkeypatch, tmp_path: Path) -> None:
@@ -1039,6 +1058,67 @@ def test_fetch_queue_still_discovers_trash_when_configured_as_auto(
     assert trash == "INBOX/Trash"
 
 
+def test_fetch_queue_reports_progress_at_every_step(
+    monkeypatch, mail_config, capsys
+) -> None:
+    """The user's original complaint: 10-20s with no output at all before
+    anything appears. Every phase fetch_queue goes through - connecting,
+    the folder and its message count, the starred search, and the Trash
+    folder - must be visible, not silent."""
+    _FakeBox.instances.clear()
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _FakeBox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+
+    fetch_queue(mail_config)
+
+    output = capsys.readouterr().out
+    assert "Connecting to imap.example.com as someone@example.com" in output
+    assert "Opened INBOX/toprint (2226 messages)" in output
+    assert "2 starred message(s) found" in output
+    assert "Discovered Trash folder: INBOX/Trash" in output
+
+
+def test_fetch_queue_uses_the_configured_trash_folder_without_discovering(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    """A literal mail.trash must be reported as used, not discovered -
+    trash_folder() is never even called in this branch."""
+
+    class _NoTrashLookupBox(_FakeBox):
+        def trash_folder(self) -> str:
+            raise AssertionError("must not be called when mail.trash is configured")
+
+    path = tmp_path / "config.toml"
+    path.write_text(SAMPLE_CONFIG.rstrip() + '\ntrash = "Configured-Trash"\n')
+    config = load_config(path)
+
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _NoTrashLookupBox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+
+    fetch_queue(config)
+
+    output = capsys.readouterr().out
+    assert "Using configured Trash folder: Configured-Trash" in output
+
+
+def test_fetch_queue_progress_bar_leaves_no_artefacts_when_not_a_tty(
+    monkeypatch, mail_config, capsys
+) -> None:
+    """click.progressbar over the fetch loop must hide itself the same way
+    the build bar already does, so it never litters captured (non-tty)
+    output with carriage returns or fill characters."""
+    _FakeBox.instances.clear()
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _FakeBox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+
+    fetch_queue(mail_config)
+
+    output = capsys.readouterr().out
+    assert "\r" not in output
+    assert "[" not in output
+    assert "#" not in output
+
+
 def test_fetch_unstarred_extracts_the_review_window(monkeypatch, mail_config) -> None:
     """Mirrors test_fetch_queue_extracts_the_flagged_messages: fetch_unstarred
     must open the mailbox read-only, search UNFLAGGED SINCE the given date,
@@ -1090,6 +1170,32 @@ def test_fetch_unstarred_skips_trash_lookup_when_the_window_is_empty(
     assert trash is None
 
 
+def test_fetch_unstarred_reports_the_window_and_how_many_it_found(
+    monkeypatch, mail_config, capsys
+) -> None:
+    """The unstarred scan silently walks up to ~90 more messages after the
+    starred fetch - it must report the window's start date and how many
+    it found, the same as the starred search does."""
+    from datetime import date
+
+    from shabbat_print.cli import fetch_unstarred
+
+    class _TwoUnstarredBox(_FakeBox):
+        def search_unflagged_since(self, since) -> list[int]:
+            self.since_arg = since
+            return [5, 6]
+
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _TwoUnstarredBox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+
+    fetch_unstarred(mail_config, date(2026, 9, 1))
+
+    output = capsys.readouterr().out
+    assert "Connecting to imap.example.com as someone@example.com" in output
+    assert "Opened INBOX/toprint (2226 messages)" in output
+    assert "2 unstarred message(s) found since 1 Sep 2026" in output
+
+
 def test_fetch_unstarred_requires_mail_configuration(tmp_path: Path) -> None:
     """Like fetch_queue, fetch_unstarred must fail fast and clearly rather
     than trying to open a mailbox with nothing configured."""
@@ -1101,6 +1207,41 @@ def test_fetch_unstarred_requires_mail_configuration(tmp_path: Path) -> None:
     config = load_config(tmp_path / "absent.toml")
     with pytest.raises(ConfigError, match="mail.host and mail.user"):
         fetch_unstarred(config, date(2026, 9, 1))
+
+
+def test_password_never_appears_in_the_output(monkeypatch, mail_config) -> None:
+    """Never print the IMAP password: only the host and user may appear in
+    the "Connecting to..." line, never the secret used to log in."""
+    _FakeBox.instances.clear()
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _FakeBox)
+    monkeypatch.setattr(
+        "shabbat_print.cli.password_for", lambda host, user: "S3cr3t-Passw0rd!"
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.window_since",
+        lambda fallback_days, today: date(2026, 9, 1),
+    )
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(mail_config.path)]
+    )
+    assert result.exit_code == 0
+    assert "S3cr3t-Passw0rd!" not in result.output
+
+
+def test_retire_printed_reports_progress_before_connecting(
+    monkeypatch, mail_config, capsys
+) -> None:
+    """Retiring re-opens a second, writable connection - it must announce
+    what it is about to do rather than go silent again."""
+    _FakeBox.instances.clear()
+    monkeypatch.setattr("shabbat_print.cli.Mailbox", _FakeBox)
+    monkeypatch.setattr("shabbat_print.cli.password_for", lambda host, user: "secret")
+
+    retire_printed(mail_config, [4, 7], "INBOX/Trash")
+
+    output = capsys.readouterr().out
+    assert "Retiring 2 message(s) to INBOX/Trash" in output
 
 
 def test_retire_printed_moves_messages_with_no_failures(
@@ -1315,6 +1456,28 @@ def test_contents_non_convergence_is_reported_not_silently_shipped(
     assert result.exit_code == 0
     assert "could not compute reliable starting cell numbers" in result.output
     assert "omitting the contents page" in result.output
+
+
+def test_the_finishing_phase_is_reported_in_order(monkeypatch, tmp_path: Path) -> None:
+    """Contents, stamping, and imposing were the one stretch left silent
+    after the fetch and build bars were added - measured at up to several
+    seconds with nothing printed. Each must announce itself, in the order
+    it actually happens, so the packet total never appears out of a
+    multi-second silence."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--dry-run", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+    )
+    assert result.exit_code == 0
+    contents_at = result.output.index("Building the contents page")
+    stamping_at = result.output.index("Stamping")
+    imposing_at = result.output.index("Imposing")
+    total_at = result.output.index("cells - ")
+    assert contents_at < stamping_at < imposing_at < total_at
 
 
 def test_a_successful_run_opens_the_pdf_in_preview(monkeypatch, tmp_path: Path) -> None:
@@ -1835,6 +1998,42 @@ def test_dry_run_shows_the_unstarred_window_and_skips_the_prompt(
     # publication name ("Test Weekly: N cells"); the listing's group
     # heading never does.
     assert "Money Stuff: " not in result.output
+
+
+def test_dry_run_still_prompts_when_stdin_is_a_terminal(
+    monkeypatch, mail_config
+) -> None:
+    """--dry-run is a preview, not a non-interactive mode: the point of
+    showing the unstarred list is letting the user add to it, so a dry
+    run with a real terminal on stdin must still prompt, and a selected
+    pick must still be built into the preview (just not printed or
+    retired). Only non-interactive stdin should skip the prompt."""
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.window_since",
+        lambda fallback_days, today: date(2026, 9, 1),
+    )
+    picks = [
+        _candidate(uid=21, publication="Alpha Weekly", title="Pick One", buildable=True)
+    ]
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_unstarred",
+        lambda config, since: (picks, "INBOX/Trash"),
+    )
+    monkeypatch.setattr("shabbat_print.cli._stdin_is_tty", lambda: True)
+
+    result = CliRunner().invoke(
+        main,
+        ["--dry-run", "--no-preview", "--config", str(mail_config.path)],
+        input="1\n",
+    )
+    assert result.exit_code == 0
+    assert "Add any to the packet?" in result.output
+    assert "Added 1 newsletter(s)" in result.output
+    assert "Alpha Weekly: " in result.output  # the pick was actually built
+    assert "Dry run" in result.output
 
 
 def test_a_non_interactive_run_skips_the_prompt_and_does_not_hang(

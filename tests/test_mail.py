@@ -110,6 +110,27 @@ def test_fetch_returns_the_raw_message() -> None:
         assert box.fetch(3) == RAW
 
 
+def test_message_count_is_read_from_the_select_response() -> None:
+    """The SELECT response already carries the folder's EXISTS count
+    (FakeIMAP answers b"2226") - Mailbox must read it off that one round
+    trip rather than a second STATUS call."""
+    fake = FakeIMAP("imap.example.com")
+    with mailbox(fake) as box:
+        assert box.message_count == 2226
+
+
+def test_message_count_falls_back_to_zero_for_a_malformed_select_response() -> None:
+    class _WeirdCountIMAP(FakeIMAP):
+        def select(self, folder: str, readonly: bool = False):
+            self.calls.append(("select", folder, readonly))
+            self.selected = (folder, readonly)
+            return ("OK", [b"not-a-number"])
+
+    fake = _WeirdCountIMAP("imap.example.com")
+    with mailbox(fake) as box:
+        assert box.message_count == 0
+
+
 def test_trash_folder_is_discovered_from_special_use() -> None:
     fake = FakeIMAP("imap.example.com")
     with mailbox(fake) as box:
