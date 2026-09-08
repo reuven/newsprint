@@ -5,7 +5,6 @@ only after a job has reached the print queue, and only for the messages whose
 content actually reached it.
 """
 
-import dataclasses
 import imaplib
 import subprocess
 import sys
@@ -16,7 +15,7 @@ from pathlib import Path
 
 import click
 
-from . import browser, runlog, webextract
+from . import runlog
 from .config import (
     DEFAULT_CONFIG_PATH,
     Config,
@@ -153,92 +152,6 @@ def _offer_picks(config: Config, dry_run: bool) -> tuple[list[Document], str | N
     return picked, trash
 
 
-def _fetch_one_url(url: str, profile: Path, config: Config) -> Document | None:
-    """Fetch and extract a single pasted URL, or return None having
-    already reported why not.
-
-    Every failure mode here is reported and swallowed, never raised: the
-    spec's second risk is explicit that a packet must never fail because
-    one URL could not be fetched, matching how _offer_picks already
-    swallows a mail problem rather than aborting a run that would
-    otherwise succeed.
-    """
-    try:
-        html = browser.fetch_html(url, profile)
-    except browser.FetchError as error:
-        click.echo(f"  {error}", err=True)
-        click.echo("    If this is a subscription site, run `shabbat-print login`.")
-        return None
-
-    try:
-        result = webextract.extract_article(url, html)
-    except webextract.ExtractionError as error:
-        click.echo(f"  {error}", err=True)
-        return None
-
-    document = result.document
-    # H1 (phase8-urls.md): a hard paywall returns a teaser, not an error -
-    # trafilatura succeeds, it just found very little. Reported with the
-    # word count and asked about explicitly, rather than silently
-    # printing three paragraphs and a subscribe button; declining drops
-    # the URL entirely, and confirming sets force_include so pipeline.py's
-    # own packet.min_words check (H2) does not silently re-skip the exact
-    # document the user just chose to keep - see pipeline.build_one.
-    if result.word_count < config.packet.min_words:
-        click.echo(
-            f"  {url}: only {result.word_count} words extracted - this may "
-            f"be paywalled. If this is a subscription site, sign in first "
-            f"with `shabbat-print login`."
-        )
-        if not click.confirm("  Include it anyway?", default=False):
-            click.echo(f"  Skipped {url}.")
-            return None
-        document = dataclasses.replace(document, force_include=True)
-
-    click.echo(f"  Fetched: {document.title} ({result.word_count} words)")
-    return document
-
-
-def _offer_urls(config: Config, dry_run: bool) -> list[Document]:
-    """Prompt for one or more article URLs to fetch and add to the packet.
-
-    Phase 8's own decision (phase8-urls.md): URLs are pasted at print
-    time, not captured ahead of it - so, unlike _offer_picks, there is
-    nothing to list before asking. Interactivity is gated exactly the
-    same way, and for the same reason: a prompt must not hang a
-    non-interactive run, following the picker's own precedent (added in
-    the previous phase) rather than inventing a second mechanism.
-    """
-    interactive = not dry_run and _stdin_is_tty()
-    if not interactive:
-        reason = "dry run" if dry_run else "stdin is not a terminal"
-        click.echo(f"  Skipping the URL prompt ({reason}).")
-        return []
-
-    profile = browser.profile_dir(config.path.parent)
-    if not profile.exists():
-        click.echo(
-            "  No browser profile found - paywalled sites will fetch as a "
-            "logged-out visitor. Run `shabbat-print login` first to sign in."
-        )
-
-    response = click.prompt(
-        "\n  Any article URLs to fetch? (space-separated; Enter to skip)",
-        default="",
-        show_default=False,
-    )
-    urls = response.split()
-    if not urls:
-        return []
-
-    fetched: list[Document] = []
-    for url in urls:
-        document = _fetch_one_url(url, profile, config)
-        if document is not None:
-            fetched.append(document)
-    return fetched
-
-
 def _open_preview(pdf: Path) -> None:
     """Best-effort: open the PDF for a look before printing.
 
@@ -285,7 +198,7 @@ def retire_printed(config: Config, uids: list[int], trash: str) -> RetireResult:
     return result
 
 
-@click.group(invoke_without_command=True)
+@click.command()
 @click.option(
     "--paper",
     type=click.Choice(["a4", "letter"], case_sensitive=False),
@@ -328,9 +241,7 @@ def retire_printed(config: Config, uids: list[int], trash: str) -> RetireResult:
         "given, the config value decides."
     ),
 )
-@click.pass_context
 def main(
-    ctx: click.Context,
     paper: str | None,
     config_path: Path,
     dry_run: bool,
@@ -340,12 +251,6 @@ def main(
     summary: bool | None,
 ) -> None:
     """Print this week's starred newsletters, four to a side, duplex."""
-    if ctx.invoked_subcommand is not None:
-        # `shabbat-print login` (see the login command below) shares this
-        # same options-bearing group but must not also run the print
-        # flow - invoke_without_command=True is what lets a plain
-        # `shabbat-print` with no subcommand still fall through to it.
-        return
     try:
         config = load_config(config_path, paper_override=paper)
         documents, trash = fetch_queue(config)
@@ -358,15 +263,6 @@ def main(
             documents = [*documents, *picked]
         if trash is None:
             trash = picked_trash
-
-    # phase8-urls.md: the run ends with a prompt for article URLs - runs
-    # even when the starred queue and every pick were empty, so a run
-    # whose only content is a pasted URL still builds and prints, rather
-    # than hitting the "nothing starred" early return below before ever
-    # asking.
-    fetched = _offer_urls(config, dry_run)
-    if fetched:
-        documents = [*documents, *fetched]
 
     if not documents:
         click.echo("Nothing starred in the queue.")
@@ -617,26 +513,3 @@ def main(
             }
         )
         click.echo(f"Retired {len(result.retired)} message(s) to {trash}.")
-
-
-@main.command()
-@click.option(
-    "--config",
-    "config_path",
-    type=click.Path(path_type=Path),
-    default=DEFAULT_CONFIG_PATH,
-    help="Path to config.toml.",
-)
-def login(config_path: Path) -> None:
-    """Open the app's own browser profile so you can sign into your
-    subscriptions.
-
-    The profile lives under the config directory, not the repository, and
-    is never touched by (or touches) your everyday Chrome - see
-    browser.py. Opens visibly; close the window when you are done and
-    this returns."""
-    profile = browser.profile_dir(config_path.parent)
-    click.echo(f"Opening the browser profile at {profile}.")
-    click.echo("Sign in to your subscriptions, then close the window to finish.")
-    browser.login(profile)
-    click.echo("Profile saved.")
