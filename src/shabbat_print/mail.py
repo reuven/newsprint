@@ -187,12 +187,21 @@ class Mailbox:
         password: str,
         folder: str,
         imap_factory: IMAPFactory = imaplib.IMAP4_SSL,
+        notify: Callable[[str], None] | None = None,
     ) -> None:
         self._host = host
         self._user = user
         self._password = password
         self._folder = folder
         self._factory = imap_factory
+        # Called when a dropped connection is silently replaced. A
+        # reconnect is invisible by design - the fetch simply succeeds -
+        # but an invisible recovery also means a server that keeps
+        # hanging up looks like nothing at all. Root cause here is still
+        # unknown (idle timeout, connection limits, machine sleep and
+        # protocol desync have each been measured and excluded), so the
+        # next occurrence needs to leave a trace rather than be absorbed.
+        self._notify = notify
         self._imap: imaplib.IMAP4 | None = None
         # How many messages the folder holds - set by __enter__ from the
         # SELECT response itself, so a caller reporting progress can show
@@ -250,6 +259,10 @@ class Mailbox:
             pass
         self._imap = None
         self._imap = self._open()
+        if self._notify is not None:
+            self._notify(
+                "The mail server closed the connection; reconnected and retrying."
+            )
         if self._uidvalidity != previous:
             raise MailError(
                 "the folder was renumbered while this run was in progress "
