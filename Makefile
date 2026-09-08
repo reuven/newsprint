@@ -1,4 +1,4 @@
-.PHONY: fixtures test lint
+.PHONY: fixtures test lint audit
 
 # WeasyPrint needs Pango/Cairo/gdk-pixbuf, installed via Homebrew on macOS.
 # Homebrew's lib directory isn't on the default dlopen search path, so we
@@ -25,3 +25,10 @@ test:
 lint:
 	uv run ruff format src tests scripts
 	uv run ruff check src tests scripts
+
+# Processes the user's full local "toprint" archive (roughly 2,231
+# messages) through extract and clean_document and reports what got
+# removed. Read-only, and slow over the full archive; pass --limit N to
+# scripts/audit.py directly for a quick run.
+audit:
+	uv run python scripts/audit.py
