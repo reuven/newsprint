@@ -39,6 +39,15 @@ _FETCH_UID_RE = re.compile(rb"UID (\d+)")
 # candidates, is one chunk).
 FETCH_CHUNK_SIZE = 200
 
+# What a server closing the connection under us actually looks like from
+# inside imaplib: a write to the closed socket raises BrokenPipeError (an
+# OSError), and once the SSL layer notices, ssl.SSLError (also an
+# OSError) or imaplib.IMAP4.abort. None of them arrive as a NO status, so
+# checking the status a fetch returns can never see them. IMAP4.error is
+# deliberately not here: it covers protocol-level failures on a
+# connection that is still alive, which a reconnect would not fix.
+_DROPPED_CONNECTION = (imaplib.IMAP4.abort, OSError)
+
 # strftime's %b reads LC_TIME, so a non-English locale can render a SEARCH
 # date the server rejects: de_DE appends a period ("Sep."), fr_FR uses its
 # own abbreviation ("sept."), he_IL spells the month in Hebrew entirely.
@@ -189,8 +198,16 @@ class Mailbox:
         # SELECT response itself, so a caller reporting progress can show
         # it without a second round trip. 0 until the folder is opened.
         self.message_count: int = 0
+        # The folder's UIDVALIDITY as of the current connection, so a
+        # reconnect can prove the uids this run is holding still name the
+        # same messages. Set by _open().
+        self._uidvalidity: bytes | None = None
 
     def __enter__(self) -> Self:
+        self._imap = self._open()
+        return self
+
+    def _open(self) -> imaplib.IMAP4:
         imap = self._factory(self._host)
         status, _ = imap.login(self._user, self._password)
         if status != "OK":
@@ -198,9 +215,61 @@ class Mailbox:
         status, data = imap.select(self._folder, readonly=True)
         if status != "OK":
             raise MailError(f"could not open folder {self._folder!r}: {status}")
-        self._imap = imap
         self.message_count = _message_count(data)
-        return self
+        self._uidvalidity = imap.response("UIDVALIDITY")[1][0]
+        return imap
+
+    def _reconnect(self) -> None:
+        """Replace a connection the server has closed under us.
+
+        The read-only connection is held open across the picker prompt,
+        which is an unbounded human pause - the user reads a scrollable
+        list of a hundred newsletters and picks a few. A server is free
+        to close an idle connection while that happens (RFC 3501 permits
+        it after 30 minutes; real servers are often far less patient),
+        and it closes it silently: the next write fails with
+        BrokenPipeError, or the SSL layer raises IMAP4.abort, from inside
+        imaplib. Reconnecting costs one connect/login/select and is
+        invisible to the caller.
+
+        Only read-only fetches retry through here. Nothing in the
+        retirement path does: STORE and MOVE change server state, and a
+        blind retry of a command that may already have been applied is
+        how mail gets lost.
+        """
+        previous = self._uidvalidity
+        # _connection, not _imap: _reconnect is only ever reached from a
+        # command that just used the connection, so it cannot be None
+        # here - and if that ever changes, the property says so plainly
+        # rather than silently skipping the close.
+        try:
+            self._connection.shutdown()
+        except imaplib.IMAP4.error, OSError:
+            # The socket this is closing is the one that just failed, so
+            # closing it failing too is the expected case, not an error.
+            pass
+        self._imap = None
+        self._imap = self._open()
+        if self._uidvalidity != previous:
+            raise MailError(
+                "the folder was renumbered while this run was in progress "
+                f"(UIDVALIDITY {previous!r} -> {self._uidvalidity!r}); "
+                "the messages this run selected can no longer be identified"
+            )
+
+    def _fetch(self, uid_set: str, items: str) -> tuple[str, list]:
+        """One UID FETCH, retried once on a dropped connection.
+
+        A FETCH is read-only and idempotent, so re-issuing it after a
+        reconnect returns the same messages or fails loudly - it cannot
+        double-apply anything. Exactly one retry: a server that keeps
+        dropping should surface as a failed run, not a reconnect loop.
+        """
+        try:
+            return self._connection.uid("FETCH", uid_set, items)
+        except _DROPPED_CONNECTION:
+            self._reconnect()
+        return self._connection.uid("FETCH", uid_set, items)
 
     def __exit__(
         self,
@@ -211,6 +280,13 @@ class Mailbox:
         if self._imap is not None:
             try:
                 self._imap.logout()
+            except imaplib.IMAP4.error, OSError:
+                # Closing a connection the server has already closed is a
+                # no-op, not a failure - and raising here would replace
+                # whatever real error sent us out of the block (in the
+                # user's crash report, a BrokenPipeError from a FETCH)
+                # with a second, less informative traceback.
+                pass
             finally:
                 self._imap = None
 
@@ -259,7 +335,7 @@ class Mailbox:
         for start in range(0, len(uids), FETCH_CHUNK_SIZE):
             chunk = uids[start : start + FETCH_CHUNK_SIZE]
             uid_set = ",".join(str(uid) for uid in chunk)
-            status, data = self._connection.uid("FETCH", uid_set, items)
+            status, data = self._fetch(uid_set, items)
             if status != "OK":
                 raise MailError(f"fetch failed for {len(chunk)} uid(s): {status}")
             result.update(_parse_fetch_response(data))
@@ -290,7 +366,7 @@ class Mailbox:
         for start in range(0, len(uids), FETCH_CHUNK_SIZE):
             chunk = uids[start : start + FETCH_CHUNK_SIZE]
             uid_set = ",".join(str(uid) for uid in chunk)
-            status, data = self._connection.uid("FETCH", uid_set, "(UID RFC822.SIZE)")
+            status, data = self._fetch(uid_set, "(UID RFC822.SIZE)")
             if status != "OK":
                 raise MailError(f"fetch failed for {len(chunk)} uid(s): {status}")
             result.update(_parse_size_response(data))
