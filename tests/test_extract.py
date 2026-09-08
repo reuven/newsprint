@@ -1,8 +1,10 @@
 from datetime import UTC, datetime
+from email.charset import QP, Charset
 from pathlib import Path
 
 import pytest
 
+from shabbat_print.config import PublicationNames
 from shabbat_print.extract import extract
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -69,9 +71,113 @@ Content-Type: text/html; charset="utf-8"
     assert extract(raw).publication == "dailydoseofds.com"
 
 
-def test_names_override_wins() -> None:
-    names = {"noreply@news.bloomberg.com": "Money Stuff (Bloomberg)"}
-    assert extract(HTML_MESSAGE, names=names).publication == "Money Stuff (Bloomberg)"
+def test_address_override_wins_when_no_list_id() -> None:
+    """A user can still rename a sender's newsletter by address - but only
+    when the message carries no List-Id to identify a specific newsletter
+    from that sender."""
+    raw = message(
+        """
+From: The Economist <noreply@e.economist.com>
+Subject: Espresso
+Date: Sat, 6 Sep 2026 06:00:00 +0000
+Content-Type: text/html; charset="utf-8"
+""",
+        "<html><body><p>Good morning.</p></body></html>",
+    )
+    names = PublicationNames(
+        by_address={"noreply@e.economist.com": "The Economist (Espresso)"},
+        by_list_id={},
+    )
+    assert extract(raw, names=names).publication == "The Economist (Espresso)"
+
+
+def test_list_id_wins_over_address_override() -> None:
+    """One address can send many distinct newsletters (this is exactly the
+    NYT's nytdirect@nytimes.com case): List-Id identifies the newsletter,
+    the address only identifies the sending system, so an address-keyed
+    override must not blur every newsletter from that address into one
+    name."""
+    names = PublicationNames(
+        by_address={"noreply@news.bloomberg.com": "Jamelle Bouie"},
+        by_list_id={},
+    )
+    assert extract(HTML_MESSAGE, names=names).publication == "Money Stuff"
+
+
+def test_list_id_override_wins_over_list_id_itself() -> None:
+    """A user can still rename one specific newsletter, keyed by List-Id."""
+    names = PublicationNames(
+        by_address={},
+        by_list_id={"money stuff": "Matt Levine's Money Stuff"},
+    )
+    assert extract(HTML_MESSAGE, names=names).publication == "Matt Levine's Money Stuff"
+
+
+def test_list_id_override_beats_address_override_too() -> None:
+    names = PublicationNames(
+        by_address={"noreply@news.bloomberg.com": "Bloomberg (address override)"},
+        by_list_id={"money stuff": "Matt Levine's Money Stuff"},
+    )
+    assert extract(HTML_MESSAGE, names=names).publication == "Matt Levine's Money Stuff"
+
+
+def test_address_override_is_mime_decoded() -> None:
+    """publications.toml is hand-edited and occasionally seeded from raw
+    headers; an override value that is still a raw RFC 2047 encoded word
+    must print as text, not as gibberish."""
+    raw = message(
+        """
+From: Someone <simonw@substack.com>
+Subject: A post
+Date: Sat, 6 Sep 2026 06:00:00 +0000
+Content-Type: text/html; charset="utf-8"
+""",
+        "<html><body><p>Hi.</p></body></html>",
+    )
+    encoded = "=?utf-8?b?U2ltb24gV2lsbGlzb24=?="
+    names = PublicationNames(by_address={"simonw@substack.com": encoded}, by_list_id={})
+    assert extract(raw, names=names).publication == "Simon Willison"
+
+
+def test_list_id_override_is_mime_decoded() -> None:
+    encoded = "=?utf-8?b?RGF2aWQgRnJlbmNo?="
+    names = PublicationNames(by_address={}, by_list_id={"money stuff": encoded})
+    assert extract(HTML_MESSAGE, names=names).publication == "David French"
+
+
+def test_base64_encoded_list_id_is_decoded() -> None:
+    """A real base64 (RFC 2047 'b') encoded word in the List-Id header
+    itself, as some senders occasionally use."""
+    raw = message(
+        """
+From: David French <df.nytimes.com@nytimes.com>
+Subject: A column
+Date: Sat, 6 Sep 2026 06:00:00 +0000
+List-Id: =?utf-8?b?RGF2aWQgRnJlbmNo?= <df.nytimes.com>
+Content-Type: text/html; charset="utf-8"
+""",
+        "<html><body><p>Hi.</p></body></html>",
+    )
+    assert extract(raw).publication == "David French"
+
+
+def test_quoted_printable_encoded_list_id_is_decoded() -> None:
+    """A real quoted-printable (RFC 2047 'q') encoded word in the List-Id
+    header, generated the way a mail server actually would."""
+    charset = Charset("utf-8")
+    charset.header_encoding = QP
+    encoded_label = charset.header_encode("David French — NYT")
+    raw = message(
+        f"""
+From: David French <df.nytimes.com@nytimes.com>
+Subject: A column
+Date: Sat, 6 Sep 2026 06:00:00 +0000
+List-Id: {encoded_label} <df.nytimes.com>
+Content-Type: text/html; charset="utf-8"
+""",
+        "<html><body><p>Hi.</p></body></html>",
+    )
+    assert extract(raw).publication == "David French — NYT"
 
 
 def test_encoded_subject_is_decoded() -> None:
