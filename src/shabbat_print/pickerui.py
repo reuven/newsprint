@@ -20,6 +20,8 @@ import shutil
 from collections.abc import Callable, Sequence
 
 import questionary
+from prompt_toolkit.layout.containers import ScrollOffsets, Window
+from questionary.prompts.common import InquirerControl
 
 from .models import Document
 from .picker import Picklist, layout_picklist
@@ -58,6 +60,45 @@ def _choices(
     return choices
 
 
+# How many lines of context to keep above the cursor. layout_picklist
+# emits a blank spacer then a ruled heading before each group's rows, so
+# two is what it takes for the publication name to still be on screen
+# when the cursor sits on that group's first row.
+_LINES_ABOVE_CURSOR = 2
+
+
+def _keep_group_heading_visible(question: object) -> None:
+    """Stop a group's heading scrolling off when the cursor reaches it.
+
+    prompt_toolkit's Window only guarantees the *cursor* line is visible.
+    Scrolling back up therefore stops as soon as the cursor is on screen,
+    which leaves it flush against the top edge - and the heading naming
+    the publication, one line above it, off screen. Pressing up from the
+    first row and then down again reproduced exactly that: the cursor
+    correctly back on the first article, its "AXIOS MACRO" heading gone.
+
+    ScrollOffsets is prompt_toolkit's own answer: a top offset makes the
+    window keep that many lines above the cursor on screen, so the
+    heading is carried along with the row it belongs to. questionary
+    builds the window itself and exposes no option for this, so it is
+    reached through the layout after construction - the one Window whose
+    content is the choice list.
+
+    Silently does nothing for anything that is not a real questionary
+    Question, which is what lets the injected fake checkbox factories in
+    the tests stay simple stubs.
+    """
+    application = getattr(question, "application", None)
+    layout = getattr(application, "layout", None)
+    if layout is None:
+        return
+    for container in layout.walk():
+        if isinstance(container, Window) and isinstance(
+            container.content, InquirerControl
+        ):
+            container.scroll_offsets = ScrollOffsets(top=_LINES_ABOVE_CURSOR)
+
+
 def questionary_prompt(
     picklist: Picklist,
     checkbox: CheckboxFactory = questionary.checkbox,
@@ -76,4 +117,6 @@ def questionary_prompt(
     choices = _choices(picklist, width)
     if not choices:
         return []
-    return checkbox(_MESSAGE, choices).ask()
+    question = checkbox(_MESSAGE, choices)
+    _keep_group_heading_visible(question)
+    return question.ask()
