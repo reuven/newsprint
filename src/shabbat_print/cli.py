@@ -511,6 +511,15 @@ def main(
 
     summary_pages: list[Built] = []
     if summary_enabled:
+        # The one multi-second stretch that used to print nothing until it
+        # was already over: a single Claude API call covering every
+        # newsletter in the packet, measured at 17.9s and 160k input
+        # tokens on the user's own queue. Announced before the call, not
+        # after, so the wait reads as expected rather than as a hang.
+        click.echo(
+            f"\n  Writing the summary pages from {len(built)} newsletter(s) - "
+            "one Claude API call, so this takes a moment..."
+        )
         outcome = build_summary_pages(built, config, packet_date, work_dir / "summary")
         summary_pages = list(outcome.pages)
         if outcome.reason is not None:

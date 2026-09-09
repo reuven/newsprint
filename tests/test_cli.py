@@ -2697,3 +2697,86 @@ def test_help_mentions_no_pick() -> None:
     result = CliRunner().invoke(main, ["--help"])
     assert result.exit_code == 0
     assert "--no-pick" in result.output
+
+
+def test_the_summary_announces_itself_before_the_wait(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The summary is a single Claude API call covering every newsletter
+    in the packet - 17.9s on the user's own queue, 160k tokens in - and it
+    was the last multi-second stretch that printed nothing until it was
+    already over. It has to say what it is doing first, like every other
+    step of the finishing phase does.
+    """
+    from shabbat_print.summarize import SummaryOutcome
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.build_summary_pages",
+        lambda built, config, packet_date, out_dir: SummaryOutcome(
+            pages=(),
+            reason="no API key",
+            elapsed_seconds=0.1,
+            input_tokens=None,
+            output_tokens=None,
+        ),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--dry-run", "--no-preview", "--config", str(_summary_config(tmp_path))],
+    )
+    assert result.exit_code == 0
+    notice_at = result.output.index("Writing the summary pages")
+    outcome_at = result.output.index("Summary skipped")
+    assert notice_at < outcome_at
+
+
+def test_the_summary_notice_warns_that_it_takes_a_while(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Saying "writing" is not enough on its own: without a hint that the
+    wait is expected, a twenty-second pause reads as a hang."""
+    from shabbat_print.summarize import SummaryOutcome
+
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.build_summary_pages",
+        lambda built, config, packet_date, out_dir: SummaryOutcome(
+            pages=(),
+            reason="no API key",
+            elapsed_seconds=0.1,
+            input_tokens=None,
+            output_tokens=None,
+        ),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--dry-run", "--no-preview", "--config", str(_summary_config(tmp_path))],
+    )
+    notice = next(
+        line for line in result.output.splitlines() if "Writing the summary" in line
+    )
+    assert "moment" in notice
+
+
+def test_no_summary_notice_when_summaries_are_disabled(tmp_path: Path) -> None:
+    """Nothing is about to happen, so nothing should be announced."""
+    result = CliRunner().invoke(
+        main,
+        [
+            "--dry-run",
+            "--no-preview",
+            "--no-summary",
+            "--config",
+            str(tmp_path / "a.toml"),
+        ],
+    )
+    assert "Writing the summary" not in result.output
