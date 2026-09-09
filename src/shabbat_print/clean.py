@@ -59,8 +59,10 @@ _is_argument_figure's own docstring for the exact rule.
 import re
 from collections.abc import Iterator
 from dataclasses import replace
+from typing import cast
 
-from bs4 import BeautifulSoup, CData, NavigableString, Tag
+from bs4 import BeautifulSoup
+from bs4.element import CData, NavigableString, Tag
 
 from .boilerplate import (
     SHORT_LINE,
@@ -372,7 +374,11 @@ def _figure_placeholder_text(image: Tag, publication: str) -> str | None:
     width = _image_width_px(image)
     if width is None or width < _FIGURE_MIN_WIDTH_PX:
         return None
-    alt = " ".join((image.get("alt") or "").split())
+    # cast, not a runtime check: bs4 types `get` as possibly returning a
+    # list because some attributes (class, rel) are multi-valued. `alt`
+    # and `src` are not, so the list case cannot occur - and guarding for
+    # it would add a branch no input can ever take.
+    alt = " ".join(cast(str, image.get("alt") or "").split())
     if not alt:
         return None
     lowered = alt.casefold()
@@ -441,7 +447,7 @@ def _strip_images(root: Tag, publication: str) -> tuple[int, tuple[DroppedImage,
     dropped = []
     kept = 0
     for image in root.find_all("img"):
-        src = image.get("src", "")
+        src = cast(str, image.get("src", ""))
         if _is_argument_figure(image):
             kept += 1
             continue
@@ -785,12 +791,12 @@ def _rendered_lines(tag: Tag) -> list[str]:
         if boundary:
             flush()
         for child in node.children:
-            walk(child)
+            walk(cast("Tag | NavigableString", child))
         if boundary:
             flush()
 
     for child in tag.children:
-        walk(child)
+        walk(cast("Tag | NavigableString", child))
     flush()
     return lines
 

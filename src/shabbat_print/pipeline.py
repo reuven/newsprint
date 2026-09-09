@@ -107,25 +107,32 @@ def build_one(
             image_fetch_failures=image_fetch_failures,
             image_cache=image_cache,
         )
+
+        # Bind cleaned/document_dir as defaults rather than relying on the
+        # closure: fit() calls rerender synchronously within this same
+        # call, so the late-binding B023 warning is a false positive here,
+        # but binding explicitly documents that and keeps the lint clean.
+        # A def rather than a lambda so the parameters carry types - mypy
+        # cannot infer a lambda that has defaults.
+        def rerender(
+            compression: float,
+            cleaned: Document = cleaned,
+            document_dir: Path = document_dir,
+        ) -> Path:
+            return render_fn(
+                cleaned,
+                config,
+                compression=compression,
+                out_dir=document_dir,
+                image_fetch_failures=image_fetch_failures,
+                image_cache=image_cache,
+            )
+
         fitted, verdict = fit(
             pdf,
             config.printing.paper,
             config.layout,
-            # Bind cleaned/document_dir as defaults rather than relying on
-            # the closure: fit() calls rerender synchronously within this
-            # same call, so the late-binding B023 warning is a false
-            # positive here, but binding explicitly documents that and
-            # keeps the lint clean.
-            rerender=lambda compression, cleaned=cleaned, document_dir=document_dir: (
-                render_fn(
-                    cleaned,
-                    config,
-                    compression=compression,
-                    out_dir=document_dir,
-                    image_fetch_failures=image_fetch_failures,
-                    image_cache=image_cache,
-                )
-            ),
+            rerender=rerender,
         )
         return Built(
             document=cleaned,

@@ -14,7 +14,7 @@ from .config import Config
 
 _JOB_ID = re.compile(r"request id is (\S+)")
 
-Runner = Callable[..., subprocess.CompletedProcess]
+Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
 class PrintError(Exception):
