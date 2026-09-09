@@ -277,7 +277,7 @@ def test_draw_footer_skips_a_segment_that_truncates_to_nothing() -> None:
     width, height = A4.cell.as_points()
     with pymupdf.open() as document:
         page = document.new_page(width=width, height=height)
-        _draw_footer(page, A4, LAYOUT, left="", centre="1/1", right="1 · 5 Sep 2026")
+        _draw_footer(page, A4, LAYOUT, left="", counter="1/1", right="1 · 5 Sep 2026")
         text = page.get_text()
     assert "1/1" in text
     assert "1 · 5 Sep 2026" in text
