@@ -1768,6 +1768,28 @@ def test_a_screenshot_captioned_only_with_a_parenthesised_link_is_kept() -> None
     assert "storage.ghost.io/shot.png" in cleaned.html
 
 
+def test_the_link_caption_survives_real_html_whitespace() -> None:
+    """Newsletters arrive indented across lines, not minified. Reading
+    the caption block without stripping leaves "\\n    ( Link )\\n  ",
+    which matches nothing - so the screenshot would be dropped on every
+    real message while a minified test fixture kept passing.
+    """
+    html = (
+        "<html><body><div>\n"
+        "  <h3>Those good posts</h3>\n"
+        '  <div class="kg-card kg-image-card">\n'
+        '    <img src="https://storage.ghost.io/shot.png" alt width="600">\n'
+        "  </div>\n"
+        "  <p>\n"
+        '    (<a href="https://example.com/post">Link</a>)\n'
+        "  </p>\n"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 1
+    assert "storage.ghost.io/shot.png" in cleaned.html
+
+
 def test_the_link_caption_still_obeys_the_width_gate() -> None:
     """An icon followed by the same caption is still an icon - the width
     gate is what keeps spacers and tracking pixels out, and this third
