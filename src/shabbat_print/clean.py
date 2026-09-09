@@ -246,6 +246,23 @@ _CAPTION_LEAD = re.compile(
     r"^(?:source\b|chart\b|figure\b|fig\.|credit\b)|^data\s*:", re.IGNORECASE
 )
 
+# The third caption shape: a screenshot the author is citing, followed by
+# nothing but a parenthesised link to the original post. Platformer's
+# "Those good posts" section is the archetype - each social-media
+# screenshot is followed by its own <p>(<a>Link</a>)</p> and nothing else.
+# The images carry empty alt text and no lead-in colon, so neither
+# existing gate sees them, and dropping them left a column of bare
+# "(Link)" lines where the joke used to be. Measured against the 268
+# archived newsletters in tests/fixtures: zero images match this anywhere
+# else, so it cannot quietly readmit decorative images elsewhere.
+_CITATION_CAPTION = re.compile(r"^\(\s*link\s*\)$", re.IGNORECASE)
+
+# The block elements a caption can be. Checked as whole blocks rather than
+# via _nearest_rendered_text because that returns the first text *node*:
+# for "(<a>Link</a>)" that is the bare "(", which no caption rule could
+# usefully match.
+_CAPTION_BLOCK_TAGS = frozenset({"p", "div", "figcaption", "td", "li", "blockquote"})
+
 # Same threshold _figure_placeholder_text uses for the same reason: below
 # this an image reads as a spacer, an icon, or a tracking pixel, never a
 # figure worth keeping - and tracking pixels in particular are <=3px, so
@@ -277,6 +294,23 @@ def _nearest_rendered_text(image: Tag, *, forward: bool) -> str | None:
     return None
 
 
+def _nearest_block_text(image: Tag) -> str | None:
+    """All the text of the nearest block element following `image`.
+
+    _nearest_rendered_text answers with the first text *node*, which is
+    the right unit for a lead-in sentence but the wrong one for a caption
+    built out of markup: Platformer's "(<a>Link</a>)" starts with a text
+    node of just "(". Joining the block's own text puts the caption back
+    together before any rule looks at it.
+    """
+    for node in image.find_all_next():
+        if node.name in _CAPTION_BLOCK_TAGS:
+            text = node.get_text(" ", strip=True)
+            if text:
+                return text
+    return None
+
+
 def _is_argument_figure(image: Tag) -> bool:
     """True when `image` is wide enough to be a figure AND the author
     introduced it as one - see charts.md, "The rule". Two independent
@@ -298,7 +332,12 @@ def _is_argument_figure(image: Tag) -> bool:
     ):
         return True
     after = _nearest_rendered_text(image, forward=True)
-    return after is not None and bool(_CAPTION_LEAD.match(after))
+    if after is not None and _CAPTION_LEAD.match(after):
+        return True
+    following_block = _nearest_block_text(image)
+    return following_block is not None and bool(
+        _CITATION_CAPTION.fullmatch(following_block)
+    )
 
 
 def _figure_placeholder_text(image: Tag, publication: str) -> str | None:
