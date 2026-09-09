@@ -396,3 +396,62 @@ def test_every_fixture_extracts() -> None:
         document = extract(path.read_bytes())
         assert document.publication, path.name
         assert document.html, path.name
+
+
+def test_a_mailchimp_list_id_falls_back_to_the_senders_domain() -> None:
+    """Mailchimp's List-Id host identifies the list to Mailchimp and to
+    nobody else - "e5101197dd74666a141a34e7b.160398.list-id.mcsv.net"
+    names no publication a reader would recognize. Trusting it would put
+    "DAN OSHINSKY (mcsv.net)" in the picker instead of the sender's own
+    inboxcollective.com.
+    """
+    raw = message(
+        """
+From: Dan Oshinsky <dan@inboxcollective.com>
+Subject: Welcome to 5 Days to Fix Your Newsletter!
+Date: Mon, 8 Sep 2026 09:00:00 +0000
+Message-ID: <x@inboxcollective.com>
+List-Id: Inbox Collective <e5101197dd74666a141a34e7b.160398.list-id.mcsv.net>
+Content-Type: text/html; charset="utf-8"
+""",
+        "<html><body><p>Hello.</p></body></html>",
+    )
+    assert extract(raw).source_host == "inboxcollective.com"
+
+
+def test_an_opaque_hex_list_id_host_falls_back_even_off_mailchimp() -> None:
+    """The hex-label test is the general rule the mcsv.net check is only
+    one instance of: a label of 16+ hex characters is a machine
+    identifier, whatever domain it sits under. Splitting on anything but
+    "." never sees those labels at all.
+    """
+    raw = message(
+        """
+From: Benedict Evans <benedict@ben-evans.com>
+Subject: The new gatekeepers
+Date: Mon, 8 Sep 2026 09:00:00 +0000
+Message-ID: <y@ben-evans.com>
+List-Id: Benedict Evans <b98e2de85f03865f1d38de74f.77913.list-id.example.net>
+Content-Type: text/html; charset="utf-8"
+""",
+        "<html><body><p>Hello.</p></body></html>",
+    )
+    assert extract(raw).source_host == "ben-evans.com"
+
+
+def test_a_readable_list_id_host_is_kept() -> None:
+    """The fallback must not swallow the useful case: on the big
+    platforms the List-Id host is the only place the publication's own
+    name appears."""
+    raw = message(
+        """
+From: Forrest Brazeal <forrest@substack.com>
+Subject: Cloud Irregular
+Date: Mon, 8 Sep 2026 09:00:00 +0000
+Message-ID: <z@substack.com>
+List-Id: Cloud Irregular <cloudirregular.substack.com>
+Content-Type: text/html; charset="utf-8"
+""",
+        "<html><body><p>Hello.</p></body></html>",
+    )
+    assert extract(raw).source_host == "cloudirregular.substack.com"
