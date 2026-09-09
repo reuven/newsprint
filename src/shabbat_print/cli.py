@@ -75,6 +75,7 @@ def _fetch_documents(
     if not uids:
         return []
     started = time.monotonic()
+    raw: dict[int, bytes]
     if len(uids) <= FETCH_CHUNK_SIZE:
         raw = box.fetch_many(uids, items)
     else:
@@ -82,7 +83,7 @@ def _fetch_documents(
             uids[start : start + FETCH_CHUNK_SIZE]
             for start in range(0, len(uids), FETCH_CHUNK_SIZE)
         ]
-        raw: dict[int, bytes] = {}
+        raw = {}
         with click.progressbar(
             chunks,
             label=label,
@@ -651,7 +652,7 @@ def main(
 
     if trash and uids:
         try:
-            result = retire_printed(config, uids, trash)
+            retirement = retire_printed(config, uids, trash)
         except (MailError, imaplib.IMAP4.error, OSError) as error:
             # The job is already spooled: password_for(), Mailbox.__enter__(),
             # or imaplib's own readonly guard on the write-mode SELECT can
@@ -673,9 +674,9 @@ def main(
             {
                 "outcome": "retired",
                 "trash": trash,
-                "retired": list(result.retired),
-                "failed": list(result.failed),
-                "unrecoverable": list(result.unrecoverable),
+                "retired": list(retirement.retired),
+                "failed": list(retirement.failed),
+                "unrecoverable": list(retirement.unrecoverable),
             }
         )
-        click.echo(f"Retired {len(result.retired)} message(s) to {trash}.")
+        click.echo(f"Retired {len(retirement.retired)} message(s) to {trash}.")

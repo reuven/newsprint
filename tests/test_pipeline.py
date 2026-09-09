@@ -208,3 +208,50 @@ def test_a_document_with_exactly_the_threshold_word_count_is_built(
     built, failed = build([document(LONG_PROSE)], at_threshold, tmp_path / "at")
     assert failed == []
     assert len(built) == 1
+
+
+def test_the_rerender_callback_reaches_render_fn_with_the_same_document(
+    monkeypatch, config, tmp_path: Path
+) -> None:
+    """build_one hands trim.fit a callback that re-renders this one
+    document at a lower compression. Nothing exercised it: fit only calls
+    it when a page is a widow, and no pipeline test produces one, so the
+    body was invisible to both the suite and coverage until it stopped
+    being a lambda.
+
+    Binding cleaned and document_dir as defaults is the part that matters
+    - a plain closure over the loop variables would re-render the wrong
+    document once more than one is in flight.
+    """
+    from pathlib import Path as _Path
+
+    from shabbat_print.models import Verdict
+
+    calls: list[tuple[float, object]] = []
+
+    def _recording_render(document, config, out_dir=None, **kwargs):
+        compression = kwargs.get("compression")
+        if compression is not None:
+            calls.append((compression, document.origin.identifier))
+        from shabbat_print.render import render as real_render
+
+        return real_render(document, config, out_dir=out_dir)
+
+    def _fit_that_rerenders(pdf, paper, layout, rerender):
+        # Stand in for the widow path: call the callback exactly as
+        # trim.fit does, then keep the original PDF.
+        rerender(0.99)
+        return pdf, Verdict.FULL
+
+    monkeypatch.setattr("shabbat_print.pipeline.fit", _fit_that_rerenders)
+
+    built, failed = build(
+        [document(LONG_PROSE, "<rerender@x>")],
+        config,
+        tmp_path,
+        render_fn=_recording_render,
+    )
+    assert failed == []
+    assert len(built) == 1
+    assert calls == [(0.99, "<rerender@x>")]
+    assert isinstance(built[0].pdf, _Path)

@@ -18,6 +18,7 @@ defaults.
 import os
 import shutil
 from collections.abc import Callable, Sequence
+from typing import cast
 
 import questionary
 from prompt_toolkit.layout.containers import ScrollOffsets, Window
@@ -119,4 +120,6 @@ def questionary_prompt(
         return []
     question = checkbox(_MESSAGE, choices)
     _keep_group_heading_visible(question)
-    return question.ask()
+    # .ask() is untyped upstream; the cast states the contract this
+    # module's own signature already promises.
+    return cast("list[Document] | None", question.ask())

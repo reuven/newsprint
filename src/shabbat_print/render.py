@@ -22,6 +22,7 @@ from html import escape
 from io import BytesIO
 from pathlib import Path
 from string import Template
+from typing import Protocol
 
 from PIL import Image
 
@@ -38,13 +39,23 @@ from .config import Config
 from .geometry import MM_PER_INCH
 from .models import Document
 
+
 # What render() (and the HTML() constructor it feeds) needs from a URL
 # fetcher: something callable with a URL, returning an object with a
 # `.read()` -> bytes method. weasyprint.urls.URLFetcher instances satisfy
 # this via __call__; so does any test double (see test_render.py's
 # _FakeResponse) - the same "pass anything with the right shape" contract
 # printer.spool's `runner` and mail.Mailbox's `imap_factory` already use.
-ImageFetcher = Callable[[str], object]
+class FetchedResource(Protocol):
+    """What _fetch_and_process needs back from a fetcher: bytes, and
+    optionally a close(). Spelling it out rather than leaving the return
+    `object` is what lets a type checker see that `.read()` is part of the
+    contract these doubles are written against."""
+
+    def read(self) -> bytes: ...
+
+
+ImageFetcher = Callable[[str], FetchedResource]
 
 # A per-image ceiling on how long a fetch may block: a slow or dead chart
 # host must not stall an entire print run. 8s is generous for a single

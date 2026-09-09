@@ -12,7 +12,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from types import TracebackType
-from typing import Self
+from typing import Any, Self, cast
 
 import keyring
 
@@ -86,7 +86,9 @@ def _message_count(data: Sequence[bytes | None]) -> int:
     successful SELECT over a cosmetic number.
     """
     try:
-        return int(data[0])
+        # `or 0` for the None element imaplib can return in a response
+        # list; int() then reports the same 0 the except clause would.
+        return int(data[0] or 0)
     except (IndexError, TypeError, ValueError):
         return 0
 
@@ -218,6 +220,10 @@ class Mailbox:
 
     def _open(self) -> imaplib.IMAP4:
         imap = self._factory(self._host)
+        # Annotated because login() is typed as returning Literal["OK"],
+        # which would fix `status` to that one value and reject select()'s
+        # plain str below.
+        status: str
         status, _ = imap.login(self._user, self._password)
         if status != "OK":
             raise MailError(f"login failed for {self._user} at {self._host}: {status}")
@@ -270,7 +276,7 @@ class Mailbox:
                 "the messages this run selected can no longer be identified"
             )
 
-    def _fetch(self, uid_set: str, items: str) -> tuple[str, list]:
+    def _fetch(self, uid_set: str, items: str) -> tuple[str, list[Any]]:
         """One UID FETCH, retried once on a dropped connection.
 
         A FETCH is read-only and idempotent, so re-issuing it after a
@@ -310,7 +316,10 @@ class Mailbox:
         return self._imap
 
     def _search(self, criteria: str) -> list[int]:
-        status, data = self._connection.uid("SEARCH", None, criteria)
+        # None is how imaplib omits SEARCH's optional charset argument:
+        # IMAP4._command skips any arg that is None. typeshed types uid's
+        # varargs as str, which is narrower than imaplib actually is.
+        status, data = self._connection.uid("SEARCH", None, criteria)  # type: ignore[arg-type]
         if status != "OK":
             raise MailError(f"search failed for {criteria!r}: {status}")
         payload = data[0] or b""
@@ -393,7 +402,10 @@ class Mailbox:
         if status != "OK":
             raise MailError(f"LIST failed: {status}")
         for line in lines:
-            match = _TRASH_LINE.search(line)
+            # A LIST response line is always bytes; typeshed widens the
+            # element type to cover FETCH's (info, payload) tuples, which
+            # LIST never produces.
+            match = _TRASH_LINE.search(cast(bytes, line))
             if match:
                 return match.group(1).decode()
         raise MailError("no folder advertises the \\Trash special-use attribute")

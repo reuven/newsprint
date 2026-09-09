@@ -31,6 +31,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "mypy>=2.3.1",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
     "ruff>=0.16.6",
@@ -49,3 +50,18 @@ filterwarnings = [
 # type checking silently covering nothing at all. Pinning the formatter one
 # version back keeps the parentheses until mypy catches up.
 target-version = "py313"
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+# pymupdf ships types but leaves Document() itself untyped, so every
+# pymupdf.open() reads as an untyped call. The results are converted
+# explicitly at each call site instead.
+untyped_calls_exclude = ["pymupdf"]
+
+# WeasyPrint ships no py.typed marker, so its own types are invisible.
+# Everything this project actually calls on it is wrapped behind
+# render.FetchedResource and render.ImageFetcher, which are typed here.
+[[tool.mypy.overrides]]
+module = ["weasyprint.*"]
+ignore_missing_imports = true

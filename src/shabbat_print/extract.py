@@ -39,7 +39,10 @@ def _header(message: Message, name: str, default: str = "") -> str:
 
 def _decode(part: Message) -> str:
     payload = part.get_payload(decode=True)
-    if payload is None:
+    # get_payload is typed as the union of all its overloads' results;
+    # with decode=True it is bytes, or None for a container part. One
+    # isinstance narrows both cases at once.
+    if not isinstance(payload, bytes):
         return ""
     charset = part.get_content_charset() or "utf-8"
     try:

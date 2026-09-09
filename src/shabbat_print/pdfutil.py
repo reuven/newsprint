@@ -9,12 +9,12 @@ from .geometry import MM_PER_INCH, POINTS_PER_INCH
 
 def page_count(path: Path) -> int:
     with pymupdf.open(path) as document:
-        return document.page_count
+        return int(document.page_count)
 
 
 def page_text(path: Path, index: int) -> str:
     with pymupdf.open(path) as document:
-        return document[index].get_text()
+        return str(document[index].get_text())
 
 
 def text_extent_mm(path: Path, index: int, margin_mm: float) -> float:
@@ -46,4 +46,4 @@ def text_extent_mm(path: Path, index: int, margin_mm: float) -> float:
     if not blocks:
         return 0.0
     bottom_pt = max(block[3] for block in blocks)
-    return bottom_pt / scale
+    return float(bottom_pt) / scale
