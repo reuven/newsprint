@@ -1953,3 +1953,37 @@ def test_a_second_sponsor_header_inside_the_first_block_is_not_revisited() -> No
     assert "A MESSAGE FROM" not in cleaned.html
     assert "finest anvils" not in cleaned.html
     assert "surprised almost nobody" in cleaned.html
+
+
+def test_a_new_york_times_masthead_tail_is_removed() -> None:
+    """The user's report: every Times newsletter ended with its masthead
+    and subscription block. The columnist's own sign-off sits directly
+    above it and must survive - that is where the trailing run has to
+    stop."""
+    html = (
+        "<html><body><div>"
+        "<p>Germany's coalition talks collapsed this week, which surprised "
+        "almost nobody who had been watching the polls.</p>"
+        "<p>Thanks for spending part of your morning with The Times and me. "
+        "See you tomorrow. — Sam</p>"
+        "<p>Reach our team at themorning@nytimes.com.</p>"
+        "<p>Host: Sam Sifton</p>"
+        "<p>News Staff: Evan Gorelick, Brent Lewis, Lara McCoy, Karl Russell</p>"
+        "<p>Editorial Director, Newsletters: Jodi Rudoren</p>"
+        "<p>Deputy Editorial Director: Lauren Jackson</p>"
+        "<p>Subscribe to The TimesGet The New York Times app</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "coalition talks collapsed" in cleaned.html
+    assert "Thanks for spending part of your morning" in cleaned.html, (
+        "the sign-off is the author's own words, not chrome"
+    )
+    for chrome in (
+        "Reach our team",
+        "Jodi Rudoren",
+        "Lauren Jackson",
+        "Evan Gorelick",
+        "New York Times app",
+    ):
+        assert chrome not in cleaned.html, f"still present: {chrome!r}"
