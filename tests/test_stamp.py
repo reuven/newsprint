@@ -281,3 +281,74 @@ def test_draw_footer_skips_a_segment_that_truncates_to_nothing() -> None:
         text = page.get_text()
     assert "1/1" in text
     assert "1 · 5 Sep 2026" in text
+
+
+def test_the_footer_left_segment_carries_the_subject_after_the_byline() -> None:
+    """A packet with seven issues of The Morning had seven identical
+    footers; the subject is what tells them apart."""
+    from shabbat_print.stamp import footer_left
+
+    assert (
+        footer_left("Platformer", "Casey Newton", "The AI warnings are coming")
+        == "Platformer · Casey Newton · The AI warnings are coming"
+    )
+
+
+def test_the_byline_still_collapses_before_the_subject_is_added() -> None:
+    from shabbat_print.stamp import footer_left
+
+    assert (
+        footer_left("Axios Macro", "Axios Macro", "New trade stakes")
+        == "Axios Macro · New trade stakes"
+    )
+
+
+def test_a_subject_with_an_embedded_newline_is_flattened() -> None:
+    """Real subjects in the user's own queue carry embedded CRLFs from
+    unfolded header continuations."""
+    from shabbat_print.stamp import footer_left
+
+    assert (
+        footer_left("Bite Code!", None, "clearly\r\n explained!")
+        == "Bite Code! · clearly explained!"
+    )
+
+
+def test_an_empty_subject_leaves_the_byline_alone() -> None:
+    from shabbat_print.stamp import footer_left
+
+    assert footer_left("Platformer", "Casey Newton", "   ") == (
+        "Platformer · Casey Newton"
+    )
+
+
+def test_a_subject_repeating_its_publication_drops_the_repeat() -> None:
+    """A packet of seven Morning issues paid for "The Morning" twice on
+    every one of them."""
+    from shabbat_print.stamp import footer_left
+
+    assert (
+        footer_left("The Morning", None, "The Morning: The word is bond")
+        == "The Morning · The word is bond"
+    )
+    assert (
+        footer_left("Data Elixir", None, "Data Elixir - Issue 572")
+        == "Data Elixir · Issue 572"
+    )
+
+
+def test_a_prefix_that_is_not_the_publication_is_kept() -> None:
+    """ "Axios AM" under the byline "Mike Allen" is the only thing naming
+    that newsletter - removing it would lose information, not repeat it."""
+    from shabbat_print.stamp import footer_left
+
+    assert (
+        footer_left("Mike Allen", "Mike Allen", "Axios AM: Blue wave rising")
+        == "Mike Allen · Axios AM: Blue wave rising"
+    )
+
+
+def test_a_subject_that_is_only_the_publication_name_survives() -> None:
+    from shabbat_print.stamp import footer_left
+
+    assert footer_left("Platformer", None, "Platformer: ") == "Platformer · Platformer:"

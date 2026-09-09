@@ -67,6 +67,69 @@ def byline(publication: str, author: str | None) -> str:
     return f"{publication} · {author}"
 
 
+# A subject can carry an embedded CRLF from an unfolded header
+# continuation - the picker already defends against the same dirty data
+# (see picker._sanitize_subject). Here it would not corrupt the line the
+# way it does in a terminal, but it would still measure and draw as
+# whitespace inside the footer, so it is collapsed to single spaces.
+_WHITESPACE_RUN = re.compile(r"\s+")
+
+
+# A leading "<name><separator>" on a subject line. Bounded at 40
+# characters so this only ever considers a real prefix, never half a
+# sentence that happens to contain a dash.
+_SUBJECT_PREFIX = re.compile(r"^(.{2,40}?)\s*[:\u2013\u2014|-]\s+")
+
+
+def _strip_repeated_publication(subject: str, publication: str) -> str:
+    """Drop a subject's leading repeat of its own publication name.
+
+    Several newsletters prefix every subject with their own name - "The
+    Morning: The word is bond", "DealBook: Is $100 oil coming?", "Data
+    Elixir - Issue 572". In the footer that name is already the first
+    thing on the line, so the repeat spends a third of a very small
+    budget saying it twice; a packet carrying seven issues of The Morning
+    pays it seven times. Measured across the 268 archived newsletters, 14
+    subjects do this.
+
+    Only an actual repeat is removed: the prefix and the publication must
+    contain one another, so "Axios AM: ..." under the byline "Mike Allen"
+    keeps its prefix, which is genuinely the only thing naming that
+    newsletter. Never returns empty - a subject that is *only* its own
+    publication name is left alone rather than reduced to nothing.
+    """
+    match = _SUBJECT_PREFIX.match(subject)
+    if match is None:
+        return subject
+    prefix = match.group(1).casefold().strip()
+    name = publication.casefold().strip()
+    if not prefix or not (prefix in name or name in prefix):
+        return subject
+    return subject[match.end() :].strip() or subject
+
+
+def footer_left(publication: str, author: str | None, title: str) -> str:
+    """The footer's left segment: who wrote it, then what this one is.
+
+    The byline alone answers "which newsletter" but not "which issue" -
+    on a packet of several issues from the same publication (The Morning
+    runs seven in a week) every footer read identically. The subject is
+    appended after the byline so the byline, the part that identifies the
+    publication, is what survives when _draw_footer truncates the segment
+    to fit; the subject is what gets cut, which is the right way round.
+
+    Separated with the same "·" byline itself uses: it is Latin-1, so the
+    base-14 "helv" font really has it. An em dash measures the same width
+    as a middle dot in that font, which is how you can tell it is being
+    silently substituted - the same trap ELLIPSIS documents.
+    """
+    line = byline(publication, author)
+    subject = _strip_repeated_publication(
+        _WHITESPACE_RUN.sub(" ", title).strip(), publication
+    )
+    return f"{line} · {subject}" if subject else line
+
+
 def _shares_most_words(a: str, b: str) -> bool:
     """True when the shorter of two (already casefolded) names has most
     of its words - strictly more than half - also present in the longer
@@ -174,7 +237,11 @@ def stamp_packet(
     stamped: list[Path] = []
     offset = 0
     for index, item in enumerate(built):
-        left = byline(item.document.publication, item.document.author)
+        left = footer_left(
+            item.document.publication,
+            item.document.author,
+            item.document.title,
+        )
         with pymupdf.open(item.pdf) as document:
             total = document.page_count
             for page_index in range(total):
