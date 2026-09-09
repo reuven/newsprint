@@ -28,6 +28,14 @@ FONT_SIZE_PT = 6.0
 # #555555, the same grey render.py's old @bottom-center counter used.
 COLOR = (0x55 / 0xFF, 0x55 / 0xFF, 0x55 / 0xFF)
 SEGMENT_GAP_PT = 6.0
+# The gap before the packet cell number, which is deliberately much wider
+# than SEGMENT_GAP_PT. The counter ("10/13") used to sit centred in the
+# cell, which wasted ~70pt of dead space to its right while the subject on
+# the left was being cut mid-word. Moving it right recovers that space,
+# but it then sits beside another number ("361 · 9 Sep 2026"), and two
+# numbers a normal word-space apart read as one field. Four times the
+# ordinary gap keeps them legibly separate.
+COUNTER_GAP_PT = 24.0
 # Not "…": PyMuPDF's base-14 "helv" font silently substitutes a single
 # middle dot for U+2026, which reads as a typo rather than a truncation.
 ELLIPSIS = "..."
@@ -191,9 +199,17 @@ def _draw_footer(
     paper: Paper,
     layout: LayoutConfig,
     left: str,
-    centre: str,
+    counter: str,
     right: str,
 ) -> None:
+    """Draw the three footer segments.
+
+    `left` is the byline and subject, `counter` the page's position
+    within its own newsletter, `right` the packet cell number and date.
+    Only `left` is truncated: it is the one segment whose length is not
+    known in advance, and the two on the right are the ones a reader
+    navigates by.
+    """
     scale = POINTS_PER_INCH / MM_PER_INCH
     cell_width_pt, cell_height_pt = paper.cell.as_points()
     margin_pt = layout.margin_mm * scale
@@ -202,13 +218,19 @@ def _draw_footer(
     baseline_y = cell_height_pt - margin_pt / 2
 
     right_width = pymupdf.get_text_length(right, fontname=FONT, fontsize=FONT_SIZE_PT)
-    centre_width = pymupdf.get_text_length(centre, fontname=FONT, fontsize=FONT_SIZE_PT)
+    counter_width = pymupdf.get_text_length(
+        counter, fontname=FONT, fontsize=FONT_SIZE_PT
+    )
     right_x = cell_width_pt - margin_pt - right_width
-    centre_x = (cell_width_pt - centre_width) / 2
-    left_max_width = max(0.0, centre_x - SEGMENT_GAP_PT - margin_pt)
+    # Right-aligned against the date rather than centred in the cell, so
+    # every column the counter is not using goes to the subject. Clamped
+    # at the left margin so a pathologically narrow cell degrades to
+    # overlapping text rather than negative coordinates.
+    counter_x = max(margin_pt, right_x - COUNTER_GAP_PT - counter_width)
+    left_max_width = max(0.0, counter_x - SEGMENT_GAP_PT - margin_pt)
     left_text = _truncate(left, left_max_width)
 
-    for text, x in ((left_text, margin_pt), (centre, centre_x), (right, right_x)):
+    for text, x in ((left_text, margin_pt), (counter, counter_x), (right, right_x)):
         if text:
             page.insert_text(
                 (x, baseline_y),
@@ -245,9 +267,9 @@ def stamp_packet(
         with pymupdf.open(item.pdf) as document:
             total = document.page_count
             for page_index in range(total):
-                centre = f"{page_index + 1}/{total}"
+                counter = f"{page_index + 1}/{total}"
                 right = f"{offset + page_index + 1} · {date_text}"
-                _draw_footer(document[page_index], paper, layout, left, centre, right)
+                _draw_footer(document[page_index], paper, layout, left, counter, right)
             output = out_dir / f"{index:03d}-stamped.pdf"
             document.save(output)
         stamped.append(output)
