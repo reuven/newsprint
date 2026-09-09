@@ -1815,3 +1815,35 @@ def test_a_link_inside_a_longer_caption_does_not_keep_the_image() -> None:
         "</div></body></html>"
     )
     assert clean_document(document(html)).images_kept == 0
+
+
+def test_an_axios_style_footer_is_removed_whole() -> None:
+    """The user's report: the tail of every Axios newsletter survived
+    cleaning intact. Its lines are short declarative sentences, so each
+    scored as content, and the last of them - the postal address - held
+    the trailing chrome run open so that nothing was removed at all.
+    """
+    html = (
+        "<html><body><div>"
+        "<p>The Fed declined to move rates this month, which surprised almost "
+        "nobody who had been paying attention to the minutes and the dot plot.</p>"
+        "<p>Advertise with us.</p>"
+        "<p>Axios thanks our partners for supporting our journalism.</p>"
+        "<p>Sponsorship has no influence on editorial content.</p>"
+        "<p>Thank you for signing up for this Axios newsletter.</p>"
+        "<p>Follow Axios across:</p>"
+        "<p>Axios, PO Box 101060, Arlington VA 22201</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    text = cleaned.html
+    assert "surprised almost" in text, "the article itself must survive"
+    for chrome in (
+        "Advertise with us",
+        "supporting our journalism",
+        "Sponsorship has no influence",
+        "Thank you for signing up",
+        "Follow Axios across",
+        "PO Box 101060",
+    ):
+        assert chrome not in text, f"still present: {chrome!r}"

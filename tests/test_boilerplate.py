@@ -758,3 +758,79 @@ def test_a_real_sentence_ending_for_the_new_york_times_survives() -> None:
         )
         is False
     )
+
+
+# ---------------------------------------------------------------------------
+# Round 5: the Axios footer the user reported. Its lines are short
+# declarative sentences, and the short-line fallback only calls a line
+# chrome when it has no sentence-ending punctuation - so each of these
+# scored a full 1.00 as content and, sitting at the document's tail, held
+# the trailing chrome run open on every Axios newsletter.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Advertise with us.",
+        "Learn more.",
+        "Discover how",
+        "Sponsorship has no influence on editorial content.",
+        "Thank you for signing up for this Axios newsletter.",
+        "Follow Axios across:",
+        "Follow us on:",
+    ],
+)
+def test_axios_footer_lines_are_full_line_chrome(line: str) -> None:
+    assert is_full_line_chrome(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # Each contains one of the phrases above but is a real sentence.
+        "Following the money across Europe was harder than anyone expected.",
+        "Learn more about the eurozone crisis from our Frankfurt bureau.",
+        "He wanted to advertise with us, but the budget never materialized.",
+        "Discover how the Fed thinks about inflation, in three charts.",
+    ],
+)
+def test_real_sentences_containing_those_phrases_survive(line: str) -> None:
+    """A full-line match is a far stronger claim than a substring one, and
+    these are exactly the sentences a substring rule would destroy."""
+    assert not is_full_line_chrome(line)
+
+
+def test_a_sender_prefixed_postal_address_scores_as_chrome() -> None:
+    """ "Axios, PO Box 101060, Arlington VA 22201" is the document's last
+    leaf and scored 1.00 content, which stopped the trailing run before it
+    removed anything at all."""
+    assert is_boilerplate_line("Axios, PO Box 101060, Arlington VA 22201")
+    assert content_ratio("Axios, PO Box 101060, Arlington VA 22201") == 0.0
+
+
+def test_a_sender_prefixed_address_is_not_a_deletable_line_on_its_own() -> None:
+    """Scored as chrome, but deliberately not deletable on its own.
+
+    _strip_line_chrome deletes on is_full_line_chrome, so that is the
+    property that matters here. Widening _ADDRESS_LINE to accept a sender
+    name before the box - which would have made this deletable - was tried
+    and reverted: measured across the fixture corpus it cost 2,417 lines
+    and cut jon-puck-news.eml from 280 lines to 1, because that match
+    fires against the raw document, where the line it hits can carry a
+    whole enclosing element away with it.
+
+    is_definite_chrome_line is true, and should be: its only caller is the
+    protected-heading guard, and a postal address must not be mistaken for
+    a masthead just because it is short.
+    """
+    address = "Axios, PO Box 101060, Arlington VA 22201"
+    assert not is_full_line_chrome(address)
+    assert is_definite_chrome_line(address)
+
+
+def test_a_bare_street_address_is_still_deletable() -> None:
+    """The unprefixed form keeps the stronger treatment it already had."""
+    assert is_definite_chrome_line(
+        "PO Box 448, Accord, NY 12404"
+    ) or is_full_line_chrome("PO Box 448, Accord, NY 12404")

@@ -149,9 +149,45 @@ PHRASES: tuple[str, ...] = (
     "if you enjoyed this post",
     "share it with friends",
     "is a free newsletter",
+    # Round 5 (the user's Axios report). These are scoring-only entries,
+    # never full-line matches: each sits inside a block whose other lines
+    # are long enough to read as prose, so the block scored 0.82 content
+    # and held the trailing chrome run open even after the standalone
+    # footer lines around it had been removed. Each is house or bulk-mail
+    # language rather than editorial text, and as substrings they can only
+    # lower a block's score, never delete a line on their own.
+    "thanks our partners for supporting",
+    "you can reach the authors by replying",
+    "how we use ai in our journalism",
+    "sponsorship has no influence",
+    "smart brevity",
+    "hands-on training or internal comms",
+    "like this comms style and format",
+    # The CAN-SPAM postal address every bulk sender must carry. _ADDRESS_LINE
+    # already matches the bare street-address form, but not one prefixed
+    # with the sender's name ("Axios, PO Box 101060, Arlington VA 22201"),
+    # and widening that regex was measured to be dangerous - it fires
+    # against the raw document, where it can carry a whole enclosing
+    # element away (see its own comment). As a scoring-only phrase this
+    # cannot delete anything by itself; it just stops such a line being
+    # counted as prose, which is what was holding the trailing chrome run
+    # open on every Axios newsletter.
+    "po box",
 )
 
 _URL_ONLY = re.compile(r"^(https?://\S+|www\.\S+)$", re.IGNORECASE)
+
+# The lead-in above a row of social icons - "Follow Axios across:", "Follow
+# us on:". It ends in a colon, so the short-line fallback reads it as a
+# sentence and scores it as content, which is what stopped the trailing
+# chrome run dead on every Axios newsletter: it is the document's very last
+# leaf, so the walk halted before removing anything at all. Bounded to a
+# short brand name so it cannot match a real sentence beginning "Follow".
+_FOLLOW_ACROSS_LINE = re.compile(
+    r"^follow\s+(?:us|[\w'.\u2019-]+(?:\s+[\w'.\u2019-]+){0,2})"
+    r"\s+(?:across|on)\s*:?$",
+    re.IGNORECASE,
+)
 _SENTENCE_END = (".", "!", "?", '"', "'", ")", ":", "”", "’")
 
 # A line that IS a postal address - a street address, or a PMB/Suite/Apt/#
@@ -160,6 +196,13 @@ _SENTENCE_END = (".", "!", "?", '"', "'", ")", ":", "”", "’")
 # would also match a genuine sentence that merely quotes an address, since
 # real addresses often appear mid-sentence in real prose.
 _ADDRESS_LINE = re.compile(
+    # NOT widened to allow a sender name before the box ("Axios, PO Box
+    # 101060, Arlington VA 22201"). That was tried and reverted: measured
+    # across the fixture corpus it cost 2,417 lines and reduced
+    # jon-puck-news.eml from 280 lines to 1 - the match fires against the
+    # raw document, where the line it hits can carry a large enclosing
+    # element away with it. Counting post-clean matches (16, all genuine
+    # addresses) hid that entirely.
     r"(?:\d+\s+\S.*|(?:PMB|Suite|Ste\.?|Apt\.?|#)\s*\S.*)"
     r",\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?\.?",
     re.IGNORECASE,
@@ -234,6 +277,21 @@ _FULL_LINE_CHROME: frozenset[str] = frozenset(
         "like",
         "comment",
         "share now",
+        # Round 5 (the user's Axios report): a trailing footer whose lines
+        # are short declarative sentences. The short-line fallback only
+        # treats a line under SHORT_LINE as chrome when it has no
+        # sentence-ending punctuation, so each of these scored a full 1.00
+        # as content and, being the document's own tail, held the trailing
+        # chrome run open. All are bare calls to action or bulk-mail
+        # disclosure, never editorial text, when they are the whole line.
+        "advertise with us",
+        "advertise with us.",
+        "learn more",
+        "learn more.",
+        "discover how",
+        "discover how.",
+        "sponsorship has no influence on editorial content",
+        "sponsorship has no influence on editorial content.",
         "read in app",
         "view in browser",
         "share the bulwark",
@@ -486,6 +544,13 @@ _FULL_LINE_CHROME_PREFIXES: tuple[str, ...] = (
     "this email was sent by:",
     "this email was sent to:",
     "this email has been sent to",
+    # Round 5 (the user's Axios report), same family as the entries above:
+    # each continues with a publication or brand name, so none can be a
+    # fixed phrase, and each is bulk-mail disclosure or house promotion no
+    # editorial sentence opens with.
+    "thank you for signing up for this",
+    "you can reach the authors by replying",
+    "sponsorship has no influence",
 )
 
 # "Get the Bulwark app" - the user's own report names one publication, but
@@ -653,6 +718,8 @@ def is_full_line_chrome(text: str) -> bool:
     if _COPYRIGHT_LINE_START.match(collapsed):
         return True
     if _ADDRESS_LINE.fullmatch(collapsed):
+        return True
+    if _FOLLOW_ACROSS_LINE.match(normalized):
         return True
     return _is_delimited_chrome_row(collapsed)
 
