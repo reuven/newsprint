@@ -65,7 +65,7 @@ def length_label(size: int | None) -> str:
     return "long"
 
 
-def format_pick_date(day: date) -> str:
+def format_pick_date(day: date, today: date | None = None) -> str:
     """`%-d %b`, without strftime's locale-dependent `%b` and without a
     year.
 
@@ -77,8 +77,113 @@ def format_pick_date(day: date) -> str:
     information as "3 Sep" in a third of the width - see
     picker-layout.md point 3. The footer itself (stamp.format_packet_date)
     is unaffected; a printed page still needs the year.
+
+    `today` adds "(today)" or "(yesterday)" beside the date when the
+    candidate is that recent - the two the user reads as "just arrived"
+    and has to work out from the number otherwise. The date itself always
+    stays, so the column still sorts and reads the same way; passing None
+    (the default) keeps the bare stamp, which is what every test that
+    does not care about relative dates wants. Both sides of the
+    comparison are UTC dates - `day` comes from Document.date, which
+    extract._date always makes timezone-aware - so a candidate never
+    reads as "today" against a differently-zoned notion of now.
     """
-    return f"{day.day} {_MONTHS[day.month - 1]}"
+    stamp = f"{day.day} {_MONTHS[day.month - 1]}"
+    if today is None:
+        return stamp
+    if day == today:
+        return f"{stamp} (today)"
+    if day == today - timedelta(days=1):
+        return f"{stamp} (yesterday)"
+    return stamp
+
+
+# Hosts that identify a publishing platform, not a publication: every
+# Substack shares substack.com, so the bare domain says nothing a reader
+# does not already know. What is informative is the label in front of it
+# ("cloudirregular.substack.com"), which is the publication's own name.
+_PLATFORM_HOSTS = (
+    "substack.com",
+    "buttondown.email",
+    "ghost.io",
+    "beehiiv.com",
+    "campaign-archive.com",
+)
+
+# Two-part public suffixes, so a host under one is not reduced past its
+# actual name ("bbc.co.uk" must not become "co.uk"). Only the ones the
+# archive's senders could plausibly use; an unknown compound suffix
+# degrades to showing one label more than needed, never to hiding the
+# name.
+_COMPOUND_SUFFIXES = frozenset(
+    {"co.uk", "org.uk", "ac.uk", "co.il", "com.au", "co.nz", "co.jp", "com.br"}
+)
+
+_NOT_ALPHANUMERIC = re.compile(r"[^a-z0-9]+")
+
+
+def _fold(text: str) -> str:
+    return _NOT_ALPHANUMERIC.sub("", text.lower())
+
+
+def _registrable(host: str) -> str:
+    """`host` reduced to the domain someone registered.
+
+    Senders route mail through per-newsletter subdomains that name the
+    mail stream, not the publication - the New York Times sends DealBook
+    from dk.nytimes.com and The Morning from nn.nytimes.com. "nytimes.com"
+    is the part a reader recognises; "dk." and "nn." are noise. Taking the
+    last two labels gets that without a hand-maintained list of every
+    prefix a sender might invent.
+    """
+    labels = host.split(".")
+    if len(labels) > 2 and ".".join(labels[-2:]) in _COMPOUND_SUFFIXES:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
+
+def _informative_host(host: str) -> str | None:
+    """`host` reduced to what actually identifies the publication, or
+    None if nothing does."""
+    for platform in _PLATFORM_HOSTS:
+        if host == platform:
+            return None
+        if host.endswith(f".{platform}"):
+            # The label in front of the platform is the publication:
+            # "cloudirregular.substack.com" -> "cloudirregular".
+            return host[: -(len(platform) + 1)].rpartition(".")[2]
+    return _registrable(host)
+
+
+def source_label(publication: str, source_host: str | None) -> str | None:
+    """What to show beside `publication`, or None when it would add
+    nothing.
+
+    Some newsletters are named after their author and nothing else - the
+    picker shows "Jon Kelly" with no hint that it is Puck, or "Ben
+    Thompson" with no hint that it is Stratechery. Showing the sending
+    host fixes that, but showing it unconditionally is worse than not
+    showing it: "Axios Macro (axios.com)" and "Derek Thompson
+    (derekthompson.substack.com)" are pure noise.
+
+    So it is shown only when it adds information the name does not
+    already carry - decided by comparing the host's own name, with its
+    TLD and any platform suffix removed, against the publication name.
+    Either containing the other means the name already says it. This is
+    deliberately not an attempt to detect whether a name is a person's:
+    measured against the archive, capitalisation and word-count rules
+    classify "Axios Macro" and "The Economist" as people.
+    """
+    if not source_host:
+        return None
+    label = _informative_host(source_host)
+    if not label:
+        return None
+    stem = _fold(label.rpartition(".")[0] or label)
+    folded_publication = _fold(publication)
+    if not stem or stem in folded_publication or folded_publication in stem:
+        return None
+    return label
 
 
 def window_since(
@@ -122,6 +227,10 @@ class PickGroup:
 
     publication: str
     rows: tuple[PickRow, ...]
+    # What to show beside the publication name, or None - see
+    # source_label. Resolved here rather than at render time so the
+    # heading stays a pure formatting step.
+    source: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +250,7 @@ def build_picklist(
     candidates: Sequence[Document],
     sizes: Mapping[int, int],
     limit: int | None = DISPLAY_LIMIT,
+    today: date | None = None,
 ) -> Picklist:
     """Group by publication, sort each group oldest first, and label each
     row with its length (see length_label).
@@ -169,7 +279,7 @@ def build_picklist(
             rows=tuple(
                 PickRow(
                     document=document,
-                    when=format_pick_date(document.date.date()),
+                    when=format_pick_date(document.date.date(), today),
                     length=length_label(
                         sizes.get(document.origin.uid)
                         if document.origin.uid is not None
@@ -178,6 +288,7 @@ def build_picklist(
                 )
                 for document in grouped[publication]
             ),
+            source=source_label(publication, grouped[publication][0].source_host),
         )
         for publication in sorted(grouped, key=str.casefold)
     )
@@ -298,7 +409,7 @@ def _truncate_to_width(text: str, max_width: int) -> str:
     return f"{trimmed}{_ELLIPSIS}" if trimmed else _ELLIPSIS
 
 
-def _heading_rule(publication: str, width: int) -> str:
+def _heading_rule(publication: str, source: str | None, width: int) -> str:
     """`── PUBLICATION ──────...`, filled to `width` terminal columns.
 
     Capitalised, with rule characters on both sides - unmistakably a
@@ -306,7 +417,12 @@ def _heading_rule(publication: str, width: int) -> str:
     without relying on colour as the only cue (some users' terminal
     themes make a dim colour hard to see - see picker-layout.md point 2).
     """
-    label = f"── {publication.upper()} "
+    # The publication is upper-cased, the source is not: a host read as
+    # "PUCK.NEWS" looks like shouting rather than an address.
+    named = (
+        publication.upper() if source is None else f"{publication.upper()} ({source})"
+    )
+    label = f"── {named} "
     label_width = _display_width(label)
     if label_width >= width:
         return _truncate_to_width(label.rstrip(), width)
@@ -391,7 +507,8 @@ def layout_picklist(picklist: Picklist, width: int) -> tuple[PickLine, ...]:
         lines.append(PickLine(kind="blank", text=" "))
         lines.append(
             PickLine(
-                kind="heading", text=_heading_rule(group.publication, heading_width)
+                kind="heading",
+                text=_heading_rule(group.publication, group.source, heading_width),
             )
         )
         for row in group.rows:

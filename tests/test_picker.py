@@ -350,7 +350,7 @@ def test_layout_picklist_never_emits_a_control_character_in_a_row() -> None:
 def test_heading_rule_fills_to_the_given_width() -> None:
     from shabbat_print.picker import _display_width, _heading_rule
 
-    rule = _heading_rule("Axios Macro", 46)
+    rule = _heading_rule("Axios Macro", None, 46)
     assert _display_width(rule) == 46
     label = "── AXIOS MACRO "
     assert rule == label + "─" * (46 - len(label))
@@ -359,13 +359,13 @@ def test_heading_rule_fills_to_the_given_width() -> None:
 def test_heading_rule_uppercases_the_publication() -> None:
     from shabbat_print.picker import _heading_rule
 
-    assert "BEN THOMPSON" in _heading_rule("Ben Thompson", 40)
+    assert "BEN THOMPSON" in _heading_rule("Ben Thompson", None, 40)
 
 
 def test_heading_rule_truncates_a_publication_longer_than_the_width() -> None:
     from shabbat_print.picker import _display_width, _heading_rule
 
-    rule = _heading_rule("An Extremely Long Publication Name That Never Fits", 20)
+    rule = _heading_rule("An Extremely Long Publication Name That Never Fits", None, 20)
     assert _display_width(rule) <= 20
 
 
@@ -541,3 +541,94 @@ def test_layout_picklist_degrades_sensibly_in_a_narrow_terminal() -> None:
 def test_layout_picklist_handles_no_candidates() -> None:
     picklist = build_picklist([], sizes={})
     assert layout_picklist(picklist, width=80) == ()
+
+
+# ---------------------------------------------------------------------------
+# source_label: showing where an author-named newsletter comes from
+# ---------------------------------------------------------------------------
+
+
+def test_a_host_that_names_the_publication_is_shown() -> None:
+    """ "Jon Kelly" alone does not say Puck; the host does."""
+    from shabbat_print.picker import source_label
+
+    assert source_label("Jon Kelly", "puck.news") == "puck.news"
+    assert source_label("Ben Thompson", "stratechery.com") == "stratechery.com"
+    assert (
+        source_label("Garrett M. Graff", "doomsdayscenario.co") == "doomsdayscenario.co"
+    )
+
+
+def test_a_host_the_name_already_carries_is_not_shown() -> None:
+    """ "Derek Thompson (derekthompson.substack.com)" is pure noise."""
+    from shabbat_print.picker import source_label
+
+    assert source_label("Derek Thompson", "derekthompson.substack.com") is None
+    assert source_label("Axios Macro", "axios.com") is None
+    assert source_label("Justin Welsh", "justinwelsh.me") is None
+    assert source_label("New Yorker Humor", "newsletter.newyorker.com") is None
+
+
+def test_a_bare_platform_host_says_nothing_and_is_not_shown() -> None:
+    """Every Substack shares substack.com, so the bare domain identifies
+    nothing - unlike the label in front of it."""
+    from shabbat_print.picker import source_label
+
+    assert source_label("Bite Code!", "substack.com") is None
+    assert source_label("The Reframe", "ghost.io") is None
+    assert source_label("Mark Hurst", "creativegood.buttondown.email") == "creativegood"
+
+
+def test_a_generic_mail_subdomain_is_stripped_before_showing() -> None:
+    from shabbat_print.picker import source_label
+
+    assert source_label("Matt Levine", "news.bloomberg.com") == "bloomberg.com"
+
+
+def test_no_host_means_nothing_to_show() -> None:
+    from shabbat_print.picker import source_label
+
+    assert source_label("Someone", None) is None
+    assert source_label("Someone", "") is None
+
+
+def test_the_heading_keeps_the_source_lowercase() -> None:
+    """The publication is shouted, the host is not - "PUCK.NEWS" reads as
+    shouting rather than as an address."""
+    from shabbat_print.picker import _heading_rule
+
+    heading = _heading_rule("Jon Kelly", "puck.news", 60)
+    assert "JON KELLY (puck.news)" in heading
+
+
+# ---------------------------------------------------------------------------
+# today / yesterday
+# ---------------------------------------------------------------------------
+
+
+def test_todays_and_yesterdays_dates_say_so() -> None:
+    today = date(2026, 9, 9)
+    assert format_pick_date(date(2026, 9, 9), today) == "9 Sep (today)"
+    assert format_pick_date(date(2026, 9, 8), today) == "8 Sep (yesterday)"
+    assert format_pick_date(date(2026, 9, 7), today) == "7 Sep"
+
+
+def test_the_date_is_unchanged_when_no_today_is_given() -> None:
+    assert format_pick_date(date(2026, 9, 9)) == "9 Sep"
+
+
+def test_a_per_newsletter_mail_subdomain_reduces_to_the_registered_domain() -> None:
+    """The Times sends DealBook from dk.nytimes.com and The Morning from
+    nn.nytimes.com; "nytimes.com" is the part a reader recognises."""
+    from shabbat_print.picker import source_label
+
+    assert source_label("DealBook", "dk.nytimes.com") == "nytimes.com"
+    assert source_label("The Morning", "nn.nytimes.com") == "nytimes.com"
+
+
+def test_a_two_part_public_suffix_is_not_mistaken_for_a_domain() -> None:
+    """Reducing to the last two labels would turn "bbc.co.uk" into
+    "co.uk", which names nothing."""
+    from shabbat_print.picker import source_label
+
+    assert source_label("Some Author", "news.bbc.co.uk") == "bbc.co.uk"

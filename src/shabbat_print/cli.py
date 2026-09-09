@@ -153,7 +153,11 @@ def fetch_picked(
 
 
 def _offer_picks(
-    box: Mailbox, config: Config, names: PublicationNames, since: date
+    box: Mailbox,
+    config: Config,
+    names: PublicationNames,
+    since: date,
+    today: date,
 ) -> tuple[list[Document], list[int]]:
     """Show what else arrived since the last successful run and let the
     user add some to the packet.
@@ -194,7 +198,10 @@ def _offer_picks(
     # needs DISPLAY_LIMIT's flood protection - see its own docstring.
     interactive = _stdin_is_tty()
     picklist = build_picklist(
-        candidates, sizes, limit=None if interactive else DISPLAY_LIMIT
+        candidates,
+        sizes,
+        limit=None if interactive else DISPLAY_LIMIT,
+        today=today,
     )
     shown = sum(len(group.rows) for group in picklist.groups)
 
@@ -286,8 +293,9 @@ def fetch_queue(
         picked_uids: list[int] = []
         if not no_pick:
             try:
-                since = window_since(config.fallback_days, datetime.now(UTC).date())
-                picked, picked_uids = _offer_picks(box, config, names, since)
+                today = datetime.now(UTC).date()
+                since = window_since(config.fallback_days, today)
+                picked, picked_uids = _offer_picks(box, config, names, since, today)
             except MailError as error:
                 click.echo(
                     f"  Could not check for unstarred newsletters: {error}", err=True

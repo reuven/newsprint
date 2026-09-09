@@ -6,6 +6,7 @@ separate concern and lives in clean.py.
 
 import email
 import email.utils
+import re
 from datetime import UTC, datetime
 from email.header import decode_header, make_header
 from email.message import Message
@@ -105,6 +106,40 @@ def _publication(
     return address.partition("@")[2] or "unknown"
 
 
+# A List-Id host that is a mailing-system identifier rather than a name:
+# Mailchimp hands out things like
+# "b98e2de85f03865f1d38de74f.77913.list-id.mcsv.net", which identifies the
+# list to Mailchimp and nobody else. Falling back to the sender's own
+# domain is strictly more informative (that message is Benedict Evans, and
+# ben-evans.com says so).
+_OPAQUE_HOST_LABEL = re.compile(r"^[0-9a-f]{16,}$", re.IGNORECASE)
+
+
+def _is_opaque_host(host: str) -> bool:
+    if host.endswith("mcsv.net"):
+        return True
+    return any(_OPAQUE_HOST_LABEL.match(label) for label in host.split("."))
+
+
+def _source_host(message: Message, address: str) -> str | None:
+    """The host identifying where this newsletter comes from.
+
+    Prefers the List-Id host over the sender's domain because it names
+    the newsletter rather than the sending system: one address sends many
+    newsletters (nytdirect@nytimes.com sends The Morning, DealBook, and
+    named columnists alike), and on the big platforms the List-Id host is
+    the only place the publication's own name appears at all -
+    "cloudirregular.substack.com" for a message whose From is just
+    "Forrest Brazeal".
+    """
+    list_id = _header(message, "List-Id")
+    if "<" in list_id:
+        host = list_id.rpartition("<")[2].rstrip(">").strip().lower()
+        if host and not _is_opaque_host(host):
+            return host
+    return address.partition("@")[2].lower() or None
+
+
 def _date(message: Message) -> datetime:
     raw = message.get("Date")
     if raw:
@@ -137,6 +172,7 @@ def extract(
         publication=_publication(message, address, display, names or _EMPTY_NAMES),
         title=_header(message, "Subject", default="(no subject)"),
         author=display or None,
+        source_host=_source_host(message, address),
         date=_date(message),
         html=_body_html(message),
     )
