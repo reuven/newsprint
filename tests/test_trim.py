@@ -116,3 +116,15 @@ def test_fit_leaves_a_full_document_alone(tmp_path: Path) -> None:
     result, verdict = fit(pdf, A4, LAYOUT, rerender=lambda _: pdf)
     assert verdict is Verdict.FULL
     assert result == pdf
+
+
+def test_dropping_the_last_page_keeps_every_other_page(tmp_path: Path) -> None:
+    """Every other test here uses a two-page document, where "all but the
+    last" and "only the first" are the same list - so a slice that kept
+    only the first page passed the whole suite. On a real ten-page
+    newsletter that would print page one and silently discard the rest.
+    """
+    pdf = build(tmp_path / "long.pdf", [PROSE, PROSE, PROSE, PROSE, FOOTER])
+    result, verdict = fit(pdf, A4, LAYOUT, rerender=lambda _: pdf)
+    assert verdict is Verdict.FILLER
+    assert page_count(result) == 4
