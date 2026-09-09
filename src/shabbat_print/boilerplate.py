@@ -173,9 +173,53 @@ PHRASES: tuple[str, ...] = (
     # counted as prose, which is what was holding the trailing chrome run
     # open on every Axios newsletter.
     "po box",
+    # Round 6 (the user's New York Times report): the tail of every Times
+    # newsletter. Scoring-only, like the entries above - each of these
+    # lines runs past SHORT_LINE, so it read as a sentence and blocked the
+    # trailing chrome run.
+    "reach our team at",
+    "new york times app",
+    "nyt cooking app",
 )
 
 _URL_ONLY = re.compile(r"^(https?://\S+|www\.\S+)$", re.IGNORECASE)
+
+# A masthead credit line: a role, a colon, then nothing but proper names.
+# The New York Times ends every Morning with eight of them ("News Staff:
+# Evan Gorelick, Brent Lewis, Lara McCoy, Karl Russell"). The short ones
+# already score as chrome, but any over SHORT_LINE reads as a sentence and
+# scored 1.00 content, which held the trailing run open.
+#
+# Every word after the colon must be capitalised, which keeps this off a
+# real lead-in: Axios's "Between the lines: Survey responses about
+# economic questions..." and a chart credit's "Data: Federal Reserve Bank
+# of New York" both contain a lower-case word and so do not match.
+#
+# That alone was not enough. The label must also name an actual role,
+# because "Solomon\u2019s Bronze Sea: A Celestial Apsu" - a TheTorah.com
+# article title - has exactly the same shape as "News Staff: Evan
+# Gorelick" and was being removed. Measured against the corpus, the role
+# words below cover every masthead credit in it and appear in no headline.
+_MASTHEAD_ROLE = re.compile(
+    r"\b(?:host|hosts|editor|editors|writer|writers|staff|director|directors"
+    r"|producer|producers|reporter|reporters|photographer|photographers"
+    r"|designer|designers|illustrator|illustrators|correspondent"
+    r"|correspondents|columnist|columnists|contributor|contributors"
+    r"|researcher|researchers|anchor|anchors|publisher|publishers)\b",
+    re.IGNORECASE,
+)
+
+_MASTHEAD_CREDIT = re.compile(
+    r"^(?P<label>[A-Z][A-Za-z&.'\u2019-]*(?:[ ,]+[A-Za-z&.'\u2019-]+){0,4}):\s+"
+    r"[A-Z][\w.'\u2019-]*(?:\s+[A-Z][\w.'\u2019-]*)*"
+    r"(?:\s*,\s*[A-Z][\w.'\u2019-]*(?:\s+[A-Z][\w.'\u2019-]*)*)*\.?$"
+)
+
+
+def _is_masthead_credit(line: str) -> bool:
+    match = _MASTHEAD_CREDIT.match(line)
+    return match is not None and bool(_MASTHEAD_ROLE.search(match.group("label")))
+
 
 # The lead-in above a row of social icons - "Follow Axios across:", "Follow
 # us on:". It ends in a colon, so the short-line fallback reads it as a
@@ -231,6 +275,8 @@ def is_definite_chrome_line(line: str) -> bool:
     if any(phrase in lowered for phrase in PHRASES):
         return True
     if _URL_ONLY.match(stripped):
+        return True
+    if _is_masthead_credit(stripped):
         return True
     return bool(_ADDRESS_LINE.fullmatch(stripped))
 

@@ -834,3 +834,58 @@ def test_a_bare_street_address_is_still_deletable() -> None:
     assert is_definite_chrome_line(
         "PO Box 448, Accord, NY 12404"
     ) or is_full_line_chrome("PO Box 448, Accord, NY 12404")
+
+
+# ---------------------------------------------------------------------------
+# Round 6: the New York Times masthead. Every Morning ends with eight
+# credit lines; the ones over SHORT_LINE read as sentences and scored 1.00
+# content, holding the trailing chrome run open.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Host: Sam Sifton",
+        "Editor: Adam B. Kushner",
+        "News Editor: Tom Wright-Piersanti",
+        "News Staff: Evan Gorelick, Brent Lewis, Lara McCoy, Karl Russell",
+        "Saturday Writer: Melissa Kirsch",
+        "Editorial Director, Newsletters: Jodi Rudoren",
+        "Deputy Editorial Director: Lauren Jackson",
+    ],
+)
+def test_masthead_credit_lines_score_as_chrome(line: str) -> None:
+    assert is_definite_chrome_line(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # A headline with a colon has the same shape as a credit line. This
+        # one is real: TheTorah.com published it, and an earlier version of
+        # the rule removed it.
+        "Solomon’s Bronze Sea: A Celestial Apsu",
+        "The Loneliness of Donald Trump: A Study",
+        "Germany: A Right Turn",
+    ],
+)
+def test_an_article_title_with_a_colon_is_not_a_masthead_credit(line: str) -> None:
+    """Shape alone is not enough - the label has to name an actual role.
+    Without that gate this rule ate article titles."""
+    assert not is_definite_chrome_line(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Between the lines: Survey responses about economic questions seem sour.",
+        "Data: Federal Reserve Bank of New York; Chart: Neil Irwin/Axios",
+        "Zoom in: This curious mix of views aligns with other public data.",
+        "Correction: An earlier version misstated the figure.",
+    ],
+)
+def test_a_section_lead_in_is_not_a_masthead_credit(line: str) -> None:
+    """Every word after the colon must be capitalised; each of these has a
+    lower-case word, which is what keeps a lead-in out."""
+    assert not is_definite_chrome_line(line)
