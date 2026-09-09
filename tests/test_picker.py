@@ -632,3 +632,124 @@ def test_a_two_part_public_suffix_is_not_mistaken_for_a_domain() -> None:
     from shabbat_print.picker import source_label
 
     assert source_label("Some Author", "news.bbc.co.uk") == "bbc.co.uk"
+
+
+# ---------------------------------------------------------------------------
+# Boundary and wiring cases found by mutation testing. Each of these kills
+# a mutant that a 100%-covered suite let through: coverage proved the line
+# ran, not that anything depended on what it computed.
+# ---------------------------------------------------------------------------
+
+
+def test_the_group_source_reaches_the_rendered_heading() -> None:
+    """layout_picklist must pass each group's source through to the
+    heading. Replacing it with None left every test passing - the heading
+    rule was tested with a source, and build_picklist was tested for
+    producing one, but nothing checked that one reached the other."""
+    candidate = Document(
+        origin=Origin(kind="email", identifier="<1@example.com>", uid=1),
+        publication="Jon Kelly",
+        title="Murdoch Recriminations",
+        date=datetime(2026, 9, 5, tzinfo=UTC),
+        html="<p>x</p>",
+        source_host="puck.news",
+    )
+    picklist = build_picklist([candidate], sizes={1: 20_000})
+    headings = [
+        line.text for line in layout_picklist(picklist, 100) if line.kind == "heading"
+    ]
+    assert any("JON KELLY (puck.news)" in heading for heading in headings)
+
+
+def test_the_date_column_is_right_aligned() -> None:
+    """Dates right-align so the numbers form a column; left-aligning them
+    passed every existing test."""
+    from shabbat_print.picker import _row_text
+
+    row = _row_text("Subject", "3 Sep", "short", subject_width=20, date_width=17)
+    assert "            3 Sep" in row
+    assert "3 Sep            " not in row
+
+
+def test_the_heading_width_excludes_questionarys_gutter() -> None:
+    """The heading is laid out inside the terminal minus questionary's
+    own 3-column gutter; adding it instead of subtracting overruns the
+    line by six columns."""
+    from shabbat_print.picker import _HEADING_GUTTER, _display_width
+
+    picklist = build_picklist(
+        [_doc("Axios Macro", "New trade stakes", "2026-09-08", uid=1)],
+        sizes={1: 20_000},
+    )
+    heading = next(
+        line for line in layout_picklist(picklist, 80) if line.kind == "heading"
+    )
+    assert _display_width(heading.text) == 80 - _HEADING_GUTTER
+
+
+def test_text_that_exactly_fills_the_width_is_not_truncated() -> None:
+    """The fit test is <=, not <: text exactly as wide as the column
+    fits, and truncating it would cost a character for no reason."""
+    from shabbat_print.picker import _truncate_to_width
+
+    assert _truncate_to_width("abcde", 5) == "abcde"
+    assert _truncate_to_width("abcdef", 5) != "abcdef"
+
+
+def test_a_width_with_room_only_for_the_ellipsis() -> None:
+    """max_width == 1 leaves no budget beside the ellipsis, so the
+    ellipsis alone is the whole answer - and at width 2 exactly one real
+    character must still come through."""
+    from shabbat_print.picker import _ELLIPSIS, _truncate_to_width
+
+    assert _truncate_to_width("abcdef", 1) == _ELLIPSIS
+    assert _truncate_to_width("abcdef", 2) == f"a{_ELLIPSIS}"
+
+
+def test_a_zero_width_combining_character_costs_no_columns() -> None:
+    """wcwidth reports 0 for a combining accent, and the truncation loop
+    must count it that way too. Charging it a column silently drops a
+    real character off the end of a line that actually fits - which
+    asserting on _display_width alone does not catch, because that is a
+    separate accumulation over the same characters.
+    """
+    from shabbat_print.picker import _ELLIPSIS, _display_width, _truncate_to_width
+
+    accented = "e\u0301bcdefgh"
+    assert len(accented) == 9 and _display_width(accented) == 8
+    assert _truncate_to_width(accented, 4) == "e\u0301bc" + _ELLIPSIS
+
+
+def test_trailing_space_is_trimmed_at_the_word_boundary() -> None:
+    """Snapping back to the last whole word can leave a trailing space,
+    which must come off the end, not the start. Needs two spaces at the
+    break to show it: with single spaces the two are indistinguishable."""
+    from shabbat_print.picker import _ELLIPSIS, _truncate_to_width
+
+    assert _truncate_to_width("alpha  betagamma", 10) == f"alpha{_ELLIPSIS}"
+
+
+def test_column_widths_fall_back_when_there_are_no_rows() -> None:
+    """The defaults size the columns for an empty picklist - "3 Sep" is
+    five columns and "[short]" is seven."""
+    from shabbat_print.picker import _column_widths
+
+    _subject, date_width, length_width = _column_widths([], 80)
+    assert (date_width, length_width) == (5, 7)
+
+
+def test_a_heading_exactly_as_wide_as_its_line_loses_its_trailing_space() -> None:
+    """At exactly the available width the heading takes the truncation
+    path, whose rstrip drops the space before the rule characters that
+    would have followed. Padding instead would leave a dangling space."""
+    from shabbat_print.picker import _heading_rule
+
+    assert _heading_rule("PUB", None, 7) == "── PUB"
+
+
+def test_a_heading_one_column_too_wide_still_fits_after_its_space_goes() -> None:
+    """Trimming the trailing space is what makes it fit; trimming the
+    leading side instead would ellipsise a heading that had room."""
+    from shabbat_print.picker import _heading_rule
+
+    assert _heading_rule("PUB", None, 6) == "── PUB"
