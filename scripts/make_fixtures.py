@@ -90,7 +90,7 @@ def date_of(message: Message) -> float:
     """
     try:
         return parsedate_to_datetime(message.get("Date", "")).timestamp()
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return float("-inf")
 
 

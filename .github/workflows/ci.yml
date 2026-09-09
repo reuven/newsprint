@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch supersedes the first: this suite takes
+# a couple of minutes and nothing depends on the older run's result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # macOS is what the author develops on; Linux is what everyone else
+    # would install on, and is the only way to find out whether the
+    # macOS-specific paths in _libpath.py really are no-ops elsewhere.
+    # Windows is deliberately absent: printing goes through `lp` (CUPS),
+    # which it does not have.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # WeasyPrint loads Pango, cairo and GObject through ctypes at import
+      # time, so they have to exist as real system libraries - a wheel
+      # cannot supply them.
+      - name: Install WeasyPrint's native libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libffi8
+
+      - name: Install WeasyPrint's native libraries (macOS)
+        if: runner.os == 'macOS'
+        run: brew install pango libffi
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # uv installs the interpreter itself, so this does not depend on
+      # whichever Python the runner image happens to ship.
+      - name: Sync the environment
+        run: uv sync --locked
+
+      - name: Format
+        run: uv run ruff format --check src tests scripts
+
+      - name: Lint
+        run: uv run ruff check src tests scripts
+
+      - name: Types
+        run: uv run mypy src
+
+      # --cov-fail-under is 98, not 100, and that is not slack: the suite
+      # reaches 100% only with tests/fixtures/, a local archive of the
+      # author's own newsletters that is gitignored (it is other people's
+      # copyrighted mail). Without it four corpus tests skip and coverage
+      # lands at 99%. 98 still catches a real regression; restoring the
+      # 100% guarantee here needs a redistributable fixture set.
+      - name: Tests
+        run: >
+          uv run pytest -q
+          --cov=shabbat_print --cov-branch --cov-report=term-missing
+          --cov-fail-under=98
