@@ -106,18 +106,25 @@ def _publication(
     return address.partition("@")[2] or "unknown"
 
 
-# A List-Id host that is a mailing-system identifier rather than a name:
-# Mailchimp hands out things like
-# "b98e2de85f03865f1d38de74f.77913.list-id.mcsv.net", which identifies the
+# A label that is a mailing-system identifier rather than a name:
+# Mailchimp hands out hosts like
+# "b98e2de85f03865f1d38de74f.77913.list-id.mcsv.net", which identify the
 # list to Mailchimp and nobody else. Falling back to the sender's own
 # domain is strictly more informative (that message is Benedict Evans, and
-# ben-evans.com says so).
+# ben-evans.com says so). 16 hex characters is far past what any readable
+# publication name would be; the shortest real one in the archive is 32.
 _OPAQUE_HOST_LABEL = re.compile(r"^[0-9a-f]{16,}$", re.IGNORECASE)
 
 
 def _is_opaque_host(host: str) -> bool:
-    if host.endswith("mcsv.net"):
-        return True
+    """True when `host` is a machine identifier rather than a name.
+
+    A dedicated `host.endswith("mcsv.net")` branch used to sit in front of
+    this. Mutation testing showed it was dead: breaking that string
+    entirely changed no behaviour, because every Mailchimp host in the
+    archive - all three of them - leads with a 32-character hex id the
+    label rule already catches. The general rule is the whole rule.
+    """
     return any(_OPAQUE_HOST_LABEL.match(label) for label in host.split("."))
 
 
