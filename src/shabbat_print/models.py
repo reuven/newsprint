@@ -63,6 +63,11 @@ class Document:
     date: datetime
     html: str
     author: str | None = None
+    # The host that says where this newsletter comes from - the List-Id
+    # host when the message has a usable one, else the sender's domain.
+    # picker.source_label turns it into something to show beside a
+    # publication name that does not identify its own newsletter.
+    source_host: str | None = None
     images_kept: int = 0
     images_dropped: tuple[DroppedImage, ...] = ()
     blocks_dropped: tuple[DroppedBlock, ...] = ()
