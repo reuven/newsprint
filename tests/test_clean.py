@@ -1746,3 +1746,50 @@ def test_a_decorative_header_image_is_dropped_amid_several_kept_real_charts() ->
     for n in range(1, 7):
         assert f"chart-{n}.png" in cleaned.html
     assert cleaned.images_kept >= 6
+
+
+def test_a_screenshot_captioned_only_with_a_parenthesised_link_is_kept() -> None:
+    """Platformer's "Those good posts": each social-media screenshot is
+    followed by nothing but a link to the original. The images carry no
+    alt text and no lead-in colon, so both older gates missed them and
+    the printout showed a column of bare "(Link)" lines where the joke
+    had been."""
+    html = (
+        "<html><body><div>"
+        "<h3>Those good posts</h3>"
+        '<div class="kg-card kg-image-card">'
+        '<img src="https://storage.ghost.io/shot.png" alt width="600" height="148">'
+        "</div>"
+        '<p>(<a href="https://example.com/post">Link</a>)</p>'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 1
+    assert "storage.ghost.io/shot.png" in cleaned.html
+
+
+def test_the_link_caption_still_obeys_the_width_gate() -> None:
+    """An icon followed by the same caption is still an icon - the width
+    gate is what keeps spacers and tracking pixels out, and this third
+    caption shape must not become a way around it."""
+    html = (
+        "<html><body><div>"
+        '<img src="https://example.com/icon.png" alt width="24">'
+        '<p>(<a href="https://example.com/post">Link</a>)</p>'
+        "</div></body></html>"
+    )
+    assert clean_document(document(html)).images_kept == 0
+
+
+def test_a_link_inside_a_longer_caption_does_not_keep_the_image() -> None:
+    """Only a caption that is *nothing but* the parenthesised link counts.
+    A block that merely contains a link is ordinary prose, and matching it
+    would readmit decorative images across the whole archive."""
+    html = (
+        "<html><body><div>"
+        '<img src="https://example.com/promo.png" alt width="600">'
+        '<p>Sponsored by Acme. (<a href="https://example.com/x">Link</a>) '
+        "Read more about our offer today.</p>"
+        "</div></body></html>"
+    )
+    assert clean_document(document(html)).images_kept == 0
