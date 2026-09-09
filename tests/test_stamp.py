@@ -352,3 +352,73 @@ def test_a_subject_that_is_only_the_publication_name_survives() -> None:
     from shabbat_print.stamp import footer_left
 
     assert footer_left("Platformer", None, "Platformer: ") == "Platformer · Platformer:"
+
+
+# ---------------------------------------------------------------------------
+# Boundary and logic cases found by mutation testing.
+# ---------------------------------------------------------------------------
+
+
+def test_truncation_removes_one_character_at_a_time() -> None:
+    """The loop walks back a character at a time. Replacing
+    `truncated[:-1]` with `truncated[:1]` cuts straight to a single
+    letter, and every existing test still passed - the footer would have
+    read "P..." instead of most of the subject.
+    """
+    from shabbat_print.stamp import _truncate
+
+    text = "Platformer · Casey Newton · The AI warnings are coming from inside the lab"
+    assert _truncate(text, 100) == "Platformer · Casey Newton · The AI..."
+
+
+def test_text_that_exactly_fills_the_footer_segment_is_left_alone() -> None:
+    """The fit test is <=, not <: text exactly as wide as the segment
+    fits, and truncating it would cost characters for no reason."""
+    import pymupdf
+
+    from shabbat_print.stamp import FONT, FONT_SIZE_PT, _truncate
+
+    text = "Platformer"
+    exact = pymupdf.get_text_length(text, fontname=FONT, fontsize=FONT_SIZE_PT)
+    assert _truncate(text, exact) == text
+    assert _truncate(text, exact - 1.0) != text
+
+
+def test_a_segment_no_wider_than_the_ellipsis_yields_nothing() -> None:
+    """Below the ellipsis's own width there is no honest way to show that
+    text was cut, so the segment is dropped rather than showing a bare
+    ellipsis where a byline should be."""
+    import pymupdf
+
+    from shabbat_print.stamp import ELLIPSIS, FONT, FONT_SIZE_PT, _truncate
+
+    ellipsis_width = pymupdf.get_text_length(
+        ELLIPSIS, fontname=FONT, fontsize=FONT_SIZE_PT
+    )
+    assert _truncate("Platformer · Casey Newton", ellipsis_width) == ""
+
+
+def test_the_byline_collapses_whichever_name_contains_the_other() -> None:
+    """Either direction counts, so the test is `or`, not `and`: the
+    author can be the longer name ("The Bulwark" / "The Bulwark
+    Podcast") or the shorter one."""
+    assert byline("The Bulwark", "The Bulwark Podcast") == "The Bulwark"
+    assert byline("Axios Macro Daily", "Axios Macro") == "Axios Macro Daily"
+    assert byline("Puck", "Jon Kelly") == "Puck · Jon Kelly"
+
+
+def test_a_repeated_publication_is_dropped_in_either_direction() -> None:
+    """Same `or`, same reason: the subject's prefix can be longer than
+    the publication ("Data Engineer Things Newsletter") or shorter."""
+    from shabbat_print.stamp import footer_left
+
+    assert (
+        footer_left(
+            "Data Engineer Things", None, "Data Engineer Things Newsletter - Data Pulse"
+        )
+        == "Data Engineer Things · Data Pulse"
+    )
+    assert (
+        footer_left("The Morning Edition", None, "The Morning: The word is bond")
+        == "The Morning Edition · The word is bond"
+    )

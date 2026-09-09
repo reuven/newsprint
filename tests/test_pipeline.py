@@ -182,3 +182,29 @@ def test_documents_sharing_an_identifier_do_not_collide(config, tmp_path: Path) 
     assert built[0].pdf != built[1].pdf
     assert built[0].pdf.exists()
     assert built[1].pdf.exists()
+
+
+def test_a_document_with_exactly_the_threshold_word_count_is_built(
+    config, tmp_path: Path
+) -> None:
+    """ "At or above" means at, too. The existing threshold test uses
+    prose comfortably over the line, so relaxing `count < min_words` to
+    `count <= min_words` - which skips a document that exactly meets the
+    threshold - passed the whole suite.
+
+    The exact count is read back from the skip error rather than guessed,
+    since cleaning decides how many words survive.
+    """
+    from dataclasses import replace
+
+    from shabbat_print.pipeline import TeaserSkippedError
+
+    impossible = replace(config, packet=replace(config.packet, min_words=10**6))
+    _built, failed = build([document(LONG_PROSE)], impossible, tmp_path / "learn")
+    assert isinstance(failed[0].error, TeaserSkippedError)
+    exact = failed[0].error.word_count
+
+    at_threshold = replace(config, packet=replace(config.packet, min_words=exact))
+    built, failed = build([document(LONG_PROSE)], at_threshold, tmp_path / "at")
+    assert failed == []
+    assert len(built) == 1

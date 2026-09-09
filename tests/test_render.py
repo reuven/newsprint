@@ -457,3 +457,48 @@ def test_no_images_means_no_fetch_is_ever_attempted(config, tmp_path: Path) -> N
         document(PROSE), config, out_dir=tmp_path, url_fetcher=exploding_fetcher
     )
     assert "Federal Reserve" in page_text(pdf, 0)
+
+
+def test_the_image_cap_is_the_cells_exact_text_column() -> None:
+    """The other cap test asserts `width <= _cap_width_px(config)`, which
+    every wrong arithmetic still satisfies - adding the margins instead of
+    subtracting them, dividing by the DPI, or tripling the margin all
+    passed. This pins the figure itself: an A4 cell is 105mm wide, so its
+    text column is 105 - 2*9 = 87mm, and at 200dpi that is 685px.
+    """
+    from shabbat_print.config import load_config
+    from shabbat_print.render import _cap_width_px
+
+    config = load_config()
+    assert config.printing.paper.cell.width_mm == 105.0
+    assert config.layout.margin_mm == 9.0
+    assert _cap_width_px(config) == 685
+
+
+def test_resizing_a_wide_image_preserves_its_aspect_ratio() -> None:
+    """Height scales by the same ratio as width. Dividing by the ratio
+    instead of multiplying stretches a 2:1 chart into a 1:3 tower, and
+    nothing asserted on the resulting height."""
+    from shabbat_print.render import _grayscale_and_cap
+
+    source = Image.new("RGB", (1000, 500), color=(200, 50, 50))
+    buffer = BytesIO()
+    source.save(buffer, format="PNG")
+
+    processed = _grayscale_and_cap(buffer.getvalue(), max_width_px=400)
+    with Image.open(BytesIO(processed)) as result:
+        assert (result.width, result.height) == (400, 200)
+
+
+def test_a_very_short_image_keeps_at_least_one_pixel_of_height() -> None:
+    """A wide, one-pixel-high rule scales to less than half a pixel; the
+    floor of 1 is what stops Pillow being asked for a zero-height image."""
+    from shabbat_print.render import _grayscale_and_cap
+
+    source = Image.new("RGB", (1000, 1), color=(0, 0, 0))
+    buffer = BytesIO()
+    source.save(buffer, format="PNG")
+
+    processed = _grayscale_and_cap(buffer.getvalue(), max_width_px=100)
+    with Image.open(BytesIO(processed)) as result:
+        assert (result.width, result.height) == (100, 1)
