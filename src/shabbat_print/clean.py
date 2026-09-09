@@ -801,6 +801,113 @@ def _rendered_lines(tag: Tag) -> list[str]:
     return lines
 
 
+# A sponsor block's own header. Measured across the 268-fixture corpus:
+# nine distinct headers in five publications (Axios Macro/Markets/AM, two
+# Puck columnists, The Economist), every one of them introducing paid
+# copy, never editorial text. "A MESSAGE FROM OUR SPONSOR" was already a
+# full-line chrome entry, but removing the header alone left the ad body
+# behind, which is what the user reported.
+_SPONSOR_HEADER = re.compile(r"^\s*a message from\b", re.IGNORECASE)
+
+# Axios numbers its sections ("2. Warsh's labor market calculus"), and in
+# every Axios fixture the ad ends immediately before one. Treated as a
+# hard stop so the pass can never run past an ad into the article that
+# follows it.
+_SECTION_NUMBER = re.compile(r"^\s*\d{1,2}\.\s")
+
+# Two bounds, either of which ends the block. Measured extents: Axios
+# spends exactly two blocks on an ad (headline, then body), Puck one. The
+# character cap is the second guard - an ad body runs 251-394 characters
+# across the corpus, while the article blocks that follow one run
+# 831-2430, so 600 separates them with room on both sides.
+_SPONSOR_MAX_BLOCKS = 2
+
+# The element kinds that count as a header's "own" block for the
+# alone-in-its-container test above.
+_SPONSOR_BLOCK_TAGS = frozenset({"p", "td", "th", "li", "div", "tr", "table"})
+_SPONSOR_MAX_CHARS = 600
+
+
+def _sponsor_anchor(node: NavigableString) -> Tag | None:
+    """The nearest ancestor of a sponsor header that has a following
+    sibling with text.
+
+    The header itself is usually a <p> with no siblings at all - the ad's
+    body sits in sibling <tr>s (Axios) or <table>s (Puck) of an ancestor
+    several levels up, because bulk-mail HTML nests everything in tables.
+    """
+    current = node.parent
+    while current is not None and current.name not in ("body", "html"):
+        sibling = current.find_next_sibling()
+        while sibling is not None and not sibling.get_text(strip=True):
+            sibling = sibling.find_next_sibling()
+        if sibling is not None:
+            return current
+        current = current.parent
+    return None
+
+
+def _strip_sponsor_blocks(root: Tag) -> tuple[DroppedBlock, ...]:
+    """Remove each sponsor block: its header, and the ad copy under it.
+
+    Deliberately bounded rather than score-based. Ad copy reads exactly
+    like editorial prose to content_ratio - "Sara Fischer and Kerry Flynn
+    go deeper than the headlines" scores as content, and should - so no
+    threshold can find the end of one. What can is the shape: an ad is at
+    most two blocks long in every fixture that has one, and what follows
+    it is either a numbered section heading or a block far longer than any
+    ad body. Both bounds are applied, so a future ad that is shorter or
+    differently shaped stops early rather than eating the article.
+
+    Runs before _strip_line_chrome, which would otherwise delete "A
+    MESSAGE FROM OUR SPONSOR" as a full-line chrome entry and leave this
+    pass with no anchor to find the body from.
+    """
+    dropped: list[DroppedBlock] = []
+    for node in list(root.find_all(string=_SPONSOR_HEADER)):
+        # getattr, not node.parent: bs4 clears a decomposed node's
+        # attributes outright, so touching .parent on one raises
+        # AttributeError rather than returning None. A header can be
+        # decomposed before the loop reaches it, by an earlier sponsor
+        # block that carried it away.
+        if getattr(node, "parent", None) is None:
+            continue
+        anchor = _sponsor_anchor(node)
+        if anchor is None:
+            continue
+        # Only a header that is ALONE in its own container heads a block.
+        # In every real sponsor block the header's own <p> has no sibling
+        # at all - the ad body lives in sibling <tr>s or <table>s further
+        # up - so _sponsor_anchor had to climb to find one. A header that
+        # is simply one line among paragraphs is a chrome *line*, and
+        # taking its neighbours would eat the article around it;
+        # _strip_line_chrome removes that one on its own.
+        own_block = node.find_parent(sorted(_SPONSOR_BLOCK_TAGS))
+        if own_block is not None and anchor is own_block:
+            continue
+        victims = [anchor]
+        sibling: Tag | None = anchor
+        taken = 0
+        while taken < _SPONSOR_MAX_BLOCKS:
+            sibling = sibling.find_next_sibling() if sibling is not None else None
+            if sibling is None:
+                break
+            text = sibling.get_text(" ", strip=True)
+            if not text:
+                victims.append(sibling)
+                continue
+            if _SECTION_NUMBER.match(text) or len(text) > _SPONSOR_MAX_CHARS:
+                break
+            victims.append(sibling)
+            taken += 1
+        for victim in victims:
+            text = " ".join(victim.get_text(" ", strip=True).split())
+            if text:
+                dropped.append(DroppedBlock(text=text))
+            victim.decompose()
+    return tuple(dropped)
+
+
 def _strip_line_chrome(root: Tag) -> tuple[DroppedBlock, ...]:
     """Remove any single element, anywhere in the document, whose whole
     rendered line of text is a high-confidence chrome phrase (F3, round 2).
@@ -1180,6 +1287,10 @@ def clean_document(document: Document) -> Document:
     # early is always safe (see _strip_line_chrome's docstring) and can
     # only help the two directional walks below reach further, never
     # cause them to remove something they otherwise would not have.
+    # Before _strip_line_chrome: that pass deletes "A MESSAGE FROM OUR
+    # SPONSOR" as a full-line chrome entry, which would leave this one no
+    # anchor to find the ad body from.
+    dropped_sponsors = _strip_sponsor_blocks(root)
     dropped_lines = _strip_line_chrome(root)
     # Leading- and trailing-run removal run next, in either order (each
     # can only ever remove a run from its own end of the document, so they
@@ -1214,6 +1325,7 @@ def clean_document(document: Document) -> Document:
         images_kept=kept,
         images_dropped=dropped_images,
         blocks_dropped=(
+            *dropped_sponsors,
             *dropped_lines,
             *dropped_leading,
             *dropped_duplicate_title,
