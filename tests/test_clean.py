@@ -1847,3 +1847,109 @@ def test_an_axios_style_footer_is_removed_whole() -> None:
         "PO Box 101060",
     ):
         assert chrome not in text, f"still present: {chrome!r}"
+
+
+def _sponsor_html(after: str) -> str:
+    """An Axios-shaped sponsor block: the header and the ad's two blocks
+    are sibling table rows, with `after` as the row that follows."""
+    return (
+        "<html><body><table>"
+        "<tr><td><p>The Fed declined to move rates this month, which surprised "
+        "almost nobody watching the minutes.</p></td></tr>"
+        "<tr><td><p>A MESSAGE FROM AXIOS</p></td></tr>"
+        "<tr><td><p>Media is shifting fast. Our reporters see it first.</p></td></tr>"
+        "<tr><td><p>Sara Fischer and Kerry Flynn go deeper than the headlines, "
+        "tracking the deals and disruptions that matter.</p></td></tr>"
+        f"<tr><td><p>{after}</p></td></tr>"
+        "</table></body></html>"
+    )
+
+
+def test_a_sponsor_block_is_removed_with_its_body() -> None:
+    """ "A MESSAGE FROM OUR SPONSOR" was already chrome, but removing the
+    header alone left the ad copy behind - which is what the user
+    reported. Ad copy reads exactly like editorial prose to content_ratio,
+    so the extent has to come from the shape, not a score."""
+    cleaned = clean_document(
+        document(_sponsor_html("2. Warsh's labor market calculus"))
+    )
+    assert "A MESSAGE FROM" not in cleaned.html
+    assert "Media is shifting fast" not in cleaned.html
+    assert "Sara Fischer" not in cleaned.html
+    assert "surprised almost nobody" in cleaned.html, "the article must survive"
+    assert "Warsh" in cleaned.html, "the next section heading must survive"
+
+
+def test_a_numbered_section_heading_stops_the_sponsor_removal() -> None:
+    """Axios numbers its sections, and in every fixture the ad ends right
+    before one. That is the hard stop that keeps this pass from running
+    out of an ad and into the article behind it."""
+    cleaned = clean_document(document(_sponsor_html("2. Americans' job market views")))
+    assert "Americans" in cleaned.html
+
+
+def test_a_long_block_stops_the_sponsor_removal() -> None:
+    """The second bound: an ad body runs 251-394 characters across the
+    corpus, while the article blocks that follow one run 831-2430."""
+    long_article = "The labor market firmed up this year. " * 22
+    html = (
+        "<html><body><table>"
+        "<tr><td><p>A MESSAGE FROM AXIOS</p></td></tr>"
+        f"<tr><td><p>{long_article}</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "A MESSAGE FROM" not in cleaned.html
+    assert "labor market firmed up" in cleaned.html
+
+
+def test_at_most_two_blocks_follow_a_sponsor_header_into_the_bin() -> None:
+    """Even with nothing else to stop it, the block cap bounds the damage
+    a differently-shaped ad could do."""
+    html = (
+        "<html><body><table>"
+        "<tr><td><p>A MESSAGE FROM ACME</p></td></tr>"
+        "<tr><td><p>Acme makes the finest anvils.</p></td></tr>"
+        "<tr><td><p>Buy one today and save.</p></td></tr>"
+        "<tr><td><p>Meanwhile the Fed said nothing at all.</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "finest anvils" not in cleaned.html
+    assert "Buy one today" not in cleaned.html
+    assert "Fed said nothing" in cleaned.html
+
+
+def test_a_sponsor_header_with_nothing_after_it_is_left_to_the_line_pass() -> None:
+    """No following sibling at any level means there is no ad body to
+    find, so this pass declines and _strip_line_chrome removes the header
+    on its own."""
+    html = (
+        "<html><body>"
+        "<div><p>The Fed declined to move rates this month, which surprised "
+        "almost nobody watching the minutes.</p></div>"
+        "<div><p>A MESSAGE FROM OUR SPONSOR</p></div>"
+        "</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "A MESSAGE FROM" not in cleaned.html
+    assert "surprised almost nobody" in cleaned.html
+
+
+def test_a_second_sponsor_header_inside_the_first_block_is_not_revisited() -> None:
+    """When one sponsor block's two rows carry a second header away with
+    them, that header's node is already detached by the time the loop
+    reaches it."""
+    html = (
+        "<html><body><table>"
+        "<tr><td><p>A MESSAGE FROM ONE</p></td></tr>"
+        "<tr><td><p>Acme makes the finest anvils in the west.</p></td></tr>"
+        "<tr><td><p>A MESSAGE FROM TWO</p></td></tr>"
+        "<tr><td><p>The Fed declined to move rates this month, which "
+        "surprised almost nobody watching the minutes.</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "A MESSAGE FROM" not in cleaned.html
+    assert "finest anvils" not in cleaned.html
+    assert "surprised almost nobody" in cleaned.html
