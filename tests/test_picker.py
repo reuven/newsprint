@@ -753,3 +753,64 @@ def test_a_heading_one_column_too_wide_still_fits_after_its_space_goes() -> None
     from newsprint.picker import _heading_rule
 
     assert _heading_rule("PUB", None, 6) == "── PUB"
+
+
+def test_a_two_label_country_domain_keeps_the_name_in_front_of_it() -> None:
+    """ "co.uk" is a suffix people register under, not a domain anybody
+    owns, so the name has to come from the label in front of it. Taking
+    the last two labels of "bbc.co.uk" would offer the reader "co.uk",
+    which names nothing."""
+    from newsprint.picker import _registrable
+
+    assert _registrable("bbc.co.uk") == "bbc.co.uk"
+    assert _registrable("news.bbc.co.uk") == "bbc.co.uk"
+    assert _registrable("dk.nytimes.com") == "nytimes.com"
+
+
+def test_a_list_exactly_at_the_display_limit_is_shown_whole() -> None:
+    """The limit is how many fit, not the first count that is too many -
+    trimming at exactly the limit would drop the oldest of a list that
+    fitted perfectly well."""
+    candidates = [
+        _doc("Paper", f"Issue {index}", f"2026-09-{index + 1:02d}", uid=index)
+        for index in range(4)
+    ]
+    assert build_picklist(candidates, sizes={}, limit=4).total == 4
+    assert (
+        sum(len(g.rows) for g in build_picklist(candidates, sizes={}, limit=4).groups)
+        == 4
+    )
+    assert (
+        sum(len(g.rows) for g in build_picklist(candidates, sizes={}, limit=3).groups)
+        == 3
+    )
+
+
+def test_publications_are_ordered_regardless_of_capitalization() -> None:
+    """ "apple" after "Banana" is what sorting raw text gives, because
+    every capital sorts before every lower-case letter. The reader is
+    looking for a name, not a byte."""
+    candidates = [
+        _doc("apple", "One", "2026-09-01", uid=1),
+        _doc("Banana", "Two", "2026-09-02", uid=2),
+    ]
+    picklist = build_picklist(candidates, sizes={})
+    assert [group.publication for group in picklist.groups] == ["apple", "Banana"]
+
+
+def test_todays_messages_are_dated_relative_to_today() -> None:
+    """ "today" and "yesterday" only mean anything against a given day, and
+    the caller supplies it - a picker that dated everything against the
+    real clock would read differently on a machine in another timezone,
+    and could not be tested at all."""
+    today = date(2026, 9, 5)
+    candidates = [
+        _doc("Paper", "Now", "2026-09-05", uid=1),
+        _doc("Paper", "Then", "2026-09-04", uid=2),
+    ]
+    picklist = build_picklist(candidates, sizes={}, today=today)
+    assert [row.when for row in picklist.groups[0].rows] == [
+        format_pick_date(date(2026, 9, 4), today),
+        format_pick_date(date(2026, 9, 5), today),
+    ]
+    assert "today" in picklist.groups[0].rows[1].when

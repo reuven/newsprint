@@ -128,3 +128,36 @@ def test_dropping_the_last_page_keeps_every_other_page(tmp_path: Path) -> None:
     result, verdict = fit(pdf, A4, LAYOUT, rerender=lambda _: pdf)
     assert verdict is Verdict.FILLER
     assert page_count(result) == 4
+
+
+def test_the_widow_threshold_is_measured_against_the_usable_height(
+    tmp_path: Path,
+) -> None:
+    """A widow is a last page too empty to be worth a whole cell, and how
+    empty is measured as a fraction of the cell's text column - its height
+    less both margins. Getting that height wrong scales every judgement
+    with it, and the only symptom is a page that should have been squeezed
+    onto the one before printing on its own, or the reverse.
+
+    The threshold here is set to exactly what the page fills, so the test
+    sits on the boundary in both directions: at the threshold the page is
+    full (the test is "less than", not "at most"), and a hair above it the
+    same page is a widow.
+    """
+    from newsprint.boilerplate import content_ratio
+    from newsprint.pdfutil import page_count, page_text, text_extent_mm
+
+    pdf = build(tmp_path / "a.pdf", [PROSE, PROSE])
+    last = page_count(pdf) - 1
+    usable_mm = A4.cell.height_mm - 2 * LAYOUT.margin_mm
+    used_mm = max(0.0, text_extent_mm(pdf, last, LAYOUT.margin_mm) - LAYOUT.margin_mm)
+    fill = used_mm / usable_mm
+
+    assert classify(pdf, A4, LAYOUT, widow_fill=fill) is Verdict.FULL
+    assert classify(pdf, A4, LAYOUT, widow_fill=fill * 1.001) is Verdict.WIDOW
+
+    # And the filler test is the same shape: a last page whose content
+    # share sits exactly on the threshold is content, not filler.
+    ratio = content_ratio(page_text(pdf, last))
+    assert classify(pdf, A4, LAYOUT, filler_ratio=ratio) is not Verdict.FILLER
+    assert classify(pdf, A4, LAYOUT, filler_ratio=ratio * 1.001) is Verdict.FILLER
