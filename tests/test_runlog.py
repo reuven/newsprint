@@ -132,3 +132,46 @@ def test_last_retirement_takes_the_most_recent_one(tmp_path: Path) -> None:
         )
     entry = runlog.last_retirement(tmp_path)
     assert entry is not None and entry["trash"] == "NEW"
+
+
+def test_a_recorded_entry_is_stamped_and_found_again(tmp_path: Path) -> None:
+    """record() and last_retirement() are two halves of --unretire: the
+    entry is written with the time it happened under "at", and read back
+    by that same key. A stamp filed under any other name leaves the run
+    log full of retirements that --unretire cannot see."""
+    runlog.record({"outcome": "retired", "messages": ["<a@x>"]}, state_dir=tmp_path)
+    found = runlog.last_retirement(tmp_path)
+    assert found is not None
+    assert found["messages"] == ["<a@x>"]
+    assert datetime.fromisoformat(found["at"]).tzinfo is not None
+
+
+def test_two_entries_in_the_same_run_do_not_collide(tmp_path: Path) -> None:
+    """A run records more than once - printed, then retired - and the
+    file name is the only thing keeping the second from overwriting the
+    first."""
+    first = runlog.record({"outcome": "printed"}, state_dir=tmp_path)
+    second = runlog.record({"outcome": "retired"}, state_dir=tmp_path)
+    assert first != second
+    assert len(list(tmp_path.glob("*.json"))) == 2
+
+
+def test_an_entry_may_carry_things_json_cannot_hold_by_itself(
+    tmp_path: Path,
+) -> None:
+    """What is recorded includes paths and dates, which json refuses
+    outright. They are written as text rather than costing the caller a
+    conversion at every call site - and a run that failed to log is a run
+    that cannot be undone."""
+    path = runlog.record(
+        {"outcome": "printed", "pdf": tmp_path / "sheets.pdf"}, state_dir=tmp_path
+    )
+    written = json.loads(path.read_text())
+    assert written["pdf"] == str(tmp_path / "sheets.pdf")
+
+
+def test_the_state_directory_is_made_including_its_parents(tmp_path: Path) -> None:
+    """The state directory sits under a working directory that may not
+    exist yet on the first run of the day."""
+    nested = tmp_path / "work" / "state"
+    assert runlog.record({"outcome": "printed"}, state_dir=nested).exists()

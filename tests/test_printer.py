@@ -16,12 +16,23 @@ CONFIGURED = '[print]\nprinter = "Some_Printer"\n'
 
 
 def test_command_carries_paper_and_duplex(config, tmp_path: Path) -> None:
+    """The whole command, in order. Each option has to be introduced by
+    its own -o: lp takes "-o name=value" pairs, and an option that
+    arrives without one is not an option - print-scaling=none in
+    particular, which is what stops the printer shrinking the sheet to
+    its own margins and putting every cell in the wrong place.
+    """
     command = build_command(tmp_path / "sheets.pdf", config)
-    assert command[0] == "lp"
-    assert "media=A4" in command
-    assert "sides=two-sided-long-edge" in command
-    assert "print-scaling=none" in command
-    assert command[-1] == str(tmp_path / "sheets.pdf")
+    assert command == [
+        "lp",
+        "-o",
+        "media=A4",
+        "-o",
+        "sides=two-sided-long-edge",
+        "-o",
+        "print-scaling=none",
+        str(tmp_path / "sheets.pdf"),
+    ]
 
 
 def test_an_unset_printer_uses_the_system_default(config, tmp_path: Path) -> None:
@@ -73,3 +84,21 @@ def test_spool_raises_when_the_job_id_is_missing(config, tmp_path: Path) -> None
 
     with pytest.raises(PrintError, match="job id"):
         spool(tmp_path / "sheets.pdf", config, runner=runner)
+
+
+def test_spool_hands_lp_the_command_and_reads_what_it_says(config, tmp_path) -> None:
+    """The job id comes back on lp's stdout, so the call has to capture
+    it and has to ask for text rather than bytes - a run that captured
+    nothing would find no id in None and report a failure for a job that
+    reached the queue perfectly well."""
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def recording_runner(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, "request id is HP-42\n", "")
+
+    pdf = tmp_path / "sheets.pdf"
+    assert spool(pdf, config, runner=recording_runner) == "HP-42"
+    assert calls == [
+        (build_command(pdf, config), {"capture_output": True, "text": True})
+    ]

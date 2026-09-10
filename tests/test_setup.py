@@ -180,3 +180,47 @@ def test_an_abandoned_folder_prompt_keeps_the_default(monkeypatch) -> None:
 
     monkeypatch.setattr(questionary, "autocomplete", lambda *a, **k: Cancelled())
     assert setup_module._choose("  Folder", ["INBOX"], "INBOX") == "INBOX"
+
+
+def test_setup_only_asks_before_replacing_something(tmp_path: Path) -> None:
+    """The question guards an existing file. With nothing there to lose,
+    a "no" to anything else must not be read as "write nothing" - the
+    wizard would then decline to set itself up and say so for a reason
+    that has not happened."""
+    path = tmp_path / "config.toml"
+    run_setup(
+        path,
+        ask=_answers("imap.example.com", "someone@example.com", "hunter2", ""),
+        confirm=lambda *a, **k: False,
+        choose=lambda *a: "A4",
+        echo=lambda message: None,
+        open_mailbox=lambda **kwargs: FakeBox(**kwargs),
+        store_password=lambda *a: None,
+    )
+    assert path.exists()
+
+
+def test_the_password_prompt_hides_what_is_typed(tmp_path: Path) -> None:
+    """A password echoed to the terminal ends up in a scrollback buffer
+    and, on a shared screen, in the room. The host prompt carries Gmail's
+    own server as its default, since that is what most people setting
+    this up are on."""
+    asked: list[tuple[str, dict[str, object]]] = []
+    remaining = iter(("imap.example.com", "someone@example.com", "hunter2", ""))
+
+    def recording_ask(question: str, **kwargs: object) -> str:
+        asked.append((question, kwargs))
+        return next(remaining)
+
+    run_setup(
+        tmp_path / "config.toml",
+        ask=recording_ask,
+        confirm=lambda *a, **k: True,
+        choose=lambda *a: "A4",
+        echo=lambda message: None,
+        open_mailbox=lambda **kwargs: FakeBox(**kwargs),
+        store_password=lambda *a: None,
+    )
+    by_question = {question.strip(): kwargs for question, kwargs in asked}
+    assert by_question["Password"] == {"hide_input": True}
+    assert by_question["IMAP host"] == {"default": "imap.gmail.com"}
