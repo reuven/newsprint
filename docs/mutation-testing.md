@@ -174,6 +174,25 @@ the reason rather than re-derive it.
   that width behaves identically, and a mutation of the constant only
   becomes visible above it.
 
+### render.py
+
+- **The `{"Content-Type": "image/png"}` header on a fetched image.**
+  WeasyPrint identifies an image by its bytes, not by what the fetcher
+  says it is, so every mutation of that dict survives - including
+  replacing the whole thing with None. It is kept because the bytes handed
+  back really are PNG (`_grayscale_and_cap` re-encodes every one), and
+  saying so costs nothing.
+- **`_grayscale_and_cap`'s `grayscale.width > max_width_px`.** Resizing an
+  image to the width it already has is byte-identical to not resizing it -
+  checked, not assumed - so the boundary is unobservable. (Dropping the
+  Lanczos filter is a different matter and is tested: Pillow's default for
+  a downscale is bicubic, which softens the hairline gridlines a chart is
+  made of.)
+- **The message on the cached-failure `ValueError`.** The exception exists
+  to make WeasyPrint treat the image as missing; only its being raised is
+  load-bearing, and that is tested. The text reaches WeasyPrint's log and
+  nothing else.
+
 ## Known survivors that are not equivalent
 
 - **`_iter_text_elements`'s `node.get_text(strip=True)` in the leaf
