@@ -2139,3 +2139,92 @@ def test_the_caption_search_walks_past_inline_tags_and_empty_blocks() -> None:
         "lxml",
     )
     assert _nearest_block_text(soup.find("img")) == "( Link )"
+
+
+# ---------------------------------------------------------------------------
+# _is_standalone_line's <br>-run boundaries. This is the guard that stops
+# _strip_line_chrome deleting "unsubscribe" quoted inside a real sentence,
+# so its failure mode is losing content - and mutation testing found the
+# boundary arithmetic almost entirely untested: 16 survivors in this one
+# function.
+# ---------------------------------------------------------------------------
+
+
+def _standalone(html: str, text: str) -> bool:
+    """Is the node whose text is `text` alone on its own rendered line?"""
+    from bs4 import BeautifulSoup
+
+    from newsprint.clean import _is_standalone_line
+
+    soup = BeautifulSoup(html, "lxml")
+    node = soup.find(string=lambda s: s and s.strip() == text)
+    assert node is not None, f"{text!r} not found in the fixture"
+    return _is_standalone_line(node)
+
+
+def test_a_line_of_its_own_between_two_breaks_is_standalone() -> None:
+    assert _standalone("<p>Before<br>Unsubscribe<br>After</p>", "Unsubscribe")
+
+
+def test_the_first_line_of_a_block_is_standalone() -> None:
+    """start walks back to index 0 and stops there; walking past it would
+    pull the previous line into this one's run."""
+    assert _standalone("<p>Unsubscribe<br>After</p>", "Unsubscribe")
+
+
+def test_the_last_line_of_a_block_is_standalone() -> None:
+    """end stops at the final sibling; running past it would index off the
+    end of the list."""
+    assert _standalone("<p>Before<br>Unsubscribe</p>", "Unsubscribe")
+
+
+def test_text_sharing_a_line_with_prose_before_it_is_not_standalone() -> None:
+    """The adversarial case this guard exists for: a chrome-shaped word
+    sitting in a real sentence."""
+    assert not _standalone(
+        "<p>There is an <span>Unsubscribe</span> link below.</p>", "Unsubscribe"
+    )
+
+
+def test_text_sharing_a_line_with_prose_after_it_is_not_standalone() -> None:
+    assert not _standalone(
+        "<p><span>Unsubscribe</span> from this if you would rather not.</p>",
+        "Unsubscribe",
+    )
+
+
+def test_prose_on_the_far_side_of_a_break_does_not_count() -> None:
+    """Only the node's own <br>-delimited run matters; a sentence one line
+    away is a different line."""
+    assert _standalone(
+        "<p>A real sentence with words in it.<br>Unsubscribe<br>"
+        "Another real sentence entirely.</p>",
+        "Unsubscribe",
+    )
+
+
+def test_an_inline_wrapper_is_followed_up_a_level() -> None:
+    """<a><span>Unsubscribe</span></a> is still alone on its line, and the
+    check has to ascend through both wrappers to find that out."""
+    assert _standalone(
+        "<p>Before<br><a><span>Unsubscribe</span></a><br>After</p>", "Unsubscribe"
+    )
+
+
+def test_an_inline_wrapper_beside_prose_is_not_standalone() -> None:
+    """Ascending must keep checking: the <a> is alone among its own
+    siblings, but its parent shares a line with a sentence."""
+    assert not _standalone(
+        "<p>Please <a><span>Unsubscribe</span></a> if you would rather not.</p>",
+        "Unsubscribe",
+    )
+
+
+def test_the_run_extends_one_sibling_at_a_time() -> None:
+    """Empty inline elements sit on both sides of the target within its
+    own <br>-delimited run. Stepping the run's end by two skips over the
+    empty span and lands on the <br>, taking a sibling from the *next*
+    line into this one's run."""
+    assert _standalone(
+        "<p><span></span>Unsubscribe<span></span><br>tail</p>", "Unsubscribe"
+    )
