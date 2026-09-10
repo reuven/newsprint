@@ -1,4 +1,4 @@
-# shabbat-print — design
+# newsprint — design
 
 **Date:** 2026-09-07
 **Status:** approved design, not yet implemented
@@ -354,7 +354,7 @@ print job.** Every other path leaves mail untouched.
 
 ## Configuration and secrets
 
-`~/.config/shabbat-print/config.toml`:
+`~/.config/newsprint/config.toml`:
 
 ```toml
 [mail]
@@ -390,7 +390,7 @@ A `publications.toml` maps sender addresses and `List-Id` values to display
 names, so cells read "Money Stuff" rather than
 `noreply@news.bloomberg.com`. Seeded from the real senders in the archive.
 
-Run state lives in `~/.local/state/shabbat-print/runs/`, one JSON file per
+Run state lives in `~/.local/state/newsprint/runs/`, one JSON file per
 run, recording the timestamp, the documents printed, the Message-IDs retired,
 and the outcome. The last successful run's timestamp defines the review
 window.

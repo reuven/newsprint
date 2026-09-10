@@ -11,7 +11,7 @@ from typing import Any
 
 from .geometry import Paper, paper_by_name
 
-DEFAULT_CONFIG_PATH = Path.home() / ".config" / "shabbat-print" / "config.toml"
+DEFAULT_CONFIG_PATH = Path.home() / ".config" / "newsprint" / "config.toml"
 
 # Structural defaults only. Nothing here identifies a person, a mail host, or
 # a printer: those come from the user's own config file. An empty printer name
@@ -213,9 +213,7 @@ def load_config(
         raise ConfigError(f"{path}: {error}") from error
 
 
-DEFAULT_PUBLICATIONS_PATH = (
-    Path.home() / ".config" / "shabbat-print" / "publications.toml"
-)
+DEFAULT_PUBLICATIONS_PATH = Path.home() / ".config" / "newsprint" / "publications.toml"
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.14, uv, pytest, WeasyPrint (HTML→PDF), PyMuPDF (PDF text inspection), pypdf (imposition), BeautifulSoup + lxml (HTML cleaning), keyring (IMAP password), click (CLI).
 
-**Spec:** `docs/superpowers/specs/2026-09-07-shabbat-print-design.md`
+**Spec:** `docs/superpowers/specs/2026-09-07-newsprint-design.md`
 
 ## Scope
 
@@ -60,9 +60,9 @@ load-bearing property: a cell is one quarter of a sheet, so tiling never scales
 anything.
 
 **Files:**
-- Create: `src/shabbat_print/geometry.py`
-- Create: `src/shabbat_print/models.py`
-- Create: `src/shabbat_print/config.py`
+- Create: `src/newsprint/geometry.py`
+- Create: `src/newsprint/models.py`
+- Create: `src/newsprint/config.py`
 - Create: `tests/test_geometry.py`
 - Create: `tests/test_config.py`
 - Modify: `pyproject.toml`
@@ -74,7 +74,7 @@ anything.
 - [ ] **Step 1: Add development dependencies**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 uv add --dev pytest pytest-cov ruff
 ```
 
@@ -87,7 +87,7 @@ Create `tests/test_geometry.py`:
 
 import pytest
 
-from shabbat_print.geometry import A4, LETTER, Paper, Size, paper_by_name
+from newsprint.geometry import A4, LETTER, Paper, Size, paper_by_name
 
 
 def test_a4_cell_is_a6() -> None:
@@ -131,11 +131,11 @@ def test_paper_by_name_rejects_unknown() -> None:
 - [ ] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_geometry.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'shabbat_print.geometry'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'newsprint.geometry'`
 
 - [ ] **Step 4: Implement the geometry**
 
-Create `src/shabbat_print/geometry.py`:
+Create `src/newsprint/geometry.py`:
 
 ```python
 """Paper and cell geometry.
@@ -203,7 +203,7 @@ Expected: PASS, 9 tests.
 - [ ] **Step 6: Write the domain models**
 
 No separate test file — these are data holders exercised by every later task.
-Create `src/shabbat_print/models.py`:
+Create `src/newsprint/models.py`:
 
 ```python
 """The data that flows down the pipeline."""
@@ -260,8 +260,8 @@ from pathlib import Path
 
 import pytest
 
-from shabbat_print.config import load_config
-from shabbat_print.geometry import A4, LETTER
+from newsprint.config import load_config
+from newsprint.geometry import A4, LETTER
 
 SAMPLE = """
 [mail]
@@ -294,7 +294,7 @@ def test_no_personal_data_hides_in_the_defaults() -> None:
     """A guard for the open-source goal: catch a stray address or hostname."""
     import re
 
-    from shabbat_print.config import DEFAULTS
+    from newsprint.config import DEFAULTS
 
     flattened = repr(DEFAULTS)
     assert not re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", flattened)
@@ -303,7 +303,7 @@ def test_no_personal_data_hides_in_the_defaults() -> None:
 
 
 def test_require_mail_names_what_is_missing(tmp_path: Path) -> None:
-    from shabbat_print.config import ConfigError
+    from newsprint.config import ConfigError
 
     config = load_config(tmp_path / "absent.toml")
     with pytest.raises(ConfigError, match="mail.host and mail.user"):
@@ -353,11 +353,11 @@ def test_unknown_paper_is_rejected(tmp_path: Path) -> None:
 - [ ] **Step 8: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_config.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'shabbat_print.config'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'newsprint.config'`
 
 - [ ] **Step 9: Implement the config loader**
 
-Create `src/shabbat_print/config.py`:
+Create `src/newsprint/config.py`:
 
 ```python
 """Configuration, merged over defaults.
@@ -373,7 +373,7 @@ from typing import Any
 
 from .geometry import Paper, paper_by_name
 
-DEFAULT_CONFIG_PATH = Path.home() / ".config" / "shabbat-print" / "config.toml"
+DEFAULT_CONFIG_PATH = Path.home() / ".config" / "newsprint" / "config.toml"
 
 # Structural defaults only. Nothing here identifies a person, a mail host, or
 # a printer: those come from the user's own config file. An empty printer name
@@ -482,7 +482,7 @@ what it needs, so it carries a comment per key.
 Create `config.example.toml` at the repository root:
 
 ```toml
-# Copy to ~/.config/shabbat-print/config.toml and edit.
+# Copy to ~/.config/newsprint/config.toml and edit.
 # The IMAP password is NOT stored here. Put it in your system keychain:
 #     keyring set <mail.host> <mail.user>
 
@@ -513,7 +513,7 @@ like `toprint` rather than `INBOX/toprint`.
 - [ ] **Step 12: Format, lint, commit, and push**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 uv run ruff format src tests
 uv run ruff check src tests
 git add -A
@@ -529,7 +529,7 @@ Every later task is tested against real newsletters. This task produces them,
 and carries the two guards that a previous archive project learned the hard way.
 
 **Files:**
-- Create: `src/shabbat_print/mbox.py`
+- Create: `src/newsprint/mbox.py`
 - Create: `scripts/make_fixtures.py`
 - Create: `tests/test_mbox.py`
 - Modify: `Makefile` (create if absent)
@@ -549,7 +549,7 @@ from pathlib import Path
 
 import pytest
 
-from shabbat_print.mbox import (
+from newsprint.mbox import (
     MboxIntegrityError,
     find_thunderbird_mbox,
     split_mbox,
@@ -668,11 +668,11 @@ def test_a_cached_folder_is_found_whatever_the_profile_is_called(
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_mbox.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'shabbat_print.mbox'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'newsprint.mbox'`
 
 - [ ] **Step 3: Implement the splitter**
 
-Create `src/shabbat_print/mbox.py`:
+Create `src/newsprint/mbox.py`:
 
 ```python
 """Split a Thunderbird mbox into individual messages.
@@ -764,7 +764,7 @@ def find_thunderbird_mbox(folder: str = "toprint") -> Path | None:
     """Locate a local Thunderbird cache of an IMAP folder, if there is one.
 
     A development convenience for building test fixtures - not part of the
-    tool's runtime. shabbat-print itself talks to IMAP and never reads a local
+    tool's runtime. newsprint itself talks to IMAP and never reads a local
     mail store, so this returning None is normal on most machines.
     """
     root = Path.home() / "Library" / "Thunderbird" / "Profiles"
@@ -794,7 +794,7 @@ import sys
 from email.message import Message
 from pathlib import Path
 
-from shabbat_print.mbox import find_thunderbird_mbox, split_mbox
+from newsprint.mbox import find_thunderbird_mbox, split_mbox
 
 FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 UNSAFE = re.compile(r"[^a-z0-9]+")
@@ -845,7 +845,7 @@ fixtures:
 	uv run python scripts/make_fixtures.py
 
 test:
-	uv run pytest --cov=shabbat_print --cov-report=term-missing
+	uv run pytest --cov=newsprint --cov-report=term-missing
 
 lint:
 	uv run ruff format src tests scripts
@@ -855,7 +855,7 @@ lint:
 - [ ] **Step 7: Generate the fixtures and verify against the real mbox**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 make fixtures
 ls tests/fixtures | wc -l
 ```
@@ -891,7 +891,7 @@ Expected: PASS, 7 tests. The real-mbox test may take a few seconds.
 - [ ] **Step 10: Format, lint, commit, and push**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 make lint
 git add -A
 git commit -m "Add mbox splitter with byte-accounting guard, and fixture harness"
@@ -903,7 +903,7 @@ git push origin main
 ### Task 3: Extract a Document from a MIME message
 
 **Files:**
-- Create: `src/shabbat_print/extract.py`
+- Create: `src/newsprint/extract.py`
 - Create: `tests/test_extract.py`
 
 **Interfaces:**
@@ -920,7 +920,7 @@ from pathlib import Path
 
 import pytest
 
-from shabbat_print.extract import extract
+from newsprint.extract import extract
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -1054,11 +1054,11 @@ def test_every_fixture_extracts() -> None:
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_extract.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'shabbat_print.extract'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'newsprint.extract'`
 
 - [ ] **Step 3: Implement the extractor**
 
-Create `src/shabbat_print/extract.py`:
+Create `src/newsprint/extract.py`:
 
 ```python
 """Turn a MIME message into a Document.
@@ -1187,13 +1187,13 @@ Append to `tests/test_config.py`:
 
 ```python
 def test_publication_names_default_to_empty(tmp_path: Path) -> None:
-    from shabbat_print.config import load_publication_names
+    from newsprint.config import load_publication_names
 
     assert load_publication_names(tmp_path / "absent.toml") == {}
 
 
 def test_publication_names_are_lowercased(tmp_path: Path) -> None:
-    from shabbat_print.config import load_publication_names
+    from newsprint.config import load_publication_names
 
     path = tmp_path / "publications.toml"
     path.write_text('[names]\n"NoReply@News.Bloomberg.com" = "Money Stuff"\n')
@@ -1209,11 +1209,11 @@ Expected: FAIL — `ImportError: cannot import name 'load_publication_names'`
 
 - [ ] **Step 7: Implement the loader**
 
-Append to `src/shabbat_print/config.py`:
+Append to `src/newsprint/config.py`:
 
 ```python
 DEFAULT_PUBLICATIONS_PATH = (
-    Path.home() / ".config" / "shabbat-print" / "publications.toml"
+    Path.home() / ".config" / "newsprint" / "publications.toml"
 )
 
 
@@ -1241,11 +1241,11 @@ Expected: PASS.
 - [ ] **Step 9: Seed publications.toml from the real senders**
 
 ```bash
-mkdir -p ~/.config/shabbat-print
+mkdir -p ~/.config/newsprint
 uv run python - <<'SEED'
 import email, email.utils, collections
 from pathlib import Path
-from shabbat_print.mbox import find_thunderbird_mbox, split_mbox
+from newsprint.mbox import find_thunderbird_mbox, split_mbox
 
 mbox = find_thunderbird_mbox()
 if mbox is None:
@@ -1264,7 +1264,7 @@ for raw in split_mbox(mbox):
 lines = ["# Sender address -> the name printed on the cell.", "[names]"]
 for address, count in counts.most_common():
     lines.append(f'"{address}" = "{names[address]}"   # {count} messages')
-Path.home().joinpath(".config/shabbat-print/publications.toml").write_text(
+Path.home().joinpath(".config/newsprint/publications.toml").write_text(
     "\n".join(lines) + "\n"
 )
 print(f"seeded {len(counts)} senders")
@@ -1278,7 +1278,7 @@ place to fix that.
 - [ ] **Step 10: Format, lint, commit, and push**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 make lint
 git add -A
 git commit -m "Extract a Document from a MIME message"
@@ -1298,8 +1298,8 @@ come into existence.
 import `clean`.
 
 **Files:**
-- Create: `src/shabbat_print/boilerplate.py`
-- Create: `src/shabbat_print/clean.py`
+- Create: `src/newsprint/boilerplate.py`
+- Create: `src/newsprint/clean.py`
 - Create: `tests/test_boilerplate.py`
 - Create: `tests/test_clean.py`
 
@@ -1314,7 +1314,7 @@ Create `tests/test_boilerplate.py`:
 ```python
 import pytest
 
-from shabbat_print.boilerplate import content_ratio, is_boilerplate_line
+from newsprint.boilerplate import content_ratio, is_boilerplate_line
 
 PROSE = "Private credit is having a moment, and not entirely a good one."
 
@@ -1375,11 +1375,11 @@ def test_content_ratio_of_empty_text_is_zero() -> None:
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_boilerplate.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'shabbat_print.boilerplate'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'newsprint.boilerplate'`
 
 - [ ] **Step 3: Implement the boilerplate classifier**
 
-Create `src/shabbat_print/boilerplate.py`:
+Create `src/newsprint/boilerplate.py`:
 
 ```python
 """Deciding what is newsletter chrome and what is newsletter content.
@@ -1458,7 +1458,7 @@ Expected: PASS, 19 tests.
 - [ ] **Step 5: Add the HTML dependencies**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 uv add beautifulsoup4 lxml
 ```
 
@@ -1472,8 +1472,8 @@ from pathlib import Path
 
 import pytest
 
-from shabbat_print.clean import clean_document
-from shabbat_print.models import Document, Origin
+from newsprint.clean import clean_document
+from newsprint.models import Document, Origin
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -1587,7 +1587,7 @@ def test_other_document_fields_are_preserved() -> None:
 
 @pytest.mark.skipif(not FIXTURES.exists(), reason="run `make fixtures` first")
 def test_cleaning_every_fixture_never_raises() -> None:
-    from shabbat_print.extract import extract
+    from newsprint.extract import extract
 
     paths = sorted(FIXTURES.glob("*.eml"))
     assert paths, "no fixtures; run `make fixtures`"
@@ -1598,11 +1598,11 @@ def test_cleaning_every_fixture_never_raises() -> None:
 - [ ] **Step 7: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_clean.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'shabbat_print.clean'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'newsprint.clean'`
 
 - [ ] **Step 8: Implement the cleaner**
 
-Create `src/shabbat_print/clean.py`:
+Create `src/newsprint/clean.py`:
 
 ```python
 """Reduce a newsletter to its article content.
@@ -1702,7 +1702,7 @@ Expected: PASS, 10 tests.
 - [ ] **Step 10: Format, lint, commit, and push**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 make lint
 git add -A
 git commit -m "Classify boilerplate and reduce newsletters to article content"
@@ -1714,8 +1714,8 @@ git push origin main
 ### Task 5: Render a Document onto cell-sized pages
 
 **Files:**
-- Create: `src/shabbat_print/pdfutil.py`
-- Create: `src/shabbat_print/render.py`
+- Create: `src/newsprint/pdfutil.py`
+- Create: `src/newsprint/render.py`
 - Create: `tests/test_render.py`
 
 **Interfaces:**
@@ -1725,7 +1725,7 @@ git push origin main
 - [ ] **Step 1: Add the PDF dependencies**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 uv add weasyprint pymupdf
 ```
 
@@ -1739,11 +1739,11 @@ from pathlib import Path
 
 import pytest
 
-from shabbat_print.config import load_config
-from shabbat_print.geometry import A4
-from shabbat_print.models import Document, Origin
-from shabbat_print.pdfutil import page_count, page_text, text_extent_mm
-from shabbat_print.render import render
+from newsprint.config import load_config
+from newsprint.geometry import A4
+from newsprint.models import Document, Origin
+from newsprint.pdfutil import page_count, page_text, text_extent_mm
+from newsprint.render import render
 
 PROSE = (
     "<p>The Federal Reserve declined to move rates this month, which surprised "
@@ -1811,7 +1811,7 @@ def test_compression_writes_a_distinct_file(config, tmp_path: Path) -> None:
 def test_letter_paper_gives_a_letter_cell(tmp_path: Path) -> None:
     import pymupdf
 
-    from shabbat_print.geometry import LETTER
+    from newsprint.geometry import LETTER
 
     config = load_config(tmp_path / "absent.toml", paper_override="letter")
     pdf = render(document(PROSE), config, out_dir=tmp_path)
@@ -1841,11 +1841,11 @@ def test_dollar_signs_in_content_survive(config, tmp_path: Path) -> None:
 - [ ] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_render.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'shabbat_print.pdfutil'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'newsprint.pdfutil'`
 
 - [ ] **Step 4: Implement the PDF inspection helpers**
 
-Create `src/shabbat_print/pdfutil.py`:
+Create `src/newsprint/pdfutil.py`:
 
 ```python
 """Reading facts back out of a rendered PDF."""
@@ -1885,7 +1885,7 @@ def text_extent_mm(path: Path, index: int) -> float:
 
 - [ ] **Step 5: Implement the renderer**
 
-Create `src/shabbat_print/render.py`:
+Create `src/newsprint/render.py`:
 
 ```python
 """Typeset a Document onto cell-sized pages.
@@ -1975,7 +1975,7 @@ Expected: PASS, 10 tests.
 - [ ] **Step 7: Format, lint, commit, and push**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 make lint
 git add -A
 git commit -m "Render documents onto cell-sized pages"
@@ -1991,7 +1991,7 @@ tighter render would save a cell without trying, so `render` hands it a
 callback rather than being imported.
 
 **Files:**
-- Create: `src/shabbat_print/trim.py`
+- Create: `src/newsprint/trim.py`
 - Create: `tests/test_trim.py`
 
 **Interfaces:**
@@ -2001,7 +2001,7 @@ callback rather than being imported.
 - [ ] **Step 1: Add the imposition dependency**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 uv add pypdf
 ```
 
@@ -2015,11 +2015,11 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from shabbat_print.config import LayoutConfig
-from shabbat_print.geometry import A4, MM_PER_INCH, POINTS_PER_INCH, Paper
-from shabbat_print.models import Verdict
-from shabbat_print.pdfutil import page_count
-from shabbat_print.trim import classify, fit
+from newsprint.config import LayoutConfig
+from newsprint.geometry import A4, MM_PER_INCH, POINTS_PER_INCH, Paper
+from newsprint.models import Verdict
+from newsprint.pdfutil import page_count
+from newsprint.trim import classify, fit
 
 LAYOUT = LayoutConfig(margin_mm=9.0, font_size_pt=9.0, line_height=1.35)
 
@@ -2127,11 +2127,11 @@ def test_fit_leaves_a_full_document_alone(tmp_path: Path) -> None:
 - [ ] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_trim.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'shabbat_print.trim'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'newsprint.trim'`
 
 - [ ] **Step 4: Implement the fitter**
 
-Create `src/shabbat_print/trim.py`:
+Create `src/newsprint/trim.py`:
 
 ```python
 """Decide what to do about a document's final cell.
@@ -2224,7 +2224,7 @@ Expected: PASS, 10 tests.
 - [ ] **Step 6: Format, lint, commit, and push**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 make lint
 git add -A
 git commit -m "Drop filler cells and squeeze widows away"
@@ -2236,7 +2236,7 @@ git push origin main
 ### Task 7: Impose four cells to a sheet
 
 **Files:**
-- Create: `src/shabbat_print/impose.py`
+- Create: `src/newsprint/impose.py`
 - Create: `tests/test_impose.py`
 
 **Interfaces:**
@@ -2257,9 +2257,9 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from shabbat_print.geometry import A4, LETTER, Paper
-from shabbat_print.impose import impose
-from shabbat_print.pdfutil import page_count
+from newsprint.geometry import A4, LETTER, Paper
+from newsprint.impose import impose
+from newsprint.pdfutil import page_count
 
 
 def numbered_cells(path: Path, count: int, paper: Paper = A4) -> Path:
@@ -2346,11 +2346,11 @@ def test_imposing_nothing_is_an_error(tmp_path: Path) -> None:
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_impose.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'shabbat_print.impose'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'newsprint.impose'`
 
 - [ ] **Step 3: Implement the imposer**
 
-Create `src/shabbat_print/impose.py`:
+Create `src/newsprint/impose.py`:
 
 ```python
 """Tile cell-sized pages four to a sheet side.
@@ -2412,7 +2412,7 @@ Expected: PASS, 7 tests.
 - [ ] **Step 5: Format, lint, commit, and push**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 make lint
 git add -A
 git commit -m "Impose four cells to a sheet side"
@@ -2424,7 +2424,7 @@ git push origin main
 ### Task 8: Spool to the printer
 
 **Files:**
-- Create: `src/shabbat_print/printer.py`
+- Create: `src/newsprint/printer.py`
 - Create: `tests/test_printer.py`
 
 **Interfaces:**
@@ -2441,8 +2441,8 @@ from pathlib import Path
 
 import pytest
 
-from shabbat_print.config import load_config
-from shabbat_print.printer import PrintError, build_command, spool
+from newsprint.config import load_config
+from newsprint.printer import PrintError, build_command, spool
 
 
 @pytest.fixture
@@ -2511,11 +2511,11 @@ def test_spool_raises_when_the_job_id_is_missing(config, tmp_path: Path) -> None
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_printer.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'shabbat_print.printer'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'newsprint.printer'`
 
 - [ ] **Step 3: Implement the printer**
 
-Create `src/shabbat_print/printer.py`:
+Create `src/newsprint/printer.py`:
 
 ```python
 """Hand a finished document to CUPS.
@@ -2578,7 +2578,7 @@ Expected: PASS, 5 tests.
 - [ ] **Step 5: Format, lint, commit, and push**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 make lint
 git add -A
 git commit -m "Spool an imposed document to CUPS"
@@ -2590,7 +2590,7 @@ git push origin main
 ### Task 9: Read from IMAP
 
 **Files:**
-- Create: `src/shabbat_print/mail.py`
+- Create: `src/newsprint/mail.py`
 - Create: `tests/test_mail.py`
 
 **Interfaces:**
@@ -2600,7 +2600,7 @@ git push origin main
 - [ ] **Step 1: Add the keyring dependency**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 uv add keyring
 ```
 
@@ -2613,7 +2613,7 @@ from datetime import date
 
 import pytest
 
-from shabbat_print.mail import Mailbox, MailError, password_for
+from newsprint.mail import Mailbox, MailError, password_for
 
 RAW = b"From: someone@example.com\r\nSubject: Hello\r\n\r\nBody.\r\n"
 
@@ -2719,13 +2719,13 @@ def test_trash_folder_raises_when_absent() -> None:
 
 def test_password_for_reads_the_keychain(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "shabbat_print.mail.keyring.get_password", lambda host, user: "from-keychain"
+        "newsprint.mail.keyring.get_password", lambda host, user: "from-keychain"
     )
     assert password_for("imap.example.com", "someone@example.com") == "from-keychain"
 
 
 def test_password_for_explains_how_to_store_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("shabbat_print.mail.keyring.get_password", lambda host, user: None)
+    monkeypatch.setattr("newsprint.mail.keyring.get_password", lambda host, user: None)
     with pytest.raises(MailError, match="keyring set"):
         password_for("imap.example.com", "someone@example.com")
 ```
@@ -2733,11 +2733,11 @@ def test_password_for_explains_how_to_store_it(monkeypatch: pytest.MonkeyPatch) 
 - [ ] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_mail.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'shabbat_print.mail'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'newsprint.mail'`
 
 - [ ] **Step 4: Implement the read side**
 
-Create `src/shabbat_print/mail.py`:
+Create `src/newsprint/mail.py`:
 
 ```python
 """IMAP access to the print queue.
@@ -2858,7 +2858,7 @@ Expected: PASS, 9 tests.
 - [ ] **Step 6: Format, lint, commit, and push**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 make lint
 git add -A
 git commit -m "Read the print queue from IMAP"
@@ -2873,8 +2873,8 @@ The only code in the project that modifies mail. It runs last, on a separate
 read-write connection, and writes its log before the first mutation.
 
 **Files:**
-- Create: `src/shabbat_print/runlog.py`
-- Modify: `src/shabbat_print/mail.py` (append `RetireResult` and `Mailbox.retire`)
+- Create: `src/newsprint/runlog.py`
+- Modify: `src/newsprint/mail.py` (append `RetireResult` and `Mailbox.retire`)
 - Create: `tests/test_runlog.py`
 - Modify: `tests/test_mail.py` (append retirement tests)
 
@@ -2890,7 +2890,7 @@ Create `tests/test_runlog.py`:
 from datetime import datetime, timezone
 from pathlib import Path
 
-from shabbat_print import runlog
+from newsprint import runlog
 
 
 def test_record_writes_a_readable_file(tmp_path: Path) -> None:
@@ -2928,7 +2928,7 @@ Expected: FAIL — `ImportError: cannot import name 'runlog'`
 
 - [ ] **Step 3: Implement the run log**
 
-Create `src/shabbat_print/runlog.py`:
+Create `src/newsprint/runlog.py`:
 
 ```python
 """A record of every run, written before any mail is modified.
@@ -2942,7 +2942,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-DEFAULT_STATE_DIR = Path.home() / ".local" / "state" / "shabbat-print" / "runs"
+DEFAULT_STATE_DIR = Path.home() / ".local" / "state" / "newsprint" / "runs"
 
 
 def record(entry: dict[str, Any], state_dir: Path | None = None) -> Path:
@@ -3043,7 +3043,7 @@ Expected: FAIL — `AttributeError: 'Mailbox' object has no attribute 'retire'`
 
 - [ ] **Step 7: Implement retirement**
 
-Append to `src/shabbat_print/mail.py`:
+Append to `src/newsprint/mail.py`:
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -3097,7 +3097,7 @@ Expected: PASS, 13 tests.
 - [ ] **Step 9: Format, lint, commit, and push**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 make lint
 git add -A
 git commit -m "Retire printed mail, and record every run"
@@ -3109,20 +3109,20 @@ git push origin main
 ### Task 11: Pipeline orchestration and the command line
 
 **Files:**
-- Create: `src/shabbat_print/pipeline.py`
-- Create: `src/shabbat_print/cli.py`
+- Create: `src/newsprint/pipeline.py`
+- Create: `src/newsprint/cli.py`
 - Create: `tests/test_pipeline.py`
 - Create: `tests/test_cli.py`
 - Modify: `pyproject.toml` (entry point)
 
 **Interfaces:**
 - Consumes: everything above.
-- Produces: `Built(document, pdf, cells, verdict)`; `Failure(document, error)`; `build(documents, config, out_dir) -> tuple[list[Built], list[Failure]]`; the `shabbat-print` command.
+- Produces: `Built(document, pdf, cells, verdict)`; `Failure(document, error)`; `build(documents, config, out_dir) -> tuple[list[Built], list[Failure]]`; the `newsprint` command.
 
 - [ ] **Step 1: Add click**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 uv add click
 ```
 
@@ -3136,9 +3136,9 @@ from pathlib import Path
 
 import pytest
 
-from shabbat_print.config import load_config
-from shabbat_print.models import Document, Origin, Verdict
-from shabbat_print.pipeline import build
+from newsprint.config import load_config
+from newsprint.models import Document, Origin, Verdict
+from newsprint.pipeline import build
 
 PROSE = (
     "<p>The Federal Reserve declined to move rates this month, which surprised "
@@ -3174,7 +3174,7 @@ def test_builds_a_pdf_per_document(config, tmp_path: Path) -> None:
 def test_cells_matches_the_pdf_it_reports(config, tmp_path: Path) -> None:
     """Built.cells is what the sheet count is computed from, so it must equal
     the page count of the PDF actually handed on."""
-    from shabbat_print.pdfutil import page_count
+    from newsprint.pdfutil import page_count
 
     built, _ = build([document(PROSE * 40)], config, tmp_path)
     assert built[0].cells == page_count(built[0].pdf)
@@ -3205,11 +3205,11 @@ def test_an_empty_document_is_a_failure_not_a_blank_page(config, tmp_path: Path)
 - [ ] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_pipeline.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'shabbat_print.pipeline'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'newsprint.pipeline'`
 
 - [ ] **Step 4: Implement the pipeline**
 
-Create `src/shabbat_print/pipeline.py`:
+Create `src/newsprint/pipeline.py`:
 
 ```python
 """Turn cleaned documents into cell PDFs, one document at a time.
@@ -3301,7 +3301,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from shabbat_print.cli import main
+from newsprint.cli import main
 
 
 def test_help_names_the_paper_switch() -> None:
@@ -3311,7 +3311,7 @@ def test_help_names_the_paper_switch() -> None:
 
 
 def test_an_empty_queue_says_so(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("shabbat_print.cli.fetch_queue", lambda config: ([], None))
+    monkeypatch.setattr("newsprint.cli.fetch_queue", lambda config: ([], None))
     result = CliRunner().invoke(main, ["--config", str(tmp_path / "absent.toml")])
     assert result.exit_code == 0
     assert "Nothing starred" in result.output
@@ -3325,7 +3325,7 @@ def test_dry_run_never_prints_and_never_retires(monkeypatch, tmp_path: Path) -> 
     """
     from datetime import datetime, timezone
 
-    from shabbat_print.models import Document, Origin
+    from newsprint.models import Document, Origin
 
     document = Document(
         origin=Origin(kind="email", identifier="<a@example.com>", uid=1),
@@ -3339,13 +3339,13 @@ def test_dry_run_never_prints_and_never_retires(monkeypatch, tmp_path: Path) -> 
     spooled: list[Path] = []
     retired: list[list[int]] = []
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
+        "newsprint.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
     )
     monkeypatch.setattr(
-        "shabbat_print.cli.spool", lambda pdf, config: spooled.append(pdf)
+        "newsprint.cli.spool", lambda pdf, config: spooled.append(pdf)
     )
     monkeypatch.setattr(
-        "shabbat_print.cli.retire_printed",
+        "newsprint.cli.retire_printed",
         lambda config, uids, trash: retired.append(uids),
     )
 
@@ -3364,7 +3364,7 @@ def test_declining_the_prompt_prints_nothing(monkeypatch, tmp_path: Path) -> Non
     """Answering no at the confirmation must leave mail untouched."""
     from datetime import datetime, timezone
 
-    from shabbat_print.models import Document, Origin
+    from newsprint.models import Document, Origin
 
     document = Document(
         origin=Origin(kind="email", identifier="<b@example.com>", uid=2),
@@ -3376,12 +3376,12 @@ def test_declining_the_prompt_prints_nothing(monkeypatch, tmp_path: Path) -> Non
     )
     spooled: list[Path] = []
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
+        "newsprint.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
     )
     monkeypatch.setattr(
-        "shabbat_print.cli.spool", lambda pdf, config: spooled.append(pdf)
+        "newsprint.cli.spool", lambda pdf, config: spooled.append(pdf)
     )
-    monkeypatch.setattr("shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "x")
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "x")
 
     result = CliRunner().invoke(
         main,
@@ -3396,11 +3396,11 @@ def test_declining_the_prompt_prints_nothing(monkeypatch, tmp_path: Path) -> Non
 - [ ] **Step 7: Run the test to verify it fails**
 
 Run: `uv run pytest tests/test_cli.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'shabbat_print.cli'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'newsprint.cli'`
 
 - [ ] **Step 8: Implement the CLI**
 
-Create `src/shabbat_print/cli.py`:
+Create `src/newsprint/cli.py`:
 
 ```python
 """The Friday afternoon command.
@@ -3497,7 +3497,7 @@ def main(
         return
 
     click.echo(f"Building {len(documents)} newsletters:")
-    work_dir = Path(tempfile.mkdtemp(prefix="shabbat-print-"))
+    work_dir = Path(tempfile.mkdtemp(prefix="newsprint-"))
     built, failed = build(documents, config, work_dir)
 
     for item in built:
@@ -3573,7 +3573,7 @@ safety-critical code in the project. Append to `tests/test_cli.py`:
 def _queued(identifier: str = "<d@example.com>", uid: int = 4):
     from datetime import datetime, timezone
 
-    from shabbat_print.models import Document, Origin
+    from newsprint.models import Document, Origin
 
     return Document(
         origin=Origin(kind="email", identifier=identifier, uid=uid),
@@ -3589,17 +3589,17 @@ def test_accepting_prints_then_retires_in_that_order(monkeypatch, tmp_path: Path
     """The invariant: mail is modified only after a job reaches the queue."""
     events: list[str] = []
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "newsprint.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
     )
     monkeypatch.setattr(
-        "shabbat_print.cli.spool",
+        "newsprint.cli.spool",
         lambda pdf, config: (events.append("spool"), "Printer-1")[1],
     )
     monkeypatch.setattr(
-        "shabbat_print.cli.retire_printed",
+        "newsprint.cli.retire_printed",
         lambda config, uids, trash: events.append(f"retire:{uids}"),
     )
-    monkeypatch.setattr("shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r")
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "r")
 
     result = CliRunner().invoke(
         main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
@@ -3609,7 +3609,7 @@ def test_accepting_prints_then_retires_in_that_order(monkeypatch, tmp_path: Path
 
 
 def test_a_print_failure_leaves_mail_untouched(monkeypatch, tmp_path: Path) -> None:
-    from shabbat_print.printer import PrintError
+    from newsprint.printer import PrintError
 
     retired: list[list[int]] = []
 
@@ -3617,14 +3617,14 @@ def test_a_print_failure_leaves_mail_untouched(monkeypatch, tmp_path: Path) -> N
         raise PrintError("lp: no such printer")
 
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
+        "newsprint.cli.fetch_queue", lambda config: ([_queued()], "INBOX/Trash")
     )
-    monkeypatch.setattr("shabbat_print.cli.spool", explode)
+    monkeypatch.setattr("newsprint.cli.spool", explode)
     monkeypatch.setattr(
-        "shabbat_print.cli.retire_printed",
+        "newsprint.cli.retire_printed",
         lambda config, uids, trash: retired.append(uids),
     )
-    monkeypatch.setattr("shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r")
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "r")
 
     result = CliRunner().invoke(
         main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
@@ -3644,7 +3644,7 @@ def test_an_unconfigured_account_says_what_to_set(monkeypatch, tmp_path: Path) -
 def test_a_document_that_cannot_be_built_is_reported(monkeypatch, tmp_path: Path) -> None:
     """A newsletter that cleans down to nothing is named, not silently lost."""
     monkeypatch.setattr(
-        "shabbat_print.cli.fetch_queue", lambda config: ([_empty()], None)
+        "newsprint.cli.fetch_queue", lambda config: ([_empty()], None)
     )
     result = CliRunner().invoke(
         main, ["--no-preview", "--config", str(tmp_path / "absent.toml")]
@@ -3658,7 +3658,7 @@ def test_a_document_that_cannot_be_built_is_reported(monkeypatch, tmp_path: Path
 def _empty():
     from datetime import datetime, timezone
 
-    from shabbat_print.models import Document, Origin
+    from newsprint.models import Document, Origin
 
     return Document(
         origin=Origin(kind="email", identifier="<e@example.com>", uid=5),
@@ -3678,19 +3678,19 @@ In `pyproject.toml`, change:
 
 ```toml
 [project.scripts]
-shabbat-print = "shabbat_print.cli:main"
+newsprint = "newsprint.cli:main"
 ```
 
 - [ ] **Step 10: Run the whole suite with coverage**
 
 Run: `make test`
-Expected: every test passes; `src/shabbat_print` at 100% coverage. Add tests
+Expected: every test passes; `src/newsprint` at 100% coverage. Add tests
 for any uncovered line before continuing.
 
 - [ ] **Step 11: Format, lint, commit, and push**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 make lint
 git add -A
 git commit -m "Add pipeline orchestration and the command line"
@@ -3700,11 +3700,11 @@ git push origin main
 - [ ] **Step 12: First real run, in dry-run mode**
 
 ```bash
-cd ~/Consulting/shabbat-print
+cd ~/Consulting/newsprint
 # Once, interactively - use the host and user from your own config.toml:
-keyring set "$(python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path.home().joinpath(".config/shabbat-print/config.toml").read_text())["mail"]["host"])')" \
-            "$(python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path.home().joinpath(".config/shabbat-print/config.toml").read_text())["mail"]["user"])')
-uv run shabbat-print --dry-run
+keyring set "$(python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path.home().joinpath(".config/newsprint/config.toml").read_text())["mail"]["host"])')" \
+            "$(python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path.home().joinpath(".config/newsprint/config.toml").read_text())["mail"]["user"])')
+uv run newsprint --dry-run
 ```
 
 Check by eye in Preview: four cells to a side, text at a readable size, no

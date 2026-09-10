@@ -1,4 +1,4 @@
-# Copy to ~/.config/shabbat-print/config.toml and edit.
+# Copy to ~/.config/newsprint/config.toml and edit.
 # The IMAP password is NOT stored here. Put it in your system keychain:
 #     keyring set <mail.host> <mail.user>
 #

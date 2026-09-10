@@ -324,7 +324,9 @@ def save_output(built_pdf: Path, output: Path | None, packet_date: date) -> Path
     if output is None:
         return built_pdf
     destination = (
-        output / f"shabbat-{packet_date.isoformat()}.pdf" if output.is_dir() else output
+        output / f"newsprint-{packet_date.isoformat()}.pdf"
+        if output.is_dir()
+        else output
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(built_pdf, destination)
@@ -464,7 +466,7 @@ def main(
         return
 
     click.echo(f"Building {len(documents)} newsletters:")
-    work_dir = Path(tempfile.mkdtemp(prefix="shabbat-print-"))
+    work_dir = Path(tempfile.mkdtemp(prefix="newsprint-"))
     built: list[Built] = []
     failed: list[Failure] = []
     with click.progressbar(

@@ -1,9 +1,9 @@
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from shabbat_print import runlog
-from shabbat_print.models import Document, Origin
-from shabbat_print.picker import (
+from newsprint import runlog
+from newsprint.models import Document, Origin
+from newsprint.picker import (
     DISPLAY_LIMIT,
     build_picklist,
     format_pick_date,
@@ -219,13 +219,13 @@ def test_build_picklist_when_has_no_year() -> None:
 
 
 def test_display_width_counts_plain_ascii_by_character() -> None:
-    from shabbat_print.picker import _display_width
+    from newsprint.picker import _display_width
 
     assert _display_width("Bond market Rorschach") == len("Bond market Rorschach")
 
 
 def test_display_width_counts_a_wide_emoji_as_two_columns() -> None:
-    from shabbat_print.picker import _display_width
+    from newsprint.picker import _display_width
 
     # U+1F9E0 BRAIN - a double-width emoji per wcwidth, exactly the kind
     # of subject-leading emoji the spec's example ("Claude Fable 5.1 Is
@@ -237,7 +237,7 @@ def test_display_width_treats_a_non_printable_as_zero() -> None:
     """wcwidth returns -1 for a control character - must not be allowed
     to make a width computation negative and break every downstream
     padding/truncation sum."""
-    from shabbat_print.picker import _display_width
+    from newsprint.picker import _display_width
 
     assert _display_width("\x1bab") == 2
 
@@ -248,13 +248,13 @@ def test_display_width_treats_a_non_printable_as_zero() -> None:
 
 
 def test_truncate_to_width_returns_text_unchanged_when_it_already_fits() -> None:
-    from shabbat_print.picker import _truncate_to_width
+    from newsprint.picker import _truncate_to_width
 
     assert _truncate_to_width("Short", max_width=20) == "Short"
 
 
 def test_truncate_to_width_snaps_back_to_the_last_full_word() -> None:
-    from shabbat_print.picker import _truncate_to_width
+    from newsprint.picker import _truncate_to_width
 
     result = _truncate_to_width("Friction and Feedback Loops", max_width=15)
     assert result == "Friction and…"
@@ -262,21 +262,21 @@ def test_truncate_to_width_snaps_back_to_the_last_full_word() -> None:
 
 
 def test_truncate_to_width_falls_back_to_a_mid_word_cut_with_no_space() -> None:
-    from shabbat_print.picker import _truncate_to_width
+    from newsprint.picker import _truncate_to_width
 
     result = _truncate_to_width("Supercalifragilisticexpialidocious", max_width=10)
     assert result == "Supercali…"
 
 
 def test_truncate_to_width_counts_emoji_as_two_columns_not_one_character() -> None:
-    from shabbat_print.picker import _display_width, _truncate_to_width
+    from newsprint.picker import _display_width, _truncate_to_width
 
     result = _truncate_to_width("\U0001f9e0 Claude Fable 5.1 Is Here", max_width=10)
     assert _display_width(result) <= 10
 
 
 def test_truncate_to_width_degenerate_zero_width_returns_empty() -> None:
-    from shabbat_print.picker import _truncate_to_width
+    from newsprint.picker import _truncate_to_width
 
     assert _truncate_to_width("Anything", max_width=0) == ""
 
@@ -284,7 +284,7 @@ def test_truncate_to_width_degenerate_zero_width_returns_empty() -> None:
 def test_truncate_to_width_not_even_one_character_fits_beside_the_ellipsis() -> None:
     """max_width == 1 leaves no room for a real character next to the
     (width-1) ellipsis - the ellipsis alone is the whole answer."""
-    from shabbat_print.picker import _ELLIPSIS, _truncate_to_width
+    from newsprint.picker import _ELLIPSIS, _truncate_to_width
 
     assert _truncate_to_width("Anything", max_width=1) == _ELLIPSIS
 
@@ -296,7 +296,7 @@ def test_truncate_to_width_keeps_a_mid_word_cut_when_the_only_space_is_leading()
     space is the only space in the truncated prefix, so rsplit leaves an
     empty word_boundary - the mid-word cut is kept rather than returning
     a bare ellipsis with nothing in front of it."""
-    from shabbat_print.picker import _truncate_to_width
+    from newsprint.picker import _truncate_to_width
 
     result = _truncate_to_width(" Extraordinarily", max_width=6)
     assert result == " Extr…"
@@ -318,7 +318,7 @@ def test_truncate_to_width_keeps_a_mid_word_cut_when_the_only_space_is_leading()
 
 
 def test_row_text_strips_an_embedded_carriage_return() -> None:
-    from shabbat_print.picker import _row_text
+    from newsprint.picker import _row_text
 
     text = _row_text(
         "Static vs. Dynamic vs. Continuous Batching in LLMs, clearly\r\nexplained!",
@@ -348,7 +348,7 @@ def test_layout_picklist_never_emits_a_control_character_in_a_row() -> None:
 
 
 def test_heading_rule_fills_to_the_given_width() -> None:
-    from shabbat_print.picker import _display_width, _heading_rule
+    from newsprint.picker import _display_width, _heading_rule
 
     rule = _heading_rule("Axios Macro", None, 46)
     assert _display_width(rule) == 46
@@ -357,13 +357,13 @@ def test_heading_rule_fills_to_the_given_width() -> None:
 
 
 def test_heading_rule_uppercases_the_publication() -> None:
-    from shabbat_print.picker import _heading_rule
+    from newsprint.picker import _heading_rule
 
     assert "BEN THOMPSON" in _heading_rule("Ben Thompson", None, 40)
 
 
 def test_heading_rule_truncates_a_publication_longer_than_the_width() -> None:
-    from shabbat_print.picker import _display_width, _heading_rule
+    from newsprint.picker import _display_width, _heading_rule
 
     rule = _heading_rule("An Extremely Long Publication Name That Never Fits", None, 20)
     assert _display_width(rule) <= 20
@@ -375,7 +375,7 @@ def test_heading_rule_truncates_a_publication_longer_than_the_width() -> None:
 
 
 def test_column_widths_size_date_and_length_from_the_actual_data() -> None:
-    from shabbat_print.picker import _column_widths
+    from newsprint.picker import _column_widths
 
     rows = [
         PickRowStub(when="1 Sep", length="short"),
@@ -388,7 +388,7 @@ def test_column_widths_size_date_and_length_from_the_actual_data() -> None:
 
 
 def test_column_widths_floors_the_subject_width_in_a_narrow_terminal() -> None:
-    from shabbat_print.picker import _MIN_SUBJECT_WIDTH, _column_widths
+    from newsprint.picker import _MIN_SUBJECT_WIDTH, _column_widths
 
     rows = [PickRowStub(when="13 Sep", length="length unknown")]
     subject_width, _date_width, _length_width = _column_widths(rows, width=40)
@@ -396,7 +396,7 @@ def test_column_widths_floors_the_subject_width_in_a_narrow_terminal() -> None:
 
 
 def test_column_widths_has_sane_defaults_with_no_rows() -> None:
-    from shabbat_print.picker import _column_widths
+    from newsprint.picker import _column_widths
 
     subject_width, date_width, length_width = _column_widths([], width=80)
     assert date_width > 0
@@ -491,7 +491,7 @@ def test_layout_picklist_leading_emoji_does_not_shift_the_date_column() -> None:
     caught by hand-checking a first draft of this test that compared
     str.index() directly and failed on a real, correctly-aligned render.
     """
-    from shabbat_print.picker import _display_width
+    from newsprint.picker import _display_width
 
     candidates = [
         _doc("Axios Macro", "\U0001f9e0 Claude Fable 5.1 Is Here", "2026-09-01", uid=1),
@@ -550,7 +550,7 @@ def test_layout_picklist_handles_no_candidates() -> None:
 
 def test_a_host_that_names_the_publication_is_shown() -> None:
     """ "Jon Kelly" alone does not say Puck; the host does."""
-    from shabbat_print.picker import source_label
+    from newsprint.picker import source_label
 
     assert source_label("Jon Kelly", "puck.news") == "puck.news"
     assert source_label("Ben Thompson", "stratechery.com") == "stratechery.com"
@@ -561,7 +561,7 @@ def test_a_host_that_names_the_publication_is_shown() -> None:
 
 def test_a_host_the_name_already_carries_is_not_shown() -> None:
     """ "Derek Thompson (derekthompson.substack.com)" is pure noise."""
-    from shabbat_print.picker import source_label
+    from newsprint.picker import source_label
 
     assert source_label("Derek Thompson", "derekthompson.substack.com") is None
     assert source_label("Axios Macro", "axios.com") is None
@@ -572,7 +572,7 @@ def test_a_host_the_name_already_carries_is_not_shown() -> None:
 def test_a_bare_platform_host_says_nothing_and_is_not_shown() -> None:
     """Every Substack shares substack.com, so the bare domain identifies
     nothing - unlike the label in front of it."""
-    from shabbat_print.picker import source_label
+    from newsprint.picker import source_label
 
     assert source_label("Bite Code!", "substack.com") is None
     assert source_label("The Reframe", "ghost.io") is None
@@ -580,13 +580,13 @@ def test_a_bare_platform_host_says_nothing_and_is_not_shown() -> None:
 
 
 def test_a_generic_mail_subdomain_is_stripped_before_showing() -> None:
-    from shabbat_print.picker import source_label
+    from newsprint.picker import source_label
 
     assert source_label("Matt Levine", "news.bloomberg.com") == "bloomberg.com"
 
 
 def test_no_host_means_nothing_to_show() -> None:
-    from shabbat_print.picker import source_label
+    from newsprint.picker import source_label
 
     assert source_label("Someone", None) is None
     assert source_label("Someone", "") is None
@@ -595,7 +595,7 @@ def test_no_host_means_nothing_to_show() -> None:
 def test_the_heading_keeps_the_source_lowercase() -> None:
     """The publication is shouted, the host is not - "PUCK.NEWS" reads as
     shouting rather than as an address."""
-    from shabbat_print.picker import _heading_rule
+    from newsprint.picker import _heading_rule
 
     heading = _heading_rule("Jon Kelly", "puck.news", 60)
     assert "JON KELLY (puck.news)" in heading
@@ -620,7 +620,7 @@ def test_the_date_is_unchanged_when_no_today_is_given() -> None:
 def test_a_per_newsletter_mail_subdomain_reduces_to_the_registered_domain() -> None:
     """The Times sends DealBook from dk.nytimes.com and The Morning from
     nn.nytimes.com; "nytimes.com" is the part a reader recognises."""
-    from shabbat_print.picker import source_label
+    from newsprint.picker import source_label
 
     assert source_label("DealBook", "dk.nytimes.com") == "nytimes.com"
     assert source_label("The Morning", "nn.nytimes.com") == "nytimes.com"
@@ -629,7 +629,7 @@ def test_a_per_newsletter_mail_subdomain_reduces_to_the_registered_domain() -> N
 def test_a_two_part_public_suffix_is_not_mistaken_for_a_domain() -> None:
     """Reducing to the last two labels would turn "bbc.co.uk" into
     "co.uk", which names nothing."""
-    from shabbat_print.picker import source_label
+    from newsprint.picker import source_label
 
     assert source_label("Some Author", "news.bbc.co.uk") == "bbc.co.uk"
 
@@ -664,7 +664,7 @@ def test_the_group_source_reaches_the_rendered_heading() -> None:
 def test_the_date_column_is_right_aligned() -> None:
     """Dates right-align so the numbers form a column; left-aligning them
     passed every existing test."""
-    from shabbat_print.picker import _row_text
+    from newsprint.picker import _row_text
 
     row = _row_text("Subject", "3 Sep", "short", subject_width=20, date_width=17)
     assert "            3 Sep" in row
@@ -675,7 +675,7 @@ def test_the_heading_width_excludes_questionarys_gutter() -> None:
     """The heading is laid out inside the terminal minus questionary's
     own 3-column gutter; adding it instead of subtracting overruns the
     line by six columns."""
-    from shabbat_print.picker import _HEADING_GUTTER, _display_width
+    from newsprint.picker import _HEADING_GUTTER, _display_width
 
     picklist = build_picklist(
         [_doc("Axios Macro", "New trade stakes", "2026-09-08", uid=1)],
@@ -690,7 +690,7 @@ def test_the_heading_width_excludes_questionarys_gutter() -> None:
 def test_text_that_exactly_fills_the_width_is_not_truncated() -> None:
     """The fit test is <=, not <: text exactly as wide as the column
     fits, and truncating it would cost a character for no reason."""
-    from shabbat_print.picker import _truncate_to_width
+    from newsprint.picker import _truncate_to_width
 
     assert _truncate_to_width("abcde", 5) == "abcde"
     assert _truncate_to_width("abcdef", 5) != "abcdef"
@@ -700,7 +700,7 @@ def test_a_width_with_room_only_for_the_ellipsis() -> None:
     """max_width == 1 leaves no budget beside the ellipsis, so the
     ellipsis alone is the whole answer - and at width 2 exactly one real
     character must still come through."""
-    from shabbat_print.picker import _ELLIPSIS, _truncate_to_width
+    from newsprint.picker import _ELLIPSIS, _truncate_to_width
 
     assert _truncate_to_width("abcdef", 1) == _ELLIPSIS
     assert _truncate_to_width("abcdef", 2) == f"a{_ELLIPSIS}"
@@ -713,7 +713,7 @@ def test_a_zero_width_combining_character_costs_no_columns() -> None:
     asserting on _display_width alone does not catch, because that is a
     separate accumulation over the same characters.
     """
-    from shabbat_print.picker import _ELLIPSIS, _display_width, _truncate_to_width
+    from newsprint.picker import _ELLIPSIS, _display_width, _truncate_to_width
 
     accented = "e\u0301bcdefgh"
     assert len(accented) == 9 and _display_width(accented) == 8
@@ -724,7 +724,7 @@ def test_trailing_space_is_trimmed_at_the_word_boundary() -> None:
     """Snapping back to the last whole word can leave a trailing space,
     which must come off the end, not the start. Needs two spaces at the
     break to show it: with single spaces the two are indistinguishable."""
-    from shabbat_print.picker import _ELLIPSIS, _truncate_to_width
+    from newsprint.picker import _ELLIPSIS, _truncate_to_width
 
     assert _truncate_to_width("alpha  betagamma", 10) == f"alpha{_ELLIPSIS}"
 
@@ -732,7 +732,7 @@ def test_trailing_space_is_trimmed_at_the_word_boundary() -> None:
 def test_column_widths_fall_back_when_there_are_no_rows() -> None:
     """The defaults size the columns for an empty picklist - "3 Sep" is
     five columns and "[short]" is seven."""
-    from shabbat_print.picker import _column_widths
+    from newsprint.picker import _column_widths
 
     _subject, date_width, length_width = _column_widths([], 80)
     assert (date_width, length_width) == (5, 7)
@@ -742,7 +742,7 @@ def test_a_heading_exactly_as_wide_as_its_line_loses_its_trailing_space() -> Non
     """At exactly the available width the heading takes the truncation
     path, whose rstrip drops the space before the rule characters that
     would have followed. Padding instead would leave a dangling space."""
-    from shabbat_print.picker import _heading_rule
+    from newsprint.picker import _heading_rule
 
     assert _heading_rule("PUB", None, 7) == "── PUB"
 
@@ -750,6 +750,6 @@ def test_a_heading_exactly_as_wide_as_its_line_loses_its_trailing_space() -> Non
 def test_a_heading_one_column_too_wide_still_fits_after_its_space_goes() -> None:
     """Trimming the trailing space is what makes it fit; trimming the
     leading side instead would ellipsise a heading that had room."""
-    from shabbat_print.picker import _heading_rule
+    from newsprint.picker import _heading_rule
 
     assert _heading_rule("PUB", None, 6) == "── PUB"

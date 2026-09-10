@@ -51,9 +51,9 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup, Tag
 
-from shabbat_print.clean import _rendered_lines, clean_document
-from shabbat_print.extract import extract
-from shabbat_print.mbox import find_thunderbird_mbox, split_mbox
+from newsprint.clean import _rendered_lines, clean_document
+from newsprint.extract import extract
+from newsprint.mbox import find_thunderbird_mbox, split_mbox
 
 # Part A's own measurement ("96 distinct lines clear >=8 messages and >=4
 # publications in that sample alone") is the default here, so a plain
@@ -170,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.top is not None:
         rows = rows[: args.top]
 
-    print("shabbat-print chrome derivation")
+    print("newsprint chrome derivation")
     print("================================")
     if args.limit is not None:
         print(f"(limited to the first {args.limit} messages)")

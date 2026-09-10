@@ -1,33 +1,63 @@
-# shabbat-print
+# newsprint
 
-Fetch this week's starred newsletters over IMAP, reduce each to its article
-content, typeset it onto quarter-sheet cells, impose four to a sheet side,
-print duplex, and retire the printed mail. Built for a Friday-afternoon
-routine: star what you want to read over Shabbat during the week, then run
-this once to get a stack of paper and a clear inbox.
+Turn a week of email newsletters into a small stack of paper.
+
+newsprint fetches the messages you starred, strips each one down to its
+article content, typesets it onto quarter-sheet cells, imposes four to a
+sheet side, and prints it duplex — then unstars the mail and files it away,
+so your inbox is clear and your reading is somewhere a screen isn't.
+
+Star what you want during the week; run it once when you want the paper. It
+was written for reading over Shabbat, away from screens, but nothing in it
+is specific to that: it suits a flight, a commute, a weekend, or anyone who
+would rather read long things on paper than on a phone.
 
 ## Requirements
 
 - Python 3.14 or later
 - [uv](https://docs.astral.sh/uv/)
-- An IMAP account with a folder you star newsletters into
-- A configured printer reachable via CUPS (`lp`)
-- On macOS: Pango, Cairo, and gdk-pixbuf for [WeasyPrint](https://weasyprint.org/)
-  (see [Development](#development) below)
+- An IMAP account, and a folder you star newsletters into
+- Pango, Cairo and gdk-pixbuf, for [WeasyPrint](https://weasyprint.org/) —
+  see [Install](#install)
+- A printer reachable via CUPS (`lp`), if you want newsprint to do the
+  printing. With `--no-print` it just hands you a PDF, so macOS and Linux
+  both work without one — and so does anything else that can run Python and
+  open a PDF.
+
+## Install
+
+Install it as a tool, which puts `newsprint` on your PATH so you never type
+`uv run`:
+
+```
+uv tool install newsprint
+```
+
+Or, to try it without installing anything:
+
+```
+uvx newsprint --help
+```
+
+To install from a clone, run `uv tool install .` in the checkout. For
+working *on* newsprint rather than with it, see
+[Development](#development).
+
+WeasyPrint needs Pango, Cairo and gdk-pixbuf, which are system libraries
+rather than Python packages — install them first:
+
+```
+brew install pango                      # macOS
+sudo apt install libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b   # Debian/Ubuntu
+```
 
 ## Setup
-
-Install the dependencies:
-
-```
-uv sync
-```
 
 Copy the example config and fill in your mail account and printer:
 
 ```
-cp config.example.toml ~/.config/shabbat-print/config.toml
-$EDITOR ~/.config/shabbat-print/config.toml
+cp config.example.toml ~/.config/newsprint/config.toml
+$EDITOR ~/.config/newsprint/config.toml
 ```
 
 The IMAP password is never stored in the config file. Put it in your system
@@ -103,7 +133,7 @@ nothing is modified:
 ## Usage
 
 ```
-uv run shabbat-print
+newsprint
 ```
 
 This fetches the starred messages, builds the imposed PDF, opens it in
@@ -116,7 +146,7 @@ Preview for a look, and asks before printing. Useful flags:
   real printout looks right without consuming the print queue.
 - `--output PATH` — write the finished PDF somewhere you can find it
   instead of a temp directory. An existing directory gets a dated file
-  inside it (`shabbat-2026-09-11.pdf`).
+  inside it (`newsprint-2026-09-11.pdf`).
 - `--no-print` — build the PDF but do not send it to a printer; print it
   yourself from the file. Still offers to retire the mail, after asking
   whether the printing actually worked. `--no-print --output ~/reading/` is
@@ -126,7 +156,7 @@ Preview for a look, and asks before printing. Useful flags:
   one run.
 - `--config PATH` — use a config file other than the default.
 
-Run `uv run shabbat-print --help` for the full list.
+Run `newsprint --help` for the full list.
 
 ## Filtering
 
@@ -149,10 +179,10 @@ brew install pango cairo gdk-pixbuf
 Homebrew's `lib` directory isn't on the default `dlopen` search path, so
 WeasyPrint can fail to import with an error like `cannot load library
 'libgobject-2.0-0'` unless something points the dynamic linker at it.
-`shabbat_print._libpath` handles this automatically: before `render.py`
+`newsprint._libpath` handles this automatically: before `render.py`
 imports WeasyPrint, it sets `DYLD_FALLBACK_LIBRARY_PATH` to whichever of
 `/opt/homebrew/lib` or `/usr/local/lib` has the library, if the variable
-isn't already set. So running the tool, `uv run shabbat-print`, or the test
+isn't already set. So running the tool, `newsprint`, or the test
 suite all work out of the box on macOS with a Homebrew install in one of
 those two locations — no manual export needed.
 

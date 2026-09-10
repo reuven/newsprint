@@ -53,13 +53,13 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 from make_fixtures import platform_of
 
-from shabbat_print import clean as clean_module
-from shabbat_print.clean import _INVISIBLE_CHARS, clean_document
-from shabbat_print.config import DEFAULTS
-from shabbat_print.extract import extract
-from shabbat_print.mbox import find_thunderbird_mbox, split_mbox
-from shabbat_print.models import DroppedBlock
-from shabbat_print.teaser import word_count as teaser_word_count
+from newsprint import clean as clean_module
+from newsprint.clean import _INVISIBLE_CHARS, clean_document
+from newsprint.config import DEFAULTS
+from newsprint.extract import extract
+from newsprint.mbox import find_thunderbird_mbox, split_mbox
+from newsprint.models import DroppedBlock
+from newsprint.teaser import word_count as teaser_word_count
 
 # The taxonomy this report groups by. Anything platform_of() recognises
 # outside this set (e.g. mailgun, klaviyo - real platforms, just not ones
@@ -228,7 +228,7 @@ def _process(raw: bytes, stats: Stats) -> None:
 
 
 def _print_report(stats: Stats, elapsed_seconds: float, limit: int | None) -> None:
-    print("shabbat-print newsletter audit")
+    print("newsprint newsletter audit")
     print("=" * 31)
     if limit is not None:
         print(f"(limited to the first {limit} messages)")

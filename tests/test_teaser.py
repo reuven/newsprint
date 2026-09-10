@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
-from shabbat_print.models import Document, Origin
-from shabbat_print.teaser import word_count
+from newsprint.models import Document, Origin
+from newsprint.teaser import word_count
 
 
 def document(html: str, title: str = "An Issue") -> Document:

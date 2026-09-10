@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from shabbat_print.config import load_config
-from shabbat_print.geometry import A4, LETTER
+from newsprint.config import load_config
+from newsprint.geometry import A4, LETTER
 
 SAMPLE = """
 [mail]
@@ -43,7 +43,7 @@ def test_no_personal_data_hides_in_the_defaults() -> None:
     """A guard for the open-source goal: catch a stray address or hostname."""
     import re
 
-    from shabbat_print.config import DEFAULTS
+    from newsprint.config import DEFAULTS
 
     flattened = repr(DEFAULTS)
     assert not re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", flattened)
@@ -52,7 +52,7 @@ def test_no_personal_data_hides_in_the_defaults() -> None:
 
 
 def test_require_mail_names_what_is_missing(tmp_path: Path) -> None:
-    from shabbat_print.config import ConfigError
+    from newsprint.config import ConfigError
 
     config = load_config(tmp_path / "absent.toml")
     with pytest.raises(ConfigError, match="mail.host and mail.user"):
@@ -98,7 +98,7 @@ def test_unknown_paper_is_rejected(tmp_path: Path) -> None:
     (MailError, ConfigError), so anything else becomes an unhandled
     traceback in the user's terminal instead of a clean error message.
     """
-    from shabbat_print.config import ConfigError
+    from newsprint.config import ConfigError
 
     path = tmp_path / "config.toml"
     path.write_text('[print]\npaper = "foolscap"\n')
@@ -111,7 +111,7 @@ def test_an_unknown_print_key_is_rejected(tmp_path: Path) -> None:
     PrintConfig is built by picking out three known keys by name, so a
     typo like "prnter" just vanished with no error at all. Now it must be
     rejected the same way an unknown [mail] or [layout] key is."""
-    from shabbat_print.config import ConfigError
+    from newsprint.config import ConfigError
 
     path = tmp_path / "config.toml"
     path.write_text('[print]\nprnter = "Office"\n')
@@ -126,7 +126,7 @@ def test_an_unknown_section_is_rejected(tmp_path: Path) -> None:
     [print], including the printer. This is the same silent-typo failure
     the key-level check already guards against, one level up - a bad
     section name must be named, alongside the valid ones."""
-    from shabbat_print.config import ConfigError
+    from newsprint.config import ConfigError
 
     path = tmp_path / "config.toml"
     path.write_text('[prnt]\nprinter = "Office"\n')
@@ -142,7 +142,7 @@ def test_an_unknown_mail_key_names_the_key_clearly(tmp_path: Path) -> None:
     """[mail] and [layout] raised a raw, unhelpful TypeError for an
     unknown key ("unexpected keyword argument"); now it must be the same
     clear ConfigError as every other section."""
-    from shabbat_print.config import ConfigError
+    from newsprint.config import ConfigError
 
     path = tmp_path / "config.toml"
     path.write_text('[mail]\nhost = "imap.example.com"\nusr = "typo@example.com"\n')
@@ -151,7 +151,7 @@ def test_an_unknown_mail_key_names_the_key_clearly(tmp_path: Path) -> None:
 
 
 def test_an_unknown_layout_key_is_rejected(tmp_path: Path) -> None:
-    from shabbat_print.config import ConfigError
+    from newsprint.config import ConfigError
 
     path = tmp_path / "config.toml"
     path.write_text("[layout]\nmargn_mm = 9.0\n")
@@ -163,7 +163,7 @@ def test_an_unknown_window_key_is_rejected(tmp_path: Path) -> None:
     """[window] had the same silent-acceptance bug as [print]: its only
     key is read by direct indexing (data["window"]["fallback_days"]),
     never splatted into a dataclass, so nothing ever checked the rest."""
-    from shabbat_print.config import ConfigError
+    from newsprint.config import ConfigError
 
     path = tmp_path / "config.toml"
     path.write_text("[window]\nfallback_dyas = 7\n")
@@ -172,7 +172,7 @@ def test_an_unknown_window_key_is_rejected(tmp_path: Path) -> None:
 
 
 def test_an_unknown_packet_key_is_rejected(tmp_path: Path) -> None:
-    from shabbat_print.config import ConfigError
+    from newsprint.config import ConfigError
 
     path = tmp_path / "config.toml"
     path.write_text('[packet]\ntilte = "Oops"\n')
@@ -190,7 +190,7 @@ def test_packet_title_and_threshold_are_configurable(tmp_path: Path) -> None:
 
 def test_malformed_toml_is_rejected_as_a_config_error(tmp_path: Path) -> None:
     """tomllib.TOMLDecodeError must not escape as a bare exception either."""
-    from shabbat_print.config import ConfigError
+    from newsprint.config import ConfigError
 
     path = tmp_path / "config.toml"
     path.write_text("this is not = = valid toml")
@@ -199,7 +199,7 @@ def test_malformed_toml_is_rejected_as_a_config_error(tmp_path: Path) -> None:
 
 
 def test_an_unknown_summary_key_is_rejected(tmp_path: Path) -> None:
-    from shabbat_print.config import ConfigError
+    from newsprint.config import ConfigError
 
     path = tmp_path / "config.toml"
     path.write_text("[summary]\nenbled = true\n")
@@ -228,7 +228,7 @@ def test_summary_settings_are_configurable_and_the_home_tilde_is_expanded(
 
 
 def test_publication_names_default_to_empty(tmp_path: Path) -> None:
-    from shabbat_print.config import PublicationNames, load_publication_names
+    from newsprint.config import PublicationNames, load_publication_names
 
     assert load_publication_names(tmp_path / "absent.toml") == PublicationNames(
         by_address={}, by_list_id={}
@@ -236,7 +236,7 @@ def test_publication_names_default_to_empty(tmp_path: Path) -> None:
 
 
 def test_publication_names_are_lowercased(tmp_path: Path) -> None:
-    from shabbat_print.config import load_publication_names
+    from newsprint.config import load_publication_names
 
     path = tmp_path / "publications.toml"
     path.write_text('[names]\n"NoReply@News.Bloomberg.com" = "Money Stuff"\n')
@@ -249,7 +249,7 @@ def test_publication_names_reads_list_id_table(tmp_path: Path) -> None:
     """List-Id identifies the newsletter, not the sending address - the
     NYT sends many distinct newsletters from one address, so
     publications.toml needs a way to key an override by List-Id too."""
-    from shabbat_print.config import load_publication_names
+    from newsprint.config import load_publication_names
 
     path = tmp_path / "publications.toml"
     path.write_text(

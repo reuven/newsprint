@@ -6,11 +6,11 @@ from typing import Self
 
 import pytest
 
-from shabbat_print.config import load_config
-from shabbat_print.models import Document, Origin, Verdict
-from shabbat_print.pdfutil import page_text
-from shabbat_print.pipeline import Built
-from shabbat_print.summarize import (
+from newsprint.config import load_config
+from newsprint.models import Document, Origin, Verdict
+from newsprint.pdfutil import page_text
+from newsprint.pipeline import Built
+from newsprint.summarize import (
     ApiResponse,
     Candidate,
     SummaryContent,
@@ -424,7 +424,7 @@ class _FakeStreamContext:
 
 
 def test_default_caller_calls_the_sdk_and_returns_usage(monkeypatch) -> None:
-    import shabbat_print.summarize as summarize_module
+    import newsprint.summarize as summarize_module
 
     captured: dict = {}
 
@@ -471,7 +471,7 @@ def test_default_caller_calls_the_sdk_and_returns_usage(monkeypatch) -> None:
 
 
 def test_default_caller_raises_on_refusal(monkeypatch) -> None:
-    import shabbat_print.summarize as summarize_module
+    import newsprint.summarize as summarize_module
 
     class RefusingAnthropic:
         def __init__(self, api_key, **kwargs):
@@ -495,7 +495,7 @@ def test_default_caller_raises_a_clear_error_when_no_text_block_is_present(
 ) -> None:
     """A non-refusal response carrying only a thinking block (no text at
     all) must fail with a clear message, not an unguarded StopIteration."""
-    import shabbat_print.summarize as summarize_module
+    import newsprint.summarize as summarize_module
 
     class ThinkingOnlyAnthropic:
         def __init__(self, api_key, **kwargs):

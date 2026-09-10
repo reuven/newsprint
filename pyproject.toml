@@ -1,5 +1,5 @@
 [project]
-name = "shabbat-print"
+name = "newsprint"
 version = "0.1.0"
 description = "Fetch starred newsletters over IMAP, reduce them to article content, and print them quarter-sheet, four to a side, duplex."
 readme = "README.md"
@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.scripts]
-shabbat-print = "shabbat_print.cli:main"
+newsprint = "newsprint.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]

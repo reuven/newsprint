@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from shabbat_print.config import load_config
-from shabbat_print.printer import PrintError, build_command, spool
+from newsprint.config import load_config
+from newsprint.printer import PrintError, build_command, spool
 
 
 @pytest.fixture

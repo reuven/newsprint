@@ -5,11 +5,11 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from shabbat_print.config import load_config
-from shabbat_print.contents import build_contents
-from shabbat_print.models import Document, Origin, Verdict
-from shabbat_print.pdfutil import page_count, page_text
-from shabbat_print.pipeline import Built
+from newsprint.config import load_config
+from newsprint.contents import build_contents
+from newsprint.models import Document, Origin, Verdict
+from newsprint.pdfutil import page_count, page_text
+from newsprint.pipeline import Built
 
 PACKET_DATE = date(2026, 9, 5)
 
@@ -92,7 +92,7 @@ def test_a_single_newsletter_still_produces_a_sensible_contents_page(
 
 
 def test_a_short_subject_is_included_on_the_line(config, tmp_path: Path) -> None:
-    from shabbat_print.contents import _row_text
+    from newsprint.contents import _row_text
 
     built = [_built(0, publication="Money Stuff")][0]
     text = _row_text(built, remaining_width_pt=400.0, font_size_pt=9.0)
@@ -101,7 +101,7 @@ def test_a_short_subject_is_included_on_the_line(config, tmp_path: Path) -> None
 
 
 def test_truncate_to_width_returns_text_unchanged_when_it_already_fits() -> None:
-    from shabbat_print.contents import _truncate_to_width
+    from newsprint.contents import _truncate_to_width
 
     assert _truncate_to_width("Short", max_width_pt=400.0, font_size_pt=9.0) == "Short"
 
@@ -110,7 +110,7 @@ def test_truncate_to_width_falls_back_to_a_mid_word_cut_with_no_space() -> None:
     """When not even the first word fits, there is no word boundary to
     snap back to - the truncation falls back to a bare character cut
     rather than losing the word (and its ellipsis) entirely."""
-    from shabbat_print.contents import _truncate_to_width
+    from newsprint.contents import _truncate_to_width
 
     result = _truncate_to_width(
         "Supercalifragilisticexpialidocious", max_width_pt=8.0, font_size_pt=9.0
@@ -125,7 +125,7 @@ def test_truncate_to_width_keeps_a_mid_word_cut_when_the_only_space_is_leading()
     text is a leading one (e.g. a subject with stray leading whitespace),
     snapping "back to the last word boundary" would leave nothing at all
     - the mid-word cut is kept instead of collapsing to an empty result."""
-    from shabbat_print.contents import _truncate_to_width
+    from newsprint.contents import _truncate_to_width
 
     result = _truncate_to_width(" Extraordinarily", max_width_pt=10.0, font_size_pt=9.0)
     assert result == " E…"
@@ -139,12 +139,12 @@ def test_row_text_drops_the_subject_when_the_budget_is_too_small_to_fit_any(
     not a bare dangling ellipsis."""
     from dataclasses import replace
 
-    from shabbat_print.contents import _row_text
-    from shabbat_print.stamp import byline
+    from newsprint.contents import _row_text
+    from newsprint.stamp import byline
 
     built = _built(0, publication="Money Stuff")
     name = byline(built.document.publication, built.document.author)
-    from shabbat_print.contents import _text_width_pt
+    from newsprint.contents import _text_width_pt
 
     # Just enough room for the byline and separator, but not one more
     # character of a truncated subject.
@@ -163,7 +163,7 @@ def test_a_long_subject_is_truncated_with_an_ellipsis(config, tmp_path: Path) ->
     not fit."""
     from dataclasses import replace
 
-    from shabbat_print.contents import _row_text
+    from newsprint.contents import _row_text
 
     built = _built(0, publication="Money Stuff")
     built = replace(
@@ -188,8 +188,8 @@ def test_an_extremely_narrow_budget_drops_the_subject_entirely(
     """If there is no room for even one truncated character, the subject
     is dropped rather than rendered as a bare ellipsis dangling off the
     byline - the number's own column is never touched either way."""
-    from shabbat_print.contents import _row_text
-    from shabbat_print.stamp import byline
+    from newsprint.contents import _row_text
+    from newsprint.stamp import byline
 
     built = [_built(0, publication="Money Stuff")][0]
     text = _row_text(built, remaining_width_pt=1.0, font_size_pt=9.0)
@@ -312,7 +312,7 @@ def test_no_row_text_ever_exceeds_the_usable_width(
     subject are individually or in combination."""
     from dataclasses import replace
 
-    from shabbat_print.contents import _row_text, _text_width_pt
+    from newsprint.contents import _row_text, _text_width_pt
 
     built = _built(0, publication=publication)
     built = replace(

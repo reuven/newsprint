@@ -70,5 +70,5 @@ jobs:
       - name: Tests
         run: >
           uv run pytest -q
-          --cov=shabbat_print --cov-branch --cov-report=term-missing
+          --cov=newsprint --cov-branch --cov-report=term-missing
           --cov-fail-under=98

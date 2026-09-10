@@ -5,11 +5,11 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from shabbat_print.config import load_config
-from shabbat_print.geometry import A4
-from shabbat_print.models import Document, Origin
-from shabbat_print.pdfutil import page_count, page_text, text_extent_mm
-from shabbat_print.render import render
+from newsprint.config import load_config
+from newsprint.geometry import A4
+from newsprint.models import Document, Origin
+from newsprint.pdfutil import page_count, page_text, text_extent_mm
+from newsprint.render import render
 
 PROSE = (
     "<p>The Federal Reserve declined to move rates this month, which surprised "
@@ -80,7 +80,7 @@ def test_compression_writes_a_distinct_file(config, tmp_path: Path) -> None:
 def test_letter_paper_gives_a_letter_cell(tmp_path: Path) -> None:
     import pymupdf
 
-    from shabbat_print.geometry import LETTER
+    from newsprint.geometry import LETTER
 
     config = load_config(tmp_path / "absent.toml", paper_override="letter")
     pdf = render(document(PROSE), config, out_dir=tmp_path)
@@ -144,7 +144,7 @@ def test_masthead_reads_as_a_section_break(config) -> None:
     heavy rule above it, and the name set bold and roughly level with the
     headline (not smaller than it). The old thin rule below the masthead
     goes: one heavy rule above is clearer than two rules."""
-    from shabbat_print.render import _build_html
+    from newsprint.render import _build_html
 
     html = _build_html(document(PROSE), config, compression=1.0)
     masthead_rule = _masthead_css(html)
@@ -189,7 +189,7 @@ def test_a_packet_title_renders_above_the_masthead(config, tmp_path: Path) -> No
 def test_an_empty_packet_title_changes_nothing_in_the_generated_html(config) -> None:
     """Passing packet_title="" (the default) must produce byte-identical
     HTML to not passing it at all - nothing shifts."""
-    from shabbat_print.render import _build_html
+    from newsprint.render import _build_html
 
     without_kwarg = _build_html(document(PROSE), config)
     with_empty = _build_html(document(PROSE), config, packet_title="")
@@ -197,7 +197,7 @@ def test_an_empty_packet_title_changes_nothing_in_the_generated_html(config) -> 
 
 
 def test_the_packet_title_is_larger_and_bolder_than_the_masthead(config) -> None:
-    from shabbat_print.render import _build_html
+    from newsprint.render import _build_html
 
     html = _build_html(document(PROSE), config, packet_title="Family Reading")
     start = html.index(".packet-title")
@@ -211,7 +211,7 @@ def test_figure_placeholder_is_small_and_italic(config) -> None:
     """clean.py's figure placeholder ("[figure: ...]") is a note about
     something absent, not content - it must read as visually distinct
     from body prose: italic, and smaller than the surrounding text."""
-    from shabbat_print.render import _build_html
+    from newsprint.render import _build_html
 
     html = _build_html(document(PROSE), config, compression=1.0)
     start = html.index(".figure-placeholder")
@@ -290,7 +290,7 @@ def test_grayscale_and_cap_does_not_upscale_a_narrower_source() -> None:
     """The resize branch only ever shrinks: a source already narrower than
     the cap must come out exactly as wide as it went in, not stretched up
     to fill the cap."""
-    from shabbat_print.render import _grayscale_and_cap
+    from newsprint.render import _grayscale_and_cap
 
     narrow = Image.new("RGB", (120, 40), color=(30, 120, 200))
     buffer = BytesIO()
@@ -307,7 +307,7 @@ def test_a_fetched_image_is_embedded_grayscale_and_capped_to_the_cell(
 ) -> None:
     import pymupdf
 
-    from shabbat_print.render import _cap_width_px
+    from newsprint.render import _cap_width_px
 
     fetcher_calls = []
 
@@ -466,8 +466,8 @@ def test_the_image_cap_is_the_cells_exact_text_column() -> None:
     passed. This pins the figure itself: an A4 cell is 105mm wide, so its
     text column is 105 - 2*9 = 87mm, and at 200dpi that is 685px.
     """
-    from shabbat_print.config import load_config
-    from shabbat_print.render import _cap_width_px
+    from newsprint.config import load_config
+    from newsprint.render import _cap_width_px
 
     config = load_config()
     assert config.printing.paper.cell.width_mm == 105.0
@@ -479,7 +479,7 @@ def test_resizing_a_wide_image_preserves_its_aspect_ratio() -> None:
     """Height scales by the same ratio as width. Dividing by the ratio
     instead of multiplying stretches a 2:1 chart into a 1:3 tower, and
     nothing asserted on the resulting height."""
-    from shabbat_print.render import _grayscale_and_cap
+    from newsprint.render import _grayscale_and_cap
 
     source = Image.new("RGB", (1000, 500), color=(200, 50, 50))
     buffer = BytesIO()
@@ -493,7 +493,7 @@ def test_resizing_a_wide_image_preserves_its_aspect_ratio() -> None:
 def test_a_very_short_image_keeps_at_least_one_pixel_of_height() -> None:
     """A wide, one-pixel-high rule scales to less than half a pixel; the
     floor of 1 is what stops Pillow being asked for a zero-height image."""
-    from shabbat_print.render import _grayscale_and_cap
+    from newsprint.render import _grayscale_and_cap
 
     source = Image.new("RGB", (1000, 1), color=(0, 0, 0))
     buffer = BytesIO()

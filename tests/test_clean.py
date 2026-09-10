@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from shabbat_print.clean import clean_document
-from shabbat_print.models import Document, Origin
+from newsprint.clean import clean_document
+from newsprint.models import Document, Origin
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -375,7 +375,7 @@ def test_an_all_chrome_document_comes_back_empty() -> None:
 def test_inline_tags_do_not_fragment_a_rendered_line() -> None:
     from bs4 import BeautifulSoup
 
-    from shabbat_print.clean import _rendered_lines
+    from newsprint.clean import _rendered_lines
 
     html = (
         "<div><p>The launch happened first <em>in France</em>, and later "
@@ -396,7 +396,7 @@ def test_a_br_still_starts_a_new_rendered_line() -> None:
     line break and must still split the text on either side of it."""
     from bs4 import BeautifulSoup
 
-    from shabbat_print.clean import _rendered_lines
+    from newsprint.clean import _rendered_lines
 
     html = "<div><p>Line one<br>Line two</p></div>"
     soup = BeautifulSoup(html, "lxml")
@@ -417,7 +417,7 @@ def test_an_html_comment_is_not_a_rendered_line() -> None:
     scripts/derive_chrome.py's frequency counts alike."""
     from bs4 import BeautifulSoup
 
-    from shabbat_print.clean import _rendered_lines
+    from newsprint.clean import _rendered_lines
 
     html = "<div>Real text<!--[if mso]>hidden mso markup<![endif]--><p>More.</p></div>"
     soup = BeautifulSoup(html, "lxml")
@@ -430,7 +430,7 @@ def test_block_level_siblings_are_separate_rendered_lines() -> None:
     fragmentation it removes."""
     from bs4 import BeautifulSoup
 
-    from shabbat_print.clean import _rendered_lines
+    from newsprint.clean import _rendered_lines
 
     html = "<div><p>First paragraph.</p><p>Second paragraph.</p></div>"
     soup = BeautifulSoup(html, "lxml")
@@ -440,7 +440,7 @@ def test_block_level_siblings_are_separate_rendered_lines() -> None:
 def test_rendered_lines_of_an_empty_tag_is_empty() -> None:
     from bs4 import BeautifulSoup
 
-    from shabbat_print.clean import _rendered_lines
+    from newsprint.clean import _rendered_lines
 
     html = "<div>   </div>"
     soup = BeautifulSoup(html, "lxml")
@@ -458,8 +458,8 @@ def test_inline_fragmentation_no_longer_scores_a_sentence_as_chrome() -> None:
     that is entirely real prose, however many inline tags interrupt it."""
     from bs4 import BeautifulSoup
 
-    from shabbat_print.boilerplate import content_ratio
-    from shabbat_print.clean import _rendered_lines
+    from newsprint.boilerplate import content_ratio
+    from newsprint.clean import _rendered_lines
 
     names = ["Chen", "Okafor", "Silva", "Park", "Novak", "Haddad", "Liu"]
     links = ", ".join(f"<a>{name}</a>" for name in names)
@@ -666,7 +666,7 @@ def test_trailing_run_guard_never_empties_a_nonempty_document() -> None:
     silently vanish a newsletter that is entirely chrome."""
     from bs4 import BeautifulSoup
 
-    from shabbat_print.clean import _strip_trailing_chrome_run
+    from newsprint.clean import _strip_trailing_chrome_run
 
     html = "<div><p>Unsubscribe</p><p>&copy; 2026 Test Co</p></div>"
     soup = BeautifulSoup(f"<html><body>{html}</body></html>", "lxml")
@@ -749,7 +749,7 @@ def test_leading_run_stops_at_a_heading_even_mid_run() -> None:
 def test_leading_run_guard_never_empties_a_nonempty_document() -> None:
     from bs4 import BeautifulSoup
 
-    from shabbat_print.clean import _strip_leading_chrome_run
+    from newsprint.clean import _strip_leading_chrome_run
 
     html = "<div><p>Unsubscribe</p><p>&copy; 2026 Test Co</p></div>"
     soup = BeautifulSoup(f"<html><body>{html}</body></html>", "lxml")
@@ -851,7 +851,7 @@ def test_standalone_line_check_of_a_detached_tag_is_false() -> None:
     is exercised directly here rather than left untested."""
     from bs4 import BeautifulSoup
 
-    from shabbat_print.clean import _is_standalone_line
+    from newsprint.clean import _is_standalone_line
 
     soup = BeautifulSoup("<a>Unsubscribe</a>", "lxml")
     tag = soup.a
@@ -1191,7 +1191,7 @@ def test_duplicate_title_block_beyond_line_15_is_not_touched() -> None:
 def test_duplicate_title_guard_never_empties_a_nonempty_document() -> None:
     from bs4 import BeautifulSoup
 
-    from shabbat_print.clean import _strip_duplicate_title_block
+    from newsprint.clean import _strip_duplicate_title_block
 
     html = (
         "<div><h2>Just a Title</h2><p>A subtitle</p><p>Some Author</p>"
@@ -1238,7 +1238,7 @@ def test_cleaning_every_fixture_never_raises() -> None:
     tests' docstrings for the full history each one carries forward from
     this one.
     """
-    from shabbat_print.extract import extract
+    from newsprint.extract import extract
 
     paths = sorted(FIXTURES.glob("*.eml"))
     assert paths, "no fixtures; run `make fixtures`"

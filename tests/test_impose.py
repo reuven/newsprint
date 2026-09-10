@@ -3,9 +3,9 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from shabbat_print.geometry import A4, LETTER, Paper
-from shabbat_print.impose import impose
-from shabbat_print.pdfutil import page_count
+from newsprint.geometry import A4, LETTER, Paper
+from newsprint.impose import impose
+from newsprint.pdfutil import page_count
 
 
 def numbered_cells(path: Path, count: int, paper: Paper = A4) -> Path:
@@ -106,7 +106,7 @@ def test_readers_are_closed_after_writing(
     whole write and never closed any of them explicitly, relying on
     garbage collection to eventually release the file descriptor - cheap
     insurance against the fd limit on a run with many newsletters."""
-    from shabbat_print import impose as impose_module
+    from newsprint import impose as impose_module
 
     cells = numbered_cells(tmp_path / "cells.pdf", 4)
     created: list = []

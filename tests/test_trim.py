@@ -2,11 +2,11 @@ from pathlib import Path
 
 import pymupdf
 
-from shabbat_print.config import LayoutConfig
-from shabbat_print.geometry import A4, MM_PER_INCH, POINTS_PER_INCH, Paper
-from shabbat_print.models import Verdict
-from shabbat_print.pdfutil import page_count
-from shabbat_print.trim import classify, fit
+from newsprint.config import LayoutConfig
+from newsprint.geometry import A4, MM_PER_INCH, POINTS_PER_INCH, Paper
+from newsprint.models import Verdict
+from newsprint.pdfutil import page_count
+from newsprint.trim import classify, fit
 
 LAYOUT = LayoutConfig(margin_mm=9.0, font_size_pt=9.0, line_height=1.35)
 

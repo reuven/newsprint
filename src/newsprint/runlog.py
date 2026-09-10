@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-DEFAULT_STATE_DIR = Path.home() / ".local" / "state" / "shabbat-print" / "runs"
+DEFAULT_STATE_DIR = Path.home() / ".local" / "state" / "newsprint" / "runs"
 
 
 def record(entry: dict[str, Any], state_dir: Path | None = None) -> Path:
