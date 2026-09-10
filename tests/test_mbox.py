@@ -321,12 +321,12 @@ def test_a_cached_folder_is_found_whatever_the_profile_is_called(
 # reads the real mailbox it finds - unacceptable to run just from importing
 # this module during collection, on a contributor's own machine, whether or
 # not the test below is even selected. Opt in explicitly instead.
-_RUN_REAL_MBOX_TEST = os.environ.get("SHABBAT_PRINT_TEST_REAL_MBOX") == "1"
+_RUN_REAL_MBOX_TEST = os.environ.get("NEWSPRINT_TEST_REAL_MBOX") == "1"
 
 
 @pytest.mark.skipif(
     not _RUN_REAL_MBOX_TEST,
-    reason="set SHABBAT_PRINT_TEST_REAL_MBOX=1 to run against a real local "
+    reason="set NEWSPRINT_TEST_REAL_MBOX=1 to run against a real local "
     "Thunderbird mbox",
 )
 def test_real_mbox_parses_completely() -> None:

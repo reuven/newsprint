@@ -2048,3 +2048,94 @@ def test_the_authors_sign_off_survives_the_boilerplate_behind_it() -> None:
     assert "Have a great weekend" in cleaned.html
     assert "brand partnerships" not in cleaned.html
     assert "surprised almost nobody" in cleaned.html
+
+
+# ---------------------------------------------------------------------------
+# The paths that only the author's private archive used to reach. Covered
+# here as units so a contributor - who cannot have that archive, since it is
+# other people's copyrighted mail - still gets the full guarantee.
+# ---------------------------------------------------------------------------
+
+
+def test_an_html_comment_is_not_the_nearest_text_before_a_figure() -> None:
+    """Outlook's MSO conditional markup is a string node but renders as
+    nothing, so a lead-in search must look straight through it."""
+    from bs4 import BeautifulSoup
+
+    from newsprint.clean import _nearest_rendered_text
+
+    soup = BeautifulSoup(
+        "<div><p>Here is the chart:</p><!--[if mso]>hidden<![endif]-->"
+        '<img src="https://example.com/c.png" width="600"></div>',
+        "lxml",
+    )
+    image = soup.find("img")
+    assert _nearest_rendered_text(image, forward=False) == "Here is the chart:"
+
+
+def test_alt_text_with_no_data_word_gets_no_placeholder() -> None:
+    """A wide image whose alt describes a promo rather than data - which
+    is what 250 of the 292 candidates in the archive turned out to be."""
+    html = (
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here, long enough to read as an article.</p>"
+        '<img src="https://example.com/promo.png" width="600" '
+        'alt="The Conflict Playbook on MasterClass"></div></body></html>'
+    )
+    cleaned = clean_document(document(html))
+    assert "[figure:" not in cleaned.html
+    assert "<img" not in cleaned.html
+
+
+def test_a_sponsor_anchor_looks_past_empty_siblings() -> None:
+    """Bulk-mail HTML is full of spacer rows with no text in them; the
+    anchor is the first ancestor with a sibling that actually says
+    something."""
+    html = (
+        "<html><body><table>"
+        "<tr><td><p>A MESSAGE FROM ACME</p></td></tr>"
+        "<tr><td></td></tr>"
+        "<tr><td><p>Acme makes the finest anvils in the west.</p></td></tr>"
+        # Longer than _SPONSOR_MAX_CHARS, which is what stops the block
+        # from running out of the ad and into the article.
+        "<tr><td><p>"
+        + ("The Fed declined to move rates this month. " * 18)
+        + "surprised almost nobody at all.</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "finest anvils" not in cleaned.html
+    assert "surprised almost nobody" in cleaned.html
+
+
+def test_a_bare_text_node_of_chrome_is_extracted() -> None:
+    """A postal address is often just text between two <br> tags, never
+    its own element - so it is extracted rather than decomposed."""
+    html = (
+        "<html><body><div>"
+        "<p>Real article prose with enough substance to read as genuine "
+        "content rather than a label of some kind.</p>"
+        "<p>Some Company<br>PMB 12, Springfield, IL 62704<br>© 2026</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Springfield" not in cleaned.html
+    assert "Real article prose" in cleaned.html
+
+
+def test_the_caption_search_walks_past_inline_tags_and_empty_blocks() -> None:
+    """Between an image and its caption sit inline wrappers with no name
+    this cares about, and blocks with no text in them at all. Neither is
+    the caption."""
+    from bs4 import BeautifulSoup
+
+    from newsprint.clean import _nearest_block_text
+
+    soup = BeautifulSoup(
+        '<div><img src="https://example.com/s.png" width="600">'
+        "<span>inline, not a block</span>"
+        "<p></p>"
+        "<p>(<a href='https://example.com/post'>Link</a>)</p></div>",
+        "lxml",
+    )
+    assert _nearest_block_text(soup.find("img")) == "( Link )"
