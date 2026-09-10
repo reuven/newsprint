@@ -243,6 +243,25 @@ the reason rather than re-derive it.
   rather than Times differs by 0.4pt. Left uncovered rather than given a
   ten-digit fixture that no packet would ever produce.
 
+### trim.py, picker.py, boilerplate.py
+
+- **`classify`'s `page_count(pdf)`.** Passing None makes PyMuPDF open an
+  empty document, so the count is 0 and `last` becomes -1 - which indexes
+  the last page anyway. Negative indexing makes the mutation equivalent.
+- **`classify`'s `max(0.0, ...)` floor on the used height.** A page with
+  under a millimetre of text is a widow under any threshold a person would
+  set, so raising the floor cannot change the verdict.
+- **`_registrable`'s `len(labels) > 2`.** At exactly two labels the host
+  *is* the compound suffix, and `labels[-3:]` and `labels[-2:]` are then
+  the same two labels.
+- **`build_picklist`'s `total > limit`.** At exactly the limit the trim
+  keeps everything either way; the sort it does first is undone by the
+  per-publication sort below.
+- **`_is_delimited_chrome_row`'s `len(segments) < 2 or ...`.** The left
+  side is never true - the split only runs after a delimiter matched, so
+  there are always at least two segments - and a blank segment is caught
+  by the per-segment chrome test below regardless.
+
 ## Known survivors that are not equivalent
 
 - **`_iter_text_elements`'s `node.get_text(strip=True)` in the leaf

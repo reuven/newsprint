@@ -1,6 +1,7 @@
 import pytest
 
 from newsprint.boilerplate import (
+    SHORT_LINE,
     content_ratio,
     is_boilerplate_line,
     is_definite_chrome_line,
@@ -968,3 +969,25 @@ def test_a_company_prefixed_address_scores_but_is_not_deletable() -> None:
     address = "Bloomberg L.P. 731 Lexington, New York, NY, 10022"
     assert is_definite_chrome_line(address)
     assert not is_full_line_chrome(address)
+
+
+def test_a_lowercase_postal_address_is_still_definite_chrome() -> None:
+    """The tail rule that catches most addresses wants the state in
+    capitals; plenty of footers set the whole line in lower case, and the
+    address rule behind it is what catches those. Losing it would let a
+    mailing address hold a trailing chrome run open, which is what put the
+    rule there."""
+    assert is_definite_chrome_line("228 park ave s, new york, ny 10003")
+    assert is_definite_chrome_line("228 Park Ave S, New York, NY 10003")
+
+
+def test_a_line_of_exactly_forty_characters_is_not_short() -> None:
+    """The short-line fallback is for fragments - a label, a nav item, a
+    caption - and forty characters is where a line stops being one. A
+    sentence of exactly forty characters with no full stop is the case
+    that decides it, and reading the boundary the other way would score
+    every one of them as chrome."""
+    line = "Rates held steady and the chair said sos"
+    assert len(line) == SHORT_LINE
+    assert not is_boilerplate_line(line)
+    assert is_boilerplate_line(line[:-1]), "one character shorter is short"
