@@ -509,3 +509,230 @@ def test_a_list_id_with_no_label_falls_through_to_the_address() -> None:
         "<html><body><p>Hello.</p></body></html>",
     )
     assert extract(raw).publication == "Someone"
+
+
+# ---------------------------------------------------------------------------
+# Character sets. Mail declares its own, badly and often - so what these
+# pin down is that a declared one is honored when it can be, and that no
+# arrangement of a wrong one can stop a newsletter being read at all.
+# ---------------------------------------------------------------------------
+
+
+def test_a_part_is_decoded_with_the_charset_it_declares() -> None:
+    """Latin-1 is still in daily use by European senders. Reading its
+    bytes as UTF-8 would not fail - it would quietly turn every accented
+    character into a replacement mark."""
+    raw = (
+        b"From: Someone <someone@example.com>\n"
+        b"Subject: Latin\n"
+        b"Date: Sat, 6 Sep 2026 06:00:00 +0000\n"
+        b'Content-Type: text/html; charset="iso-8859-1"\n'
+        b"\n"
+        b"<p>Caf\xe9 de la Paix</p>"
+    )
+    assert "Café de la Paix" in extract(raw).html
+
+
+def test_bytes_that_are_not_valid_in_the_declared_charset_still_read() -> None:
+    """A sender that labels UTF-8 bytes as Latin-1, or the reverse, is
+    ordinary rather than exceptional. Whatever cannot be decoded becomes a
+    replacement mark and the rest of the newsletter comes through - the
+    alternative is the whole issue failing over one byte."""
+    raw = (
+        b"From: Someone <someone@example.com>\n"
+        b"Subject: Mislabeled\n"
+        b"Date: Sat, 6 Sep 2026 06:00:00 +0000\n"
+        b'Content-Type: text/html; charset="utf-8"\n'
+        b"\n"
+        b"<p>Caf\xe9 de la Paix</p>"
+    )
+    html = extract(raw).html
+    assert "de la Paix" in html
+    assert "�" in html
+
+
+def test_an_unknown_charset_falls_back_without_choking_on_the_bytes() -> None:
+    """Both wrongs at once: a charset that does not exist, and bytes that
+    are not valid UTF-8 either. The fallback has to be as forgiving as the
+    first attempt was."""
+    raw = (
+        b"From: Someone <someone@example.com>\n"
+        b"Subject: Bad charset, bad bytes\n"
+        b"Date: Sat, 6 Sep 2026 06:00:00 +0000\n"
+        b'Content-Type: text/plain; charset="nonexistent-encoding"\n'
+        b"\n"
+        b"Caf\xe9 de la Paix"
+    )
+    html = extract(raw).html
+    assert "de la Paix" in html
+    assert "<pre>" in html
+
+
+def test_the_declared_charset_is_honored_even_when_the_sender_was_wrong() -> None:
+    """A part labelled us-ascii carrying UTF-8 bytes. What the label says
+    is what it is read as, marks and all - the alternative is guessing at
+    a second encoding behind the sender's back, and a guess that happens
+    to work here is no evidence it works on the next one."""
+    raw = (
+        b"From: Someone <someone@example.com>\n"
+        b"Subject: Wrong label\n"
+        b"Date: Sat, 6 Sep 2026 06:00:00 +0000\n"
+        b'Content-Type: text/html; charset="us-ascii"\n'
+        b"\n"
+        b"<p>Caf\xc3\xa9 de la Paix</p>"
+    )
+    html = extract(raw).html
+    assert "Caf�� de la Paix" in html
+
+
+# ---------------------------------------------------------------------------
+# Choosing the body out of a multipart message.
+# ---------------------------------------------------------------------------
+
+
+def test_an_attached_html_file_never_becomes_the_body() -> None:
+    """Forwarded mail arrives with the original attached as HTML, and it
+    is routinely longer than the note wrapped around it. Length is how the
+    body is chosen, so an attachment that is not set aside first wins on
+    length and the newsletter prints as somebody else's mail."""
+    raw = (
+        b"From: Someone <someone@example.com>\n"
+        b"Subject: Fwd\n"
+        b"Date: Sat, 6 Sep 2026 06:00:00 +0000\n"
+        b'Content-Type: multipart/mixed; boundary="B"\n'
+        b"\n"
+        b"--B\n"
+        b'Content-Type: text/html; charset="utf-8"\n'
+        b"\n"
+        b"<p>the real body</p>\n"
+        b"--B\n"
+        b'Content-Type: text/html; charset="utf-8"\n'
+        b'Content-Disposition: attachment; filename="forwarded.html"\n'
+        b"\n"
+        b"<p>an attached document that is very much longer than the note</p>\n"
+        b"--B--\n"
+    )
+    html = extract(raw).html
+    assert "the real body" in html
+    assert "attached document" not in html
+
+
+def test_the_longest_html_part_wins_even_when_it_sorts_first() -> None:
+    """Longest, not last and not greatest: with no measure given, picking
+    the largest of several strings compares them alphabetically, which
+    agrees with length often enough to look right."""
+    raw = (
+        b"From: Someone <someone@example.com>\n"
+        b"Subject: Multipart\n"
+        b"Date: Sat, 6 Sep 2026 06:00:00 +0000\n"
+        b'Content-Type: multipart/alternative; boundary="B"\n'
+        b"\n"
+        b"--B\n"
+        b'Content-Type: text/html; charset="utf-8"\n'
+        b"\n"
+        b"<p>zzz</p>\n"
+        b"--B\n"
+        b'Content-Type: text/html; charset="utf-8"\n'
+        b"\n"
+        b"<p>aaa, and this alternative is considerably longer</p>\n"
+        b"--B--\n"
+    )
+    assert "considerably longer" in extract(raw).html
+
+
+def test_the_longest_plain_text_part_wins_even_when_it_sorts_first() -> None:
+    """The same measure on the plain-text fallback path."""
+    raw = (
+        b"From: Someone <someone@example.com>\n"
+        b"Subject: Multipart\n"
+        b"Date: Sat, 6 Sep 2026 06:00:00 +0000\n"
+        b'Content-Type: multipart/alternative; boundary="B"\n'
+        b"\n"
+        b"--B\n"
+        b'Content-Type: text/plain; charset="utf-8"\n'
+        b"\n"
+        b"zzz\n"
+        b"--B\n"
+        b'Content-Type: text/plain; charset="utf-8"\n'
+        b"\n"
+        b"aaa, and this alternative is considerably longer\n"
+        b"--B--\n"
+    )
+    assert "considerably longer" in extract(raw).html
+
+
+# ---------------------------------------------------------------------------
+# The fields the rest of the run keys on.
+# ---------------------------------------------------------------------------
+
+
+def test_a_quoted_list_id_label_loses_its_quotes() -> None:
+    """RFC 2919 lets the description be a quoted string, and plenty of
+    senders quote it. The quotes belong to the header's grammar, not to
+    the newsletter's name, and they would otherwise print on the contents
+    page and in every cell footer."""
+    raw = message(
+        """
+From: Someone <someone@example.com>
+Subject: Quoted
+Date: Sat, 6 Sep 2026 06:00:00 +0000
+List-Id: "Money Stuff" <moneystuff.bloomberg.com>
+Content-Type: text/html; charset="utf-8"
+""",
+        "<html><body><p>Hello</p></body></html>",
+    )
+    assert extract(raw).publication == "Money Stuff"
+
+
+def test_a_subject_of_nothing_but_spaces_falls_back_to_the_default() -> None:
+    """A present-but-blank Subject is a different path from a missing one:
+    the header is there, so the missing-header default never applies, and
+    what survives normalizing is an empty string. An untitled newsletter
+    still needs something to call itself on the contents page."""
+    raw = message(
+        """
+From: Someone <someone@example.com>
+Subject:    
+Date: Sat, 6 Sep 2026 06:00:00 +0000
+Content-Type: text/html; charset="utf-8"
+""",
+        "<html><body><p>Hello</p></body></html>",
+    )
+    assert extract(raw).title == "(no subject)"
+
+
+def test_the_author_is_the_senders_display_name() -> None:
+    """The footer prints the author beside the publication, and the
+    picker shows it when a publication name is only ever a person."""
+    assert extract(HTML_MESSAGE).author == "Matt Levine"
+
+
+def test_a_sender_with_no_display_name_has_no_author() -> None:
+    """An empty display name is no author at all, not an empty one -
+    everything downstream tests it for None."""
+    raw = message(
+        """
+From: someone@example.com
+Subject: Bare address
+Date: Sat, 6 Sep 2026 06:00:00 +0000
+Content-Type: text/html; charset="utf-8"
+""",
+        "<html><body><p>Hello</p></body></html>",
+    )
+    assert extract(raw).author is None
+
+
+def test_a_message_with_no_id_is_identified_by_its_sender() -> None:
+    """The identifier is what a retirement is recorded against and what
+    an unretire looks the message up by, so it can never be empty. A
+    message with no Message-ID falls back to the address it came from."""
+    raw = message(
+        """
+From: Someone <Someone@Example.COM>
+Subject: No id
+Date: Sat, 6 Sep 2026 06:00:00 +0000
+Content-Type: text/html; charset="utf-8"
+""",
+        "<html><body><p>Hello</p></body></html>",
+    )
+    assert extract(raw).origin.identifier == "someone@example.com"
