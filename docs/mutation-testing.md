@@ -254,6 +254,17 @@ the reason rather than re-derive it.
 - **`_registrable`'s `len(labels) > 2`.** At exactly two labels the host
   *is* the compound suffix, and `labels[-3:]` and `labels[-2:]` are then
   the same two labels.
+- **`_truncate_to_width`'s `if budget <= 0` (both picker.py and
+  contents.py).** A budget of exactly zero is not room for a character, so
+  falling through to the search finds nothing and returns the same
+  ellipsis the guard would have. The guard saves the search, not the
+  answer.
+- **`source_label`'s `label.rpartition(".")[0]`.** Against
+  `partition(".")` this differs only for a host under a compound suffix -
+  "bbc.co.uk" gives a stem of "bbc.co" rather than "bbc" - which makes the
+  redundancy check miss a publication called "The BBC". No host in the
+  268-fixture corpus has a compound suffix, or even three labels, so the
+  difference is unreachable for every newsletter the tool has seen.
 - **`build_picklist`'s `total > limit`.** At exactly the limit the trim
   keeps everything either way; the sort it does first is undone by the
   per-publication sort below.

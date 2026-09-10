@@ -814,3 +814,26 @@ def test_todays_messages_are_dated_relative_to_today() -> None:
         format_pick_date(date(2026, 9, 5), today),
     ]
     assert "today" in picklist.groups[0].rows[1].when
+
+
+def test_a_platform_subdomain_is_reduced_to_the_publications_own_label() -> None:
+    """On Substack and its like the host is <publication>.substack.com,
+    and the platform name identifies nothing - every newsletter on it
+    shares that. What is left in front can itself carry a routing prefix,
+    and the label next to the platform is the publication's."""
+    from newsprint.picker import _informative_host
+
+    assert _informative_host("cloudirregular.substack.com") == "cloudirregular"
+    assert _informative_host("mail.cloudirregular.substack.com") == "cloudirregular"
+    assert _informative_host("substack.com") is None
+
+
+def test_a_width_with_room_for_nothing_but_the_ellipsis_gets_it() -> None:
+    """Exactly the ellipsis's own width leaves a budget of nothing, and
+    nothing is not room for a character - the column shows the mark that
+    says text was cut and stops there."""
+    from newsprint.picker import _ELLIPSIS, _display_width, _truncate_to_width
+
+    exactly = _display_width(_ELLIPSIS)
+    assert _truncate_to_width("Hello world", exactly) == _ELLIPSIS
+    assert _truncate_to_width("Hello world", exactly + 1) == "H" + _ELLIPSIS
