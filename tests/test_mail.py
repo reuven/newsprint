@@ -1169,7 +1169,10 @@ def test_a_delimiter_that_changes_nothing_is_not_retried() -> None:
     )
     with pytest.raises(MailError) as caught, box:
         pass
-    assert "also tried" not in str(caught.value)
+    # The whole message: "not in" says nothing about what the sentence
+    # does end with, and this one is what the reader gets when the folder
+    # they named cannot be opened.
+    assert str(caught.value) == "could not open folder 'toprint': NO"
 
 
 @pytest.mark.parametrize("failing", ["COPY", "STORE_DELETED"])
@@ -1453,3 +1456,59 @@ def test_a_fetch_response_entry_without_a_payload_is_skipped() -> None:
         ]
     )
     assert parsed == {8: b"raw"}
+
+
+def test_a_folder_that_reports_no_count_still_opens() -> None:
+    """The number after SELECT is cosmetic - it feeds the picker's "N
+    messages" line and nothing else - so a server that answers without a
+    parseable count opens the folder anyway, reporting none rather than
+    inventing one."""
+
+    class CountlessIMAP(FakeIMAP):
+        def select(self, folder: str, readonly: bool = False):
+            self.calls.append(("select", folder, readonly))
+            self.selected = (folder, readonly)
+            return ("OK", [b""])
+
+    fake = CountlessIMAP("h")
+    with mailbox(fake) as box:
+        assert box.message_count == 0
+
+
+def test_a_mailbox_used_after_it_closes_says_so() -> None:
+    """Leaving the block logs out and forgets the connection. Reaching for
+    it afterwards has to say that plainly, rather than fail somewhere
+    deeper on whatever was left behind."""
+    fake = FakeIMAP("h")
+    box = mailbox(fake)
+    with box:
+        pass
+    with pytest.raises(MailError, match=r"^mailbox is not open; use it as a "):
+        box.folders()
+
+
+def test_fetch_many_asks_for_the_uid_and_the_whole_message_by_default() -> None:
+    """Both halves matter: the raw message is what gets printed, and the
+    UID is how each response is matched back to the message that asked
+    for it - a batched fetch returns them in whatever order it likes."""
+    fake = MultiFetchIMAP("h")
+    fake.messages = {7: RAW}
+    with mailbox(fake) as box:
+        assert box.fetch_many([7]) == {7: RAW}
+    fetches = [call for call in fake.calls if call[:2] == ("uid", "FETCH")]
+    assert fetches == [("uid", "FETCH", "7", "(UID RFC822)")]
+
+
+def test_a_folder_name_that_is_not_utf8_is_still_listed() -> None:
+    """IMAP folder names are meant to be modified UTF-7, and servers send
+    raw bytes anyway. A name that will not decode must not take the whole
+    listing down with it - the user has other folders to choose from."""
+    fake = FakeIMAP("h")
+    fake.list_response = [
+        b'(\\HasNoChildren) "." "INBOX.caf\xe9"',
+        b'(\\HasNoChildren) "." "INBOX.toprint"',
+    ]
+    with mailbox(fake) as box:
+        names = box.folders()
+    assert names[1] == "INBOX.toprint"
+    assert names[0].startswith("INBOX.caf")
