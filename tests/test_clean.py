@@ -815,6 +815,81 @@ def test_trailing_run_dropped_elements_are_reported() -> None:
     assert any("unsubscribe" in block.text.lower() for block in cleaned.blocks_dropped)
 
 
+# ---------------------------------------------------------------------------
+# The two directional runs. To reach one and only one, the chrome has to
+# sit inside a container the block sweep keeps whole, on lines that are not
+# chrome phrases in their own right - so neither the block pass nor the
+# line pass can be the one that took it.
+# ---------------------------------------------------------------------------
+
+_RUN_LEAD = "<p>Was this forwarded to you?<br>Sign up here</p>"
+_RUN_TAIL = "<p>Acme Inc, 12 Main Street<br>Springfield, IL 62704</p>"
+_RUN_ARTICLE = (
+    "<h1>Headline</h1>"
+    "<p>Real paragraph with enough content to read as genuine prose about "
+    "the subject at hand, not a caption or a label.</p>"
+)
+_RUN_ARTICLE_2 = (
+    "<p>Second real block of prose here, long enough to be an article "
+    "paragraph in its own right.</p>"
+)
+
+
+def test_both_runs_report_the_lines_they_took() -> None:
+    """A run walks in from one end and stops at the first real content, so
+    what it takes is bounded but not named in advance - which makes the
+    report of it the only account the reader gets. A leaf's own <br> lines
+    are reported as the lines they render as."""
+    html = (
+        "<html><body>"
+        f"<div>{_RUN_LEAD}{_RUN_ARTICLE}</div>"
+        f"<div>{_RUN_ARTICLE_2}{_RUN_TAIL}</div>"
+        "</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "forwarded to you" not in cleaned.html
+    assert "Springfield" not in cleaned.html
+    assert "Real paragraph with enough content" in cleaned.html
+    assert "Second real block of prose" in cleaned.html
+    assert [block.text for block in cleaned.blocks_dropped] == [
+        "Was this forwarded to you?\nSign up here",
+        "Acme Inc, 12 Main Street\nSpringfield, IL 62704",
+    ]
+
+
+def test_a_leaf_exactly_at_the_chrome_ratio_stops_both_runs() -> None:
+    """The same boundary the block sweep uses, applied to a single leaf:
+    0.15 is the highest content share a line can have and still count as
+    chrome, so a leaf sitting exactly on it is where each run stops. One
+    step the other way and both runs would walk straight through it into
+    the article behind."""
+    chrome = [
+        "Manage your preferences",
+        "Copyright 2026 Acme Inc",
+        "You received this because you signed up",
+        "Update your email preferences",
+        "Sent to you by Acme",
+        "Add us to your address book",
+        "Acme Inc, 12 Main Street, Springfield",
+        "Was this forwarded to you?",
+        "You can update your details here",
+    ]
+    content = "Rates held steady, and the chair said little."
+    # 45 characters of content against 255 of chrome: 0.15 on the nose.
+    assert len(content) / (len(content) + sum(len(line) for line in chrome)) == 0.15
+    boundary = "<p>" + "<br>".join([content, *chrome]) + "</p>"
+    html = (
+        "<html><body>"
+        f"<div>{_RUN_LEAD}{boundary}{_RUN_ARTICLE}</div>"
+        f"<div>{_RUN_ARTICLE_2}{boundary}{_RUN_TAIL}</div>"
+        "</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.html.count("Rates held steady") == 2, "neither run passes it"
+    assert "Sign up here" not in cleaned.html, "each still takes the run's start"
+    assert "Springfield, IL" not in cleaned.html
+
+
 def test_leading_chrome_run_is_removed() -> None:
     """F1: the leading-run rule mirrors the trailing one. 'Forwarded this
     email?' sits at the very start of several real newsletters, ahead of
@@ -1267,6 +1342,29 @@ def test_a_masthead_above_a_duplicate_title_does_not_hide_it() -> None:
     assert "Crude economics doesn't explain" in cleaned.html
 
 
+def test_a_line_with_no_words_in_it_is_not_a_match_for_any_title() -> None:
+    """A section break set as "* * *" normalizes to nothing at all, and
+    nothing is a prefix of every title there has ever been. Without the
+    guard the very first such line in the leading region would be taken
+    for the duplicated headline, and everything down to the next dateline
+    would go with it."""
+    html = (
+        "<html><body><div>"
+        "<p>* * *</p>"
+        "<p>Sep 7</p>"
+        "<p>Crude economics doesn't explain what just happened, and here "
+        "is a real paragraph of genuine article prose about the subject.</p>"
+        "<p>A second paragraph carrying the argument along towards its end "
+        "in the usual way.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(
+        document(html, title="Neo-Nazis and the Impotence of Trumponomics")
+    )
+    assert "* * *" in cleaned.html
+    assert "Sep 7" in cleaned.html
+
+
 def test_duplicate_title_match_is_a_prefix_or_truncation_in_either_direction() -> None:
     """Publications truncate: the body's own copy may be shorter (an
     ellipsis-truncated rendering) or the Subject may be shorter (a
@@ -1283,8 +1381,11 @@ def test_duplicate_title_match_is_a_prefix_or_truncation_in_either_direction() -
         "about the subject at hand, not a caption or a label.</p>"
         "</div></body></html>"
     )
+    # The Subject punctuates it differently from the body, which is the
+    # other half of what normalizing is for: the dash is only in one copy,
+    # so the two agree on their words and on nothing else.
     cleaned = clean_document(
-        document(html, title="What's new in DevEx - September 2 edition")
+        document(html, title="What's new in DevEx September 2 edition")
     )
     assert "What's new in DevEx" not in cleaned.html
     assert "genuine prose" in cleaned.html
@@ -1700,6 +1801,116 @@ def test_br_and_hr_are_never_removed_for_having_no_text() -> None:
 # Credit/Data: caption after it - rather than dropping every image
 # outright. The width gate is the same one _figure_placeholder_text
 # already uses, reused rather than re-derived.
+def test_every_image_decision_is_reported_and_counted() -> None:
+    """The three outcomes in one document: a chart kept whole, a spacer
+    dropped outright, and a data figure kept as a line of text. Each is
+    counted and named, because the report is what tells the reader an
+    image went and why - a spacer with no src at all still has to appear,
+    rather than being recorded under whatever the parser returns for an
+    attribute that is not there.
+
+    Keeping an image is also not a reason to stop looking at the rest.
+    """
+    lead_in = (
+        "<p>Real prose sets up the argument, and in the best model scores "
+        "between the two countries:</p>"
+    )
+    html = (
+        "<html><body><div>"
+        f"{lead_in}"
+        '<img src="https://example.com/first.png" width="600">'
+        "<p>More prose after, long enough to read as an article paragraph "
+        "and not a caption of any kind at all, and it ends like this:</p>"
+        '<img src="https://example.com/second.png" width="600">'
+        "<p>A third paragraph of ordinary prose, carrying the argument on "
+        "towards whatever it is the writer wants to say next.</p>"
+        '<img width="1">'
+        '<img src="https://example.com/fig.png" width="600" '
+        'alt="Fed funds rate against core inflation, 2019 to 2027">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 2
+    assert [(d.src, d.reason) for d in cleaned.images_dropped] == [
+        ("", "no lead-in or caption (decoration)"),
+        ("https://example.com/fig.png", "kept as a text placeholder (figure)"),
+    ]
+    assert (
+        '<p class="figure-placeholder">[figure: Fed funds rate against core '
+        "inflation, 2019 to 2027]</p>" in cleaned.html
+    )
+
+
+def test_a_generic_alt_is_still_generic_with_a_full_stop_after_it() -> None:
+    """ "Chart" names the kind of thing an image is, not what it shows, so
+    it earns no placeholder. Writing it "Chart." changes nothing about
+    that - and every one of these words is also a data term, so the
+    trailing stop is all that stands between the two judgements."""
+    html = (
+        "<html><body><div>"
+        "<p>Real prose sets up the argument, and here is the evidence for "
+        "it, which we have been building towards all along.</p>"
+        '<img src="https://example.com/chart.png" width="600" alt="Chart.">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "[figure:" not in cleaned.html
+
+
+def test_an_alt_text_at_the_length_cap_is_kept_whole() -> None:
+    """70 is the longest an alt text may be, not the first length that is
+    too long. One character more and it is cut to 69 and given an
+    ellipsis - and cut back through any space it lands on, so the ellipsis
+    follows a word rather than floating clear of one."""
+    exactly_70 = (
+        "Fed funds rate against core inflation and unemployment, 2019 to 2027!!"
+    )
+    assert len(exactly_70) == 70
+    cut_on_a_space = (
+        "Fed funds rate against core inflation and unemployment, 2019 to 2027"
+        " and beyond"
+    )
+    assert cut_on_a_space[68] == " "
+
+    def placeholder_for(alt: str) -> str:
+        html = (
+            "<html><body><div>"
+            "<p>Real prose sets up the argument, and here is the evidence "
+            "for it, which we have been building towards all along.</p>"
+            f'<img src="https://example.com/c.png" width="600" alt="{alt}">'
+            "</div></body></html>"
+        )
+        return clean_document(document(html)).html
+
+    cut_mid_word = (
+        "Fed funds rate against core inflation and joblessness, 2019 to 2027 and beyond"
+    )
+    assert cut_mid_word[68] == "a", "this one keeps the character rstrip spares"
+
+    assert f"[figure: {exactly_70}]" in placeholder_for(exactly_70)
+    assert (
+        "[figure: Fed funds rate against core inflation and joblessness, "
+        "2019 to 2027 a\u2026]" in placeholder_for(cut_mid_word)
+    )
+    assert (
+        "[figure: Fed funds rate against core inflation and unemployment, "
+        "2019 to 2027\u2026]" in placeholder_for(cut_on_a_space)
+    )
+
+
+def test_an_image_exactly_at_the_minimum_width_is_wide_enough() -> None:
+    """300px is the narrowest a figure may be, not the first width that is
+    too narrow - a chart mailed at exactly the minimum is a chart."""
+    html = (
+        "<html><body><div><p>Real prose sets up the argument, and in the "
+        "best model scores between the two countries:</p>"
+        '<img src="https://example.com/chart.png" width="300">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 1
+
+
 def test_a_colon_lead_in_keeps_a_wide_image() -> None:
     html = (
         "<html><body><div><p>Real prose sets up the argument, and in the "
@@ -2470,6 +2681,109 @@ def test_a_sponsor_anchor_looks_past_empty_siblings() -> None:
     cleaned = clean_document(document(html))
     assert "finest anvils" not in cleaned.html
     assert "surprised almost nobody" in cleaned.html
+
+
+# ---------------------------------------------------------------------------
+# Finding the content root, and pruning what has nothing to say. Both walk
+# a tree whose whitespace is exactly as the mail template left it, which is
+# what these fixtures keep: newlines and indentation between every tag.
+# ---------------------------------------------------------------------------
+
+_INDENTED = (
+    "<html>\n"
+    "  <body>\n"
+    "    <div>\n"
+    "      <p>The Fed declined to move rates this month, which surprised "
+    "almost nobody who had been watching the minutes closely.</p>\n"
+    "      <p>Markets took the news calmly, which is not at all what "
+    "anyone had forecast at the start of a week like this one.</p>\n"
+    "    </div>\n"
+    "  </body>\n"
+    "</html>"
+)
+
+
+def test_the_cleaned_document_carries_no_page_scaffolding() -> None:
+    """What comes back is the newsletter's content, ready to drop into a
+    cell - not a page. The <html> and <body> the parser synthesizes around
+    every input are where the search for that content starts, never part
+    of what it returns."""
+    cleaned = clean_document(document(_INDENTED))
+    assert "<html" not in cleaned.html
+    assert "<body" not in cleaned.html
+    assert cleaned.html.startswith("<p>The Fed declined")
+
+
+def test_indentation_between_tags_is_not_a_second_child() -> None:
+    """The descent through layout wrappers counts children that say
+    something. The newlines and tabs a template leaves between its tags
+    say nothing, and counting them would stop the descent at the first
+    wrapper - leaving the wrapper itself as the root, and its single div
+    as the one block every later pass gets to judge as a unit."""
+    cleaned = clean_document(document(_INDENTED))
+    assert "<div" not in cleaned.html, "the wrapper is descended through"
+    assert "surprised almost nobody" in cleaned.html
+    assert "took the news calmly" in cleaned.html
+
+
+def test_an_empty_wrapper_beside_the_real_one_is_not_a_second_child() -> None:
+    """Same descent, the other kind of silent child: a wrapper the
+    template emitted and never filled. It is an element, so it survives
+    the isinstance test, and only having nothing to say keeps it from
+    counting - which is what lets the descent go on into the wrapper that
+    does have something."""
+    prose = (
+        "<p>The Fed declined to move rates this month, which surprised "
+        "almost nobody who had been watching the minutes closely.</p>"
+        "<p>Markets took the news calmly, which is not at all what anyone "
+        "had forecast at the start of a week like this one.</p>"
+    )
+    html = f"<html><body><div>{prose}</div><div>\n   </div></body></html>"
+    cleaned = clean_document(document(html))
+    assert "<div" not in cleaned.html
+    assert cleaned.html.startswith("<p>The Fed declined")
+
+
+def test_a_title_with_an_empty_wrapper_after_it_is_still_a_leaf() -> None:
+    """A headline closed by an empty div. It is an element and it is not
+    inline, so only having nothing to say keeps it from counting as a
+    block child - and if it counted, the walk would recurse past the
+    headline into it, the headline's own text would never be offered to
+    any pass, and the duplicated header would stay on the page."""
+    title = "Neo-Nazis and the Impotence of Trumponomics"
+    html = (
+        "<html><body><div>"
+        f"<div>{title}<div>  </div></div>"
+        "<p>Sep 7</p>"
+        "<p>Crude economics doesn't explain what just happened, and here "
+        "is a real paragraph of genuine article prose.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html, title=title))
+    assert "Neo-Nazis" not in cleaned.html
+    assert "Crude economics" in cleaned.html
+
+
+def test_an_invisible_paragraph_mid_document_is_pruned() -> None:
+    """Zero-width spaces are how bulk mail pads its layout. An element
+    holding nothing else has no text to mis-score and simply goes -
+    including one sitting between two paragraphs, which is a reason to
+    keep sweeping rather than to stop."""
+    html = (
+        "<html><body><div>"
+        "<p>The Fed declined to move rates this month, which surprised "
+        "almost nobody<br>who had been watching the minutes closely.</p>"
+        "<p>\u200b\u200b</p>"
+        "<p>Markets took the news calmly, which is not at all what anyone "
+        "had forecast at the start of a week like this one.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "\u200b" not in cleaned.html
+    # The <br> above it is exempt, and stepping over it is not a reason to
+    # stop sweeping.
+    assert "<br" in cleaned.html
+    assert "took the news calmly" in cleaned.html
 
 
 def test_a_bare_text_node_of_chrome_is_extracted() -> None:
