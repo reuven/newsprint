@@ -6,6 +6,7 @@ content actually reached it.
 """
 
 import imaplib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -307,6 +308,29 @@ def fetch_queue(
     return merged, trash
 
 
+def save_output(built_pdf: Path, output: Path | None, packet_date: date) -> Path:
+    """Where the finished packet ends up, and its path afterwards.
+
+    With no --output the packet stays in the run's temp directory, which
+    is right for a run that prints immediately and useless for one that
+    hands the user a PDF to print themselves - a random directory under
+    /var/folders that the OS eventually deletes.
+
+    An --output naming an existing directory gets a dated file inside it,
+    since "where do I put this week's packet" is the common case and
+    naming it by hand every week is not. Anything else is taken as the
+    file path to write.
+    """
+    if output is None:
+        return built_pdf
+    destination = (
+        output / f"shabbat-{packet_date.isoformat()}.pdf" if output.is_dir() else output
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(built_pdf, destination)
+    return destination
+
+
 def _open_preview(pdf: Path) -> None:
     """Best-effort: open the PDF for a look before printing.
 
@@ -379,6 +403,25 @@ def retire_printed(config: Config, uids: list[int], trash: str) -> RetireResult:
         "The messages stay starred and will be reprinted on the next run."
     ),
 )
+@click.option(
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=(
+        "Write the finished PDF here instead of leaving it in a temp "
+        "directory. An existing directory gets a dated file inside it."
+    ),
+)
+@click.option(
+    "--no-print",
+    "no_print",
+    is_flag=True,
+    help=(
+        "Build the PDF but do not send it to a printer - print it yourself "
+        "from the PDF. Unlike --dry-run, this still offers to retire the "
+        "mail, after asking whether the printing actually worked."
+    ),
+)
 @click.option("--no-preview", is_flag=True, help="Skip opening the PDF in Preview.")
 @click.option(
     "--no-pick",
@@ -402,6 +445,8 @@ def main(
     config_path: Path,
     dry_run: bool,
     no_retire: bool,
+    output: Path | None,
+    no_print: bool,
     no_preview: bool,
     no_pick: bool,
     summary: bool | None,
@@ -589,6 +634,7 @@ def main(
     click.echo("  Imposing onto sheets...")
     sheets_pdf = work_dir / "sheets.pdf"
     sides = impose(stamped, config.printing.paper, sheets_pdf)
+    sheets_pdf = save_output(sheets_pdf, output, packet_date)
     cells = sum(item.cells for item in packet_built)
     click.echo(
         f"\n  {cells} cells - {sides} sheet sides on {config.printing.paper.name}"
@@ -602,46 +648,77 @@ def main(
         click.echo("\nDry run: nothing printed, nothing retired.")
         return
 
-    destination = config.printing.printer or "the default printer"
-    if not click.confirm(f"\nPrint to {destination}?", default=False):
+    uids = [item.document.origin.uid for item in built if item.document.origin.uid]
+
+    if no_print:
+        # Nothing was sent to a printer, so the one fact that decides
+        # whether this mail is done with - did paper actually come out? -
+        # is not something this process can observe. Ask, rather than
+        # assume either way. --no-retire has already answered it.
+        if no_retire:
+            click.echo(f"\nNot printed here. Mail untouched.\n  {sheets_pdf}")
+            return
+        if not click.confirm(
+            f"\nPrinted {sheets_pdf} yourself? Retire these messages?",
+            default=False,
+        ):
+            runlog.record(
+                {
+                    "outcome": "cancelled",
+                    "documents": len(built),
+                    "skipped": skipped_teasers,
+                }
+            )
+            click.echo("Mail untouched.")
+            return
         runlog.record(
             {
-                "outcome": "cancelled",
-                "documents": len(built),
+                "outcome": "printed-elsewhere",
+                "documents": [item.document.origin.identifier for item in built],
+                "uids": uids,
                 "skipped": skipped_teasers,
             }
         )
-        click.echo("Not printed. Mail untouched.")
-        return
+    else:
+        destination = config.printing.printer or "the default printer"
+        if not click.confirm(f"\nPrint to {destination}?", default=False):
+            runlog.record(
+                {
+                    "outcome": "cancelled",
+                    "documents": len(built),
+                    "skipped": skipped_teasers,
+                }
+            )
+            click.echo("Not printed. Mail untouched.")
+            return
 
-    uids = [item.document.origin.uid for item in built if item.document.origin.uid]
-    runlog.record(
-        {
-            "outcome": "printing",
-            "documents": [item.document.origin.identifier for item in built],
-            "uids": uids,
-            "skipped": skipped_teasers,
-        }
-    )
+        runlog.record(
+            {
+                "outcome": "printing",
+                "documents": [item.document.origin.identifier for item in built],
+                "uids": uids,
+                "skipped": skipped_teasers,
+            }
+        )
 
-    try:
-        job = spool(sheets_pdf, config)
-    except PrintError as error:
-        runlog.record({"outcome": "print-failed", "error": str(error)})
-        raise click.ClickException(
-            f"{error}\nMail untouched; PDF kept at {sheets_pdf}"
-        ) from error
+        try:
+            job = spool(sheets_pdf, config)
+        except PrintError as error:
+            runlog.record({"outcome": "print-failed", "error": str(error)})
+            raise click.ClickException(
+                f"{error}\nMail untouched; PDF kept at {sheets_pdf}"
+            ) from error
 
-    click.echo(f"Spooled as {job}.")
-    runlog.record(
-        {
-            "outcome": "printed-kept" if no_retire else "printed",
-            "job": job,
-            "documents": [item.document.origin.identifier for item in built],
-            "uids": uids,
-            "skipped": skipped_teasers,
-        }
-    )
+        click.echo(f"Spooled as {job}.")
+        runlog.record(
+            {
+                "outcome": "printed-kept" if no_retire else "printed",
+                "job": job,
+                "documents": [item.document.origin.identifier for item in built],
+                "uids": uids,
+                "skipped": skipped_teasers,
+            }
+        )
 
     if no_retire:
         click.echo(
