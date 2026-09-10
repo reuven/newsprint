@@ -1029,7 +1029,7 @@ class DottedServerIMAP(FakeIMAP):
 
 
 def test_a_slash_config_opens_on_a_dot_delimited_server() -> None:
-    """The delimiter is not standardised, so a config written for one
+    """The delimiter is not standardized, so a config written for one
     server is wrong on the other - and "NO" alone sends people hunting for
     a folder that is right there."""
     fake = DottedServerIMAP("h")

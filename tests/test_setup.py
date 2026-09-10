@@ -69,7 +69,7 @@ def test_setup_writes_a_config_and_stores_the_password(tmp_path: Path) -> None:
 
 
 def test_setup_offers_the_servers_own_folder_names(tmp_path: Path) -> None:
-    """The delimiter is not standardised and a Gmail folder is a label, so
+    """The delimiter is not standardized and a Gmail folder is a label, so
     the list comes from the server rather than from the user's guess."""
     offered: list[list[str]] = []
 

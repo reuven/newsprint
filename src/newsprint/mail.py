@@ -517,7 +517,7 @@ class Mailbox:
         """Every mailbox on the server that can actually be opened.
 
         Setup asks the server rather than asking the user to guess: the
-        hierarchy delimiter is not standardised, and on Gmail a "folder"
+        hierarchy delimiter is not standardized, and on Gmail a "folder"
         is a label, so a name that looks obvious ("INBOX/toprint") is
         often simply not what this server calls it.
         """

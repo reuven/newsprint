@@ -2,7 +2,7 @@
 
 Every question here is one someone would otherwise have to answer by
 guessing. The folder in particular: the IMAP hierarchy delimiter is not
-standardised, and on Gmail a "folder" is a label, so the name that looks
+standardized, and on Gmail a "folder" is a label, so the name that looks
 obvious is often not what the server calls it. Rather than explain that,
 this connects and asks the server for the list.
 
