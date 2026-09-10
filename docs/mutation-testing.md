@@ -201,6 +201,23 @@ the reason rather than re-derive it.
 - **`format="PNG"` against `format="png"`** - Pillow's format lookup is
   case-insensitive, and the bytes come out identical.
 
+### mail.py
+
+- **`connection.select(folder, readonly=False)`** - False is imaplib's own
+  default, so passing it is documentation rather than behavior. Kept: this
+  is the code that opens a folder writable to move mail out of it, and the
+  argument says so at the call site.
+- **`uid("SEARCH", None, criteria)`** - imaplib drops a None argument
+  before sending, which is how the optional charset is omitted; removing
+  it sends the identical command.
+- **`_move_message`'s `return str(status)`** - both callers compare the
+  result against "OK" and nothing prints it, so the failing status's own
+  text never reaches anyone.
+- **`self._imap = None` inside `_reconnect`** - the next line reassigns
+  it, so the intermediate value is never read. (The same assignment in
+  `__exit__` is real, and tested: it is what makes a mailbox used after
+  its block say so plainly instead of failing deeper.)
+
 ## Known survivors that are not equivalent
 
 - **`_iter_text_elements`'s `node.get_text(strip=True)` in the leaf
