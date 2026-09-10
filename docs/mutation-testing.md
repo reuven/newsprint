@@ -167,6 +167,12 @@ the reason rather than re-derive it.
   decides which set is called the shorter one, and on a tie it does not
   matter: the intersection is the same either way and so is the
   denominator. Checked over 20,000 random word-set pairs, not argued.
+- **`_draw_footer`'s `max(0.0, ...)` floor on the left segment's width.**
+  The floor exists to keep a negative width away from `_truncate`, and
+  `_truncate` returns the empty string for any width that cannot fit the
+  ellipsis - about 5pt at this font size. So every floor from 0 up to
+  that width behaves identically, and a mutation of the constant only
+  becomes visible above it.
 
 ## Known survivors that are not equivalent
 
