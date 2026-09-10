@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -421,4 +422,203 @@ def test_a_repeated_publication_is_dropped_in_either_direction() -> None:
     assert (
         footer_left("The Morning Edition", None, "The Morning: The word is bond")
         == "The Morning Edition · The word is bond"
+    )
+
+
+# ---------------------------------------------------------------------------
+# stamp_packet's own bookkeeping.
+# ---------------------------------------------------------------------------
+
+
+def test_the_output_directory_is_made_including_its_parents(tmp_path: Path) -> None:
+    """A run writes its stamped pages under a per-run directory inside a
+    working directory that may itself be new. Making only the last
+    component fails on the first run of the day."""
+    out_dir = tmp_path / "work" / "2026-09-05" / "stamped"
+    stamped = stamp_packet(
+        [_built("Money Stuff", 1, tmp_path, "a")], PACKET_DATE, A4, LAYOUT, out_dir
+    )
+    assert stamped[0].exists()
+
+
+def test_stamping_twice_into_the_same_directory_is_not_an_error(
+    tmp_path: Path,
+) -> None:
+    """Re-running after a failed print is ordinary, and the directory is
+    then already there."""
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "leftover.txt").write_text("from an earlier run")
+    stamped = stamp_packet(
+        [_built("Money Stuff", 1, tmp_path, "a")], PACKET_DATE, A4, LAYOUT, out_dir
+    )
+    assert stamped[0].exists()
+
+
+def test_the_running_page_number_accumulates_across_issues(tmp_path: Path) -> None:
+    """The right-hand number is the sheet's place in the whole packet, not
+    in its own issue - it is what the reader counts through on Shabbat.
+    Three issues of two pages each run 1 to 6, so the third issue starts
+    at 5: an offset that is merely set to the last issue's length rather
+    than added to would start it at 3, and two issues would print with
+    the same numbers on them.
+    """
+    built = [
+        _built("Money Stuff", 2, tmp_path, "a"),
+        _built("The Morning", 2, tmp_path, "b"),
+        _built("Platformer", 2, tmp_path, "c"),
+    ]
+    stamped = stamp_packet(built, PACKET_DATE, A4, LAYOUT, tmp_path / "out")
+    running = re.compile(r"^(\d+) \u00b7 5 Sep 2026$", re.MULTILINE)
+    numbers = [
+        running.search(page_text(path, index))[1]  # type: ignore[index]
+        for path in stamped
+        for index in range(2)
+    ]
+    assert numbers == ["1", "2", "3", "4", "5", "6"]
+
+
+# ---------------------------------------------------------------------------
+# Where the three footer segments actually land. Nothing here reads the
+# geometry back out of the constants: each expected position is spelled
+# out, so an arithmetic slip has somewhere to show.
+# ---------------------------------------------------------------------------
+
+
+def _footer_spans(left: str, counter: str, right: str) -> dict[str, dict[str, float]]:
+    """Draw one footer and return each segment's x, baseline and colour."""
+    import pymupdf
+
+    from newsprint.stamp import _draw_footer
+
+    width, height = A4.cell.as_points()
+    spans: dict[str, dict[str, float]] = {}
+    with pymupdf.open() as document:
+        page = document.new_page(width=width, height=height)
+        _draw_footer(page, A4, LAYOUT, left=left, counter=counter, right=right)
+        for block in page.get_text("dict")["blocks"]:
+            for line in block["lines"]:
+                for span in line["spans"]:
+                    spans[span["text"]] = {
+                        "x": span["bbox"][0],
+                        "baseline": span["origin"][1],
+                        "color": span["color"],
+                        "size": span["size"],
+                    }
+    return spans
+
+
+def test_the_footer_segments_land_where_the_layout_puts_them() -> None:
+    """The left segment starts at the margin; the right one ends at it;
+    the counter is set a fixed gap clear of the right one so the two
+    numbers are never mistaken for each other. The baseline sits half a
+    margin up from the bottom of the cell.
+    """
+    import pymupdf
+
+    from newsprint.stamp import COUNTER_GAP_PT, FONT, FONT_SIZE_PT
+
+    counter, right = "1/2", "3 · 5 Sep 2026"
+    spans = _footer_spans("Money Stuff", counter, right)
+
+    cell_width_pt, cell_height_pt = A4.cell.as_points()
+    margin_pt = LAYOUT.margin_mm * POINTS_PER_INCH / MM_PER_INCH
+    right_width = pymupdf.get_text_length(right, fontname=FONT, fontsize=FONT_SIZE_PT)
+    counter_width = pymupdf.get_text_length(
+        counter, fontname=FONT, fontsize=FONT_SIZE_PT
+    )
+    expected_right_x = cell_width_pt - margin_pt - right_width
+    expected_counter_x = expected_right_x - COUNTER_GAP_PT - counter_width
+
+    assert spans["Money Stuff"]["x"] == pytest.approx(margin_pt, abs=0.01)
+    assert spans[right]["x"] == pytest.approx(expected_right_x, abs=0.01)
+    assert spans[counter]["x"] == pytest.approx(expected_counter_x, abs=0.01)
+    for segment in ("Money Stuff", counter, right):
+        assert spans[segment]["baseline"] == pytest.approx(
+            cell_height_pt - margin_pt / 2, abs=0.01
+        )
+
+
+def test_the_footer_is_drawn_in_the_grey_the_layout_asks_for() -> None:
+    """Black would compete with the body text it sits under. The colour
+    reads back as one packed integer, which is what the constant becomes."""
+    from newsprint.stamp import COLOR, FONT_SIZE_PT
+
+    spans = _footer_spans("Money Stuff", "1/2", "3 · 5 Sep 2026")
+    packed = sum(
+        round(channel * 0xFF) << shift
+        for channel, shift in zip(COLOR, (16, 8, 0), strict=True)
+    )
+    assert spans["Money Stuff"]["color"] == packed
+    assert spans["Money Stuff"]["size"] == FONT_SIZE_PT
+
+
+def test_a_line_that_needs_one_more_character_removed_loses_exactly_one() -> None:
+    """Truncation walks back a character at a time and stops the moment
+    the line plus its ellipsis fits. Two at a time would cut a character
+    that had room, and stopping one step late would drop one that fits."""
+    import pymupdf
+
+    from newsprint.stamp import ELLIPSIS, FONT, FONT_SIZE_PT, _truncate
+
+    def width(text: str) -> float:
+        return pymupdf.get_text_length(text, fontname=FONT, fontsize=FONT_SIZE_PT)
+
+    long_line = "Money Stuff · Matt Levine · Private Credit Gets Complicated Again"
+    # Exactly enough room for "Money Stuff" and the ellipsis and no more.
+    # The walk must stop on that boundary rather than one step past it.
+    assert (
+        _truncate(long_line, width("Money Stuff") + width(ELLIPSIS))
+        == "Money Stuff" + ELLIPSIS
+    )
+    # And a cut that lands mid-word keeps every character that fits.
+    assert _truncate(long_line, 60.0) == "Money Stuff · Matt L" + ELLIPSIS
+
+
+def test_the_left_segment_is_given_the_room_up_to_the_counter() -> None:
+    """The left segment runs from the margin to a gap short of the
+    counter, and is cut to fit. Getting that width wrong in either
+    direction either wastes the page or runs the subject into the
+    numbers."""
+    import pymupdf
+
+    from newsprint.stamp import (
+        COUNTER_GAP_PT,
+        FONT,
+        FONT_SIZE_PT,
+        SEGMENT_GAP_PT,
+        _truncate,
+    )
+
+    counter, right = "1/2", "3 · 5 Sep 2026"
+    left = "Money Stuff · Matt Levine · Private Credit Gets Complicated Again"
+    cell_width_pt, _ = A4.cell.as_points()
+    margin_pt = LAYOUT.margin_mm * POINTS_PER_INCH / MM_PER_INCH
+    right_x = (
+        cell_width_pt
+        - margin_pt
+        - pymupdf.get_text_length(right, fontname=FONT, fontsize=FONT_SIZE_PT)
+    )
+    counter_x = (
+        right_x
+        - COUNTER_GAP_PT
+        - pymupdf.get_text_length(counter, fontname=FONT, fontsize=FONT_SIZE_PT)
+    )
+    expected = _truncate(left, counter_x - SEGMENT_GAP_PT - margin_pt)
+
+    spans = _footer_spans(left, counter, right)
+    assert expected in spans, f"drew {sorted(spans)} rather than {expected!r}"
+    assert expected != left, "the fixture must be long enough to be cut"
+
+
+def test_a_publication_name_inside_a_longer_sender_name_is_not_repeated() -> None:
+    """The Diff's mail arrives from "The Diffusion Report Team". The name
+    is right there inside the sender's, so printing both would say it
+    twice - and the words alone do not show it, since the sender's extra
+    three outnumber the two they share."""
+    assert byline("The Diff", "The Diffusion Report Team") == "The Diff"
+    # The reverse containment is the ordinary Substack case, where the
+    # sender is the person and the publication carries their name.
+    assert byline("Casey Newton's Platformer", "Casey Newton") == (
+        "Casey Newton's Platformer"
     )

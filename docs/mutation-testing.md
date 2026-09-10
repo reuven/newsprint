@@ -137,6 +137,37 @@ the reason rather than re-derive it.
 - **`_is_argument_figure`'s `forward=False`** - the helper branches on the
   flag's truthiness, and None is as false as False.
 
+### extract.py
+
+- **Every header name's spelling.** `email.message.Message.get` matches
+  case-insensitively, so "List-Id", "list-id" and "LIST-ID" are one
+  header. Half of this module's survivors are that, in seven places.
+- **Three belt-and-braces defaults that a second guard already covers.**
+  `_decode`'s `or "utf-8"` is unobservable because the `except
+  LookupError` below it decodes as UTF-8 anyway; `_subject`'s
+  `default="(no subject)"` because the `or "(no subject)"` at the end of
+  the same function catches the empty string it would otherwise return;
+  and `_body_html`'s `multipart` guard because a container part's content
+  type is neither text/html nor text/plain, so skipping it early and
+  falling through to those tests reach the same place. All three are kept:
+  each says what its line means, and none is load-bearing.
+- **`partition("@")` against `rpartition("@")`** - they differ only on an
+  address with two at-signs, which is not an address.
+- **`strip('"')` widened to strip an X as well, and `rstrip(">")` the
+  same** - no List-Id label or host ends in one.
+
+### stamp.py
+
+- **`fontname=FONT` anywhere.** `FONT` is `"helv"`, which is also
+  PyMuPDF's default, so dropping the argument changes nothing. Six of
+  this module's survivors are that one fact. (`fontsize` is a different
+  matter - the default is 11pt against this module's 6pt, and dropping it
+  moves every right-aligned segment.)
+- **`_shares_most_words`'s `len(words_a) <= len(words_b)`.** The tie
+  decides which set is called the shorter one, and on a tie it does not
+  matter: the intersection is the same either way and so is the
+  denominator. Checked over 20,000 random word-set pairs, not argued.
+
 ## Known survivors that are not equivalent
 
 - **`_iter_text_elements`'s `node.get_text(strip=True)` in the leaf

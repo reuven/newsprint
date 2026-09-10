@@ -736,3 +736,21 @@ Content-Type: text/html; charset="utf-8"
         "<html><body><p>Hello</p></body></html>",
     )
     assert extract(raw).origin.identifier == "someone@example.com"
+
+
+def test_the_last_bracketed_part_of_a_list_id_is_the_host() -> None:
+    """RFC 2919 puts the host last, in angle brackets, after a free-text
+    description - and the description is free text, brackets included. It
+    is the closing pair that names the newsletter, not the first one to
+    come along."""
+    raw = message(
+        """
+From: Someone <someone@example.com>
+Subject: Bracketed
+Date: Sat, 6 Sep 2026 06:00:00 +0000
+List-Id: Money Stuff <the good bits> <moneystuff.bloomberg.com>
+Content-Type: text/html; charset="utf-8"
+""",
+        "<html><body><p>Hello</p></body></html>",
+    )
+    assert extract(raw).source_host == "moneystuff.bloomberg.com"
