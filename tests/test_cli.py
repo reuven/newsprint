@@ -2780,3 +2780,136 @@ def test_no_summary_notice_when_summaries_are_disabled(tmp_path: Path) -> None:
         ],
     )
     assert "Writing the summary" not in result.output
+
+
+def _no_mail(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "shabbat_print.cli.fetch_queue",
+        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+    )
+    monkeypatch.setattr(
+        "shabbat_print.runlog.record", lambda entry, **kw: tmp_path / "r"
+    )
+
+
+def test_output_writes_the_packet_to_a_named_file(monkeypatch, tmp_path: Path) -> None:
+    """Without --output the packet lands in a temp directory under a
+    random name, which is fine for a run that prints immediately and
+    useless for one that hands you a PDF."""
+    _no_mail(monkeypatch, tmp_path)
+    destination = tmp_path / "reading" / "this-week.pdf"
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--dry-run",
+            "--no-preview",
+            "--output",
+            str(destination),
+            "--config",
+            str(tmp_path / "absent.toml"),
+        ],
+    )
+    assert result.exit_code == 0
+    assert destination.is_file(), result.output
+    assert destination.stat().st_size > 0
+    assert str(destination) in result.output
+
+
+def test_output_to_a_directory_names_the_file_by_date(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from datetime import UTC, datetime
+
+    _no_mail(monkeypatch, tmp_path)
+    folder = tmp_path / "packets"
+    folder.mkdir()
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--dry-run",
+            "--no-preview",
+            "--output",
+            str(folder),
+            "--config",
+            str(tmp_path / "absent.toml"),
+        ],
+    )
+    assert result.exit_code == 0
+    today = datetime.now(UTC).date().isoformat()
+    assert (folder / f"shabbat-{today}.pdf").is_file(), result.output
+
+
+def test_no_print_asks_before_retiring_and_never_spools(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """When the tool does not print, only the user knows whether paper
+    came out - so it asks, rather than assuming either way."""
+    events: list[str] = []
+    _no_mail(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "shabbat_print.cli.spool",
+        lambda pdf, config: events.append("spool") or "Printer-1",
+    )
+
+    def fake_retire_printed(config, uids, trash):
+        events.append(f"retire:{uids}")
+        return RetireResult(retired=tuple(uids), failed=())
+
+    monkeypatch.setattr("shabbat_print.cli.retire_printed", fake_retire_printed)
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-print", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+        input="y\n",
+    )
+    assert result.exit_code == 0
+    assert events == ["retire:[4]"], "must retire without ever spooling"
+
+
+def test_no_print_declined_leaves_mail_untouched(monkeypatch, tmp_path: Path) -> None:
+    events: list[str] = []
+    _no_mail(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "shabbat_print.cli.spool",
+        lambda pdf, config: events.append("spool") or "Printer-1",
+    )
+    monkeypatch.setattr(
+        "shabbat_print.cli.retire_printed",
+        lambda config, uids, trash: events.append("retire"),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--no-print", "--no-preview", "--config", str(tmp_path / "absent.toml")],
+        input="n\n",
+    )
+    assert result.exit_code == 0
+    assert events == []
+    assert "untouched" in result.output
+
+
+def test_no_print_with_no_retire_never_asks(monkeypatch, tmp_path: Path) -> None:
+    """--no-retire is already an explicit "leave the mail alone", so there
+    is nothing left to ask about."""
+    events: list[str] = []
+    _no_mail(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "shabbat_print.cli.retire_printed",
+        lambda config, uids, trash: events.append("retire"),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--no-print",
+            "--no-retire",
+            "--no-preview",
+            "--config",
+            str(tmp_path / "absent.toml"),
+        ],
+    )
+    assert result.exit_code == 0
+    assert events == []
+    assert "Printed" not in result.output or "?" not in result.output
