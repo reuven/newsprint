@@ -21,7 +21,7 @@ from email.message import Message
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
-from shabbat_print.mbox import find_thunderbird_mbox, split_mbox
+from newsprint.mbox import find_thunderbird_mbox, split_mbox
 
 FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 UNSAFE = re.compile(r"[^a-z0-9]+")

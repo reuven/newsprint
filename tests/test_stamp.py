@@ -4,12 +4,12 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from shabbat_print.config import LayoutConfig
-from shabbat_print.geometry import A4, MM_PER_INCH, POINTS_PER_INCH
-from shabbat_print.models import Document, Origin, Verdict
-from shabbat_print.pdfutil import page_text, text_extent_mm
-from shabbat_print.pipeline import Built
-from shabbat_print.stamp import byline, format_packet_date, stamp_packet
+from newsprint.config import LayoutConfig
+from newsprint.geometry import A4, MM_PER_INCH, POINTS_PER_INCH
+from newsprint.models import Document, Origin, Verdict
+from newsprint.pdfutil import page_text, text_extent_mm
+from newsprint.pipeline import Built
+from newsprint.stamp import byline, format_packet_date, stamp_packet
 
 LAYOUT = LayoutConfig(margin_mm=9.0, font_size_pt=9.0, line_height=1.35)
 PACKET_DATE = date(2026, 9, 5)
@@ -208,7 +208,7 @@ def test_date_uses_the_month_table_not_strftime(tmp_path: Path) -> None:
     a Hebrew locale already caused once). format_packet_date must keep
     working the same way regardless of what the month table says, proving
     it is the source of truth rather than strftime."""
-    import shabbat_print.stamp as stamp_module
+    import newsprint.stamp as stamp_module
 
     original = stamp_module._MONTHS
     try:
@@ -223,7 +223,7 @@ def test_format_packet_date_matches_expected_english_abbreviation() -> None:
 
 
 def test_truncate_of_a_short_string_is_unchanged() -> None:
-    from shabbat_print.stamp import _truncate
+    from newsprint.stamp import _truncate
 
     assert _truncate("Money Stuff", max_width_pt=200.0) == "Money Stuff"
 
@@ -232,7 +232,7 @@ def test_truncate_of_an_empty_string_is_unchanged() -> None:
     """Defensive: byline() never actually returns "", since Document.
     publication is always set - but _truncate must not crash if a future
     caller passes one, since nothing in its type signature rules it out."""
-    from shabbat_print.stamp import _truncate
+    from newsprint.stamp import _truncate
 
     assert _truncate("", max_width_pt=200.0) == ""
 
@@ -240,7 +240,7 @@ def test_truncate_of_an_empty_string_is_unchanged() -> None:
 def test_truncate_with_no_room_even_for_the_ellipsis_yields_nothing() -> None:
     """A budget narrower than the ellipsis itself must not crash or return
     a lone, meaningless ellipsis - it degrades to nothing."""
-    from shabbat_print.stamp import _truncate
+    from newsprint.stamp import _truncate
 
     assert _truncate("Money Stuff", max_width_pt=0.5) == ""
 
@@ -272,7 +272,7 @@ def test_draw_footer_skips_a_segment_that_truncates_to_nothing() -> None:
     insert an empty string - only skip it, leaving the numbers alone."""
     import pymupdf
 
-    from shabbat_print.stamp import _draw_footer
+    from newsprint.stamp import _draw_footer
 
     width, height = A4.cell.as_points()
     with pymupdf.open() as document:
@@ -286,7 +286,7 @@ def test_draw_footer_skips_a_segment_that_truncates_to_nothing() -> None:
 def test_the_footer_left_segment_carries_the_subject_after_the_byline() -> None:
     """A packet with seven issues of The Morning had seven identical
     footers; the subject is what tells them apart."""
-    from shabbat_print.stamp import footer_left
+    from newsprint.stamp import footer_left
 
     assert (
         footer_left("Platformer", "Casey Newton", "The AI warnings are coming")
@@ -295,7 +295,7 @@ def test_the_footer_left_segment_carries_the_subject_after_the_byline() -> None:
 
 
 def test_the_byline_still_collapses_before_the_subject_is_added() -> None:
-    from shabbat_print.stamp import footer_left
+    from newsprint.stamp import footer_left
 
     assert (
         footer_left("Axios Macro", "Axios Macro", "New trade stakes")
@@ -306,7 +306,7 @@ def test_the_byline_still_collapses_before_the_subject_is_added() -> None:
 def test_a_subject_with_an_embedded_newline_is_flattened() -> None:
     """Real subjects in the user's own queue carry embedded CRLFs from
     unfolded header continuations."""
-    from shabbat_print.stamp import footer_left
+    from newsprint.stamp import footer_left
 
     assert (
         footer_left("Bite Code!", None, "clearly\r\n explained!")
@@ -315,7 +315,7 @@ def test_a_subject_with_an_embedded_newline_is_flattened() -> None:
 
 
 def test_an_empty_subject_leaves_the_byline_alone() -> None:
-    from shabbat_print.stamp import footer_left
+    from newsprint.stamp import footer_left
 
     assert footer_left("Platformer", "Casey Newton", "   ") == (
         "Platformer · Casey Newton"
@@ -325,7 +325,7 @@ def test_an_empty_subject_leaves_the_byline_alone() -> None:
 def test_a_subject_repeating_its_publication_drops_the_repeat() -> None:
     """A packet of seven Morning issues paid for "The Morning" twice on
     every one of them."""
-    from shabbat_print.stamp import footer_left
+    from newsprint.stamp import footer_left
 
     assert (
         footer_left("The Morning", None, "The Morning: The word is bond")
@@ -340,7 +340,7 @@ def test_a_subject_repeating_its_publication_drops_the_repeat() -> None:
 def test_a_prefix_that_is_not_the_publication_is_kept() -> None:
     """ "Axios AM" under the byline "Mike Allen" is the only thing naming
     that newsletter - removing it would lose information, not repeat it."""
-    from shabbat_print.stamp import footer_left
+    from newsprint.stamp import footer_left
 
     assert (
         footer_left("Mike Allen", "Mike Allen", "Axios AM: Blue wave rising")
@@ -349,7 +349,7 @@ def test_a_prefix_that_is_not_the_publication_is_kept() -> None:
 
 
 def test_a_subject_that_is_only_the_publication_name_survives() -> None:
-    from shabbat_print.stamp import footer_left
+    from newsprint.stamp import footer_left
 
     assert footer_left("Platformer", None, "Platformer: ") == "Platformer · Platformer:"
 
@@ -365,7 +365,7 @@ def test_truncation_removes_one_character_at_a_time() -> None:
     letter, and every existing test still passed - the footer would have
     read "P..." instead of most of the subject.
     """
-    from shabbat_print.stamp import _truncate
+    from newsprint.stamp import _truncate
 
     text = "Platformer · Casey Newton · The AI warnings are coming from inside the lab"
     assert _truncate(text, 100) == "Platformer · Casey Newton · The AI..."
@@ -376,7 +376,7 @@ def test_text_that_exactly_fills_the_footer_segment_is_left_alone() -> None:
     fits, and truncating it would cost characters for no reason."""
     import pymupdf
 
-    from shabbat_print.stamp import FONT, FONT_SIZE_PT, _truncate
+    from newsprint.stamp import FONT, FONT_SIZE_PT, _truncate
 
     text = "Platformer"
     exact = pymupdf.get_text_length(text, fontname=FONT, fontsize=FONT_SIZE_PT)
@@ -390,7 +390,7 @@ def test_a_segment_no_wider_than_the_ellipsis_yields_nothing() -> None:
     ellipsis where a byline should be."""
     import pymupdf
 
-    from shabbat_print.stamp import ELLIPSIS, FONT, FONT_SIZE_PT, _truncate
+    from newsprint.stamp import ELLIPSIS, FONT, FONT_SIZE_PT, _truncate
 
     ellipsis_width = pymupdf.get_text_length(
         ELLIPSIS, fontname=FONT, fontsize=FONT_SIZE_PT
@@ -410,7 +410,7 @@ def test_the_byline_collapses_whichever_name_contains_the_other() -> None:
 def test_a_repeated_publication_is_dropped_in_either_direction() -> None:
     """Same `or`, same reason: the subject's prefix can be longer than
     the publication ("Data Engineer Things Newsletter") or shorter."""
-    from shabbat_print.stamp import footer_left
+    from newsprint.stamp import footer_left
 
     assert (
         footer_left(

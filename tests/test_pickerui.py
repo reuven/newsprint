@@ -19,9 +19,9 @@ from datetime import UTC, datetime
 
 import questionary
 
-from shabbat_print.models import Document, Origin
-from shabbat_print.picker import build_picklist
-from shabbat_print.pickerui import questionary_prompt
+from newsprint.models import Document, Origin
+from newsprint.picker import build_picklist
+from newsprint.pickerui import questionary_prompt
 
 
 def _doc(publication: str, title: str, day: str, uid: int = 1) -> Document:
@@ -165,7 +165,7 @@ def test_the_default_checkbox_factory_is_questionarys_own() -> None:
     quietly does nothing in production."""
     import inspect
 
-    from shabbat_print.pickerui import questionary_prompt as prompt_function
+    from newsprint.pickerui import questionary_prompt as prompt_function
 
     default = inspect.signature(prompt_function).parameters["checkbox"].default
     assert default is questionary.checkbox
@@ -178,7 +178,7 @@ def test_the_default_terminal_size_factory_is_shutils_own() -> None:
     import inspect
     import shutil
 
-    from shabbat_print.pickerui import questionary_prompt as prompt_function
+    from newsprint.pickerui import questionary_prompt as prompt_function
 
     default = inspect.signature(prompt_function).parameters["terminal_size"].default
     assert default is shutil.get_terminal_size

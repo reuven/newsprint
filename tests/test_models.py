@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from shabbat_print.models import Document, Origin, Verdict
+from newsprint.models import Document, Origin, Verdict
 
 
 class TestOriginFrozen:

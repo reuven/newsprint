@@ -2,7 +2,7 @@
 
 import pytest
 
-from shabbat_print.geometry import A4, LETTER, Paper, paper_by_name
+from newsprint.geometry import A4, LETTER, Paper, paper_by_name
 
 
 def test_a4_cell_is_a6() -> None:

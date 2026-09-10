@@ -105,7 +105,7 @@ def find_thunderbird_mbox(folder: str = "toprint") -> Path | None:
     """Locate a local Thunderbird cache of an IMAP folder, if there is one.
 
     A development convenience for building test fixtures - not part of the
-    tool's runtime. shabbat-print itself talks to IMAP and never reads a local
+    tool's runtime. newsprint itself talks to IMAP and never reads a local
     mail store, so this returning None is normal on most machines.
     """
     root = Path.home() / "Library" / "Thunderbird" / "Profiles"

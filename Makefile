@@ -2,10 +2,10 @@
 
 # WeasyPrint needs Pango/Cairo/gdk-pixbuf, installed via Homebrew on macOS.
 # Homebrew's lib directory isn't on the default dlopen search path, so we
-# point dyld at it here. This is now belt-and-braces: shabbat_print._libpath
+# point dyld at it here. This is now belt-and-braces: newsprint._libpath
 # sets DYLD_FALLBACK_LIBRARY_PATH from Python before weasyprint is imported
 # (ctypes.util.find_library reads os.environ live, unlike dyld itself), so
-# `uv run shabbat-print` works without this export. We keep it here so
+# `uv run newsprint` works without this export. We keep it here so
 # `make test` still works even if that module is ever broken.
 # On a machine without Homebrew (e.g. Linux, or macOS with the libraries
 # installed some other way), `brew --prefix` fails and BREW_PREFIX is
@@ -20,7 +20,7 @@ fixtures:
 	uv run python scripts/make_fixtures.py
 
 test:
-	uv run pytest --cov=shabbat_print --cov-report=term-missing --cov-branch
+	uv run pytest --cov=newsprint --cov-report=term-missing --cov-branch
 
 lint:
 	uv run ruff format src tests scripts

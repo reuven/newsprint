@@ -2,7 +2,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from shabbat_print import runlog
+from newsprint import runlog
 
 
 def test_record_writes_a_readable_file(tmp_path: Path) -> None:

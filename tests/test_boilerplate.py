@@ -1,6 +1,6 @@
 import pytest
 
-from shabbat_print.boilerplate import (
+from newsprint.boilerplate import (
     content_ratio,
     is_boilerplate_line,
     is_definite_chrome_line,

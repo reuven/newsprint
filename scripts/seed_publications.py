@@ -1,8 +1,8 @@
-"""Regenerate ~/.config/shabbat-print/publications.toml from the user's own
+"""Regenerate ~/.config/newsprint/publications.toml from the user's own
 local mail archive.
 
 Reads a Thunderbird mbox file and reports, one line per publication, the
-name shabbat-print's own resolution order (see extract._publication) would
+name newsprint's own resolution order (see extract._publication) would
 land on: List-Id keyed where a message carries a List-Id, address keyed
 otherwise - exactly the precedence extract.py itself uses, so what this
 script writes and what extract() would fall back to without any override
@@ -27,9 +27,9 @@ from collections import Counter
 from email.message import Message
 from pathlib import Path
 
-from shabbat_print.config import DEFAULT_PUBLICATIONS_PATH
-from shabbat_print.extract import _decode_words
-from shabbat_print.mbox import find_thunderbird_mbox, split_mbox
+from newsprint.config import DEFAULT_PUBLICATIONS_PATH
+from newsprint.extract import _decode_words
+from newsprint.mbox import find_thunderbird_mbox, split_mbox
 
 # Mailchimp's own List-Id has no human label at all: the part before "<" is
 # a bare campaign hash (e.g. "b98e2de85f03865f1d38de74fmc list <....mcsv.net>"

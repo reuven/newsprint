@@ -26,8 +26,8 @@ scope with `do_not_mutate` instead:
 
 ```toml
 [tool.mutmut]
-source_paths = ["src/shabbat_print"]
-do_not_mutate = ["src/shabbat_print/cli.py", "..."]   # everything else
+source_paths = ["src/newsprint"]
+do_not_mutate = ["src/newsprint/cli.py", "..."]   # everything else
 ```
 
 Then:

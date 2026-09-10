@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from shabbat_print.config import PublicationNames
-from shabbat_print.extract import extract
+from newsprint.config import PublicationNames
+from newsprint.extract import extract
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -373,7 +373,7 @@ def test_decode_with_none_payload_returns_empty_string() -> None:
     """
     from email.message import Message
 
-    from shabbat_print.extract import _decode
+    from newsprint.extract import _decode
 
     # Create a part with a sub-message as payload (simulating a multipart at
     # the part level), which makes get_payload(decode=True) return None

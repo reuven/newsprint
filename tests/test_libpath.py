@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from shabbat_print import _libpath
+from newsprint import _libpath
 
 
 @pytest.fixture(autouse=True)

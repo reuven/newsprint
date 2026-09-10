@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from shabbat_print.config import load_config
-from shabbat_print.models import Document, Origin, Verdict
-from shabbat_print.pipeline import build
+from newsprint.config import load_config
+from newsprint.models import Document, Origin, Verdict
+from newsprint.pipeline import build
 
 PROSE = (
     "<p>The Federal Reserve declined to move rates this month, which surprised "
@@ -45,7 +45,7 @@ def test_builds_a_pdf_per_document(config, tmp_path: Path) -> None:
 def test_cells_matches_the_pdf_it_reports(config, tmp_path: Path) -> None:
     """Built.cells is what the sheet count is computed from, so it must equal
     the page count of the PDF actually handed on."""
-    from shabbat_print.pdfutil import page_count
+    from newsprint.pdfutil import page_count
 
     built, _ = build([document(PROSE * 40)], config, tmp_path)
     assert built[0].cells == page_count(built[0].pdf)
@@ -81,7 +81,7 @@ def test_a_teaser_below_the_threshold_is_a_failure_not_a_built(
     """A headline-and-link teaser must be skipped, not printed - the same
     outcome shape as any other build failure, so the retirement invariant
     (uids come only from `built`) applies to it automatically."""
-    from shabbat_print.pipeline import TeaserSkippedError
+    from newsprint.pipeline import TeaserSkippedError
 
     teaser = document("<h1>An Issue</h1><p>Read more online.</p>", "<t@x>")
     built, failed = build([teaser], config, tmp_path)
@@ -110,7 +110,7 @@ def _render_recording_a_failure(document, config, out_dir=None, **kwargs):
     failures = kwargs.get("image_fetch_failures")
     if failures is not None:
         failures.append("https://example.com/dead-chart.png")
-    from shabbat_print.render import render as real_render
+    from newsprint.render import render as real_render
 
     return real_render(document, config, out_dir=out_dir)
 
@@ -150,7 +150,7 @@ def test_the_same_image_cache_is_shared_across_every_render_fn_call(
         cache = kwargs.get("image_cache")
         assert cache is not None, "build_one must pass image_cache"
         seen_cache_ids.add(id(cache))
-        from shabbat_print.render import render as real_render
+        from newsprint.render import render as real_render
 
         return real_render(document, config, out_dir=out_dir)
 
@@ -197,7 +197,7 @@ def test_a_document_with_exactly_the_threshold_word_count_is_built(
     """
     from dataclasses import replace
 
-    from shabbat_print.pipeline import TeaserSkippedError
+    from newsprint.pipeline import TeaserSkippedError
 
     impossible = replace(config, packet=replace(config.packet, min_words=10**6))
     _built, failed = build([document(LONG_PROSE)], impossible, tmp_path / "learn")
@@ -225,7 +225,7 @@ def test_the_rerender_callback_reaches_render_fn_with_the_same_document(
     """
     from pathlib import Path as _Path
 
-    from shabbat_print.models import Verdict
+    from newsprint.models import Verdict
 
     calls: list[tuple[float, object]] = []
 
@@ -233,7 +233,7 @@ def test_the_rerender_callback_reaches_render_fn_with_the_same_document(
         compression = kwargs.get("compression")
         if compression is not None:
             calls.append((compression, document.origin.identifier))
-        from shabbat_print.render import render as real_render
+        from newsprint.render import render as real_render
 
         return real_render(document, config, out_dir=out_dir)
 
@@ -243,7 +243,7 @@ def test_the_rerender_callback_reaches_render_fn_with_the_same_document(
         rerender(0.99)
         return pdf, Verdict.FULL
 
-    monkeypatch.setattr("shabbat_print.pipeline.fit", _fit_that_rerenders)
+    monkeypatch.setattr("newsprint.pipeline.fit", _fit_that_rerenders)
 
     built, failed = build(
         [document(LONG_PROSE, "<rerender@x>")],

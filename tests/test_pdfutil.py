@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pymupdf
 
-from shabbat_print.geometry import A4
-from shabbat_print.pdfutil import text_extent_mm
+from newsprint.geometry import A4
+from newsprint.pdfutil import text_extent_mm
 
 
 def test_text_extent_of_a_blank_page_is_zero(tmp_path: Path) -> None:

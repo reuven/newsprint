@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from shabbat_print.mbox import (
+from newsprint.mbox import (
     MboxIntegrityError,
     find_thunderbird_mbox,
     split_mbox,
@@ -290,7 +290,7 @@ def test_a_match_not_preceded_by_a_newline_is_rejected() -> None:
 
     Direct unit test of _preceded_by_blank_line as a general predicate.
     """
-    from shabbat_print.mbox import _preceded_by_blank_line
+    from newsprint.mbox import _preceded_by_blank_line
 
     assert _preceded_by_blank_line(b"xFrom ", 1) is False
 

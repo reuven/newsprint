@@ -3,7 +3,7 @@ from datetime import date
 
 import pytest
 
-from shabbat_print.mail import FETCH_CHUNK_SIZE, Mailbox, MailError, password_for
+from newsprint.mail import FETCH_CHUNK_SIZE, Mailbox, MailError, password_for
 
 RAW = b"From: someone@example.com\r\nSubject: Hello\r\n\r\nBody.\r\n"
 
@@ -293,7 +293,7 @@ def test_parse_size_response_ignores_a_non_bytes_item() -> None:
     """A SIZE fetch response never carries a (info, payload) tuple - see
     _parse_size_response's own docstring - but the parser must not crash
     if one ever showed up (e.g. a server that echoed a literal anyway)."""
-    from shabbat_print.mail import _parse_size_response
+    from newsprint.mail import _parse_size_response
 
     mixed = [(b"1 (RFC822 {5}", b"hello"), b"2 (UID 3 RFC822.SIZE 100)"]
     assert _parse_size_response(mixed) == {3: 100}
@@ -303,7 +303,7 @@ def test_parse_size_response_ignores_a_line_with_no_size_data_item() -> None:
     """A malformed or unrelated FETCH response line must not be
     attributed to any uid, the same as a server that never answered for
     it at all - mirrors _parse_fetch_response's own guarantee."""
-    from shabbat_print.mail import _parse_size_response
+    from newsprint.mail import _parse_size_response
 
     malformed = [b"1 (FLAGS (\\Seen))"]
     assert _parse_size_response(malformed) == {}
@@ -378,7 +378,7 @@ def test_parse_fetch_response_ignores_a_tuple_with_no_uid_data_item() -> None:
     item, but the parser must not crash on a malformed line that lacks
     one - it should simply not attribute that payload to any uid, the
     same as a server that never answered for it at all."""
-    from shabbat_print.mail import _parse_fetch_response
+    from newsprint.mail import _parse_fetch_response
 
     malformed = [(b"1 (RFC822 {5}", b"hello"), b")"]
     assert _parse_fetch_response(malformed) == {}
@@ -432,15 +432,13 @@ def test_trash_folder_raises_when_absent() -> None:
 
 def test_password_for_reads_the_keychain(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "shabbat_print.mail.keyring.get_password", lambda host, user: "from-keychain"
+        "newsprint.mail.keyring.get_password", lambda host, user: "from-keychain"
     )
     assert password_for("imap.example.com", "someone@example.com") == "from-keychain"
 
 
 def test_password_for_explains_how_to_store_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "shabbat_print.mail.keyring.get_password", lambda host, user: None
-    )
+    monkeypatch.setattr("newsprint.mail.keyring.get_password", lambda host, user: None)
     with pytest.raises(MailError, match="keyring set"):
         password_for("imap.example.com", "someone@example.com")
 
@@ -622,7 +620,7 @@ def test_retire_quotes_a_trash_folder_name_containing_brackets() -> None:
 
 
 def test_quote_mailbox_escapes_embedded_quotes_and_backslashes() -> None:
-    from shabbat_print.mail import _quote_mailbox
+    from newsprint.mail import _quote_mailbox
 
     assert _quote_mailbox('Weird"Name') == '"Weird\\"Name"'
     assert _quote_mailbox("Back\\Slash") == '"Back\\\\Slash"'
