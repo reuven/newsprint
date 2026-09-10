@@ -11,6 +11,7 @@ from newsprint.models import Document, Origin, Verdict
 from newsprint.pdfutil import page_text
 from newsprint.pipeline import Built
 from newsprint.summarize import (
+    _SCHEMA,
     ApiResponse,
     Candidate,
     SummaryContent,
@@ -26,6 +27,10 @@ from newsprint.summarize import (
 PACKET_DATE = date(2026, 9, 5)
 
 
+INTEREST_TEXT = "Ideas with a public dataset behind them, for pandas exercises."
+INTEREST = 'interest = "Ideas with a public dataset behind them, for pandas exercises."'
+
+
 @pytest.fixture
 def config(tmp_path: Path):
     """enabled=true, pointed at a deliberately absent key file.
@@ -38,7 +43,9 @@ def config(tmp_path: Path):
     """
     path = tmp_path / "config.toml"
     key_file = tmp_path / "no-such-key-file.env"
-    path.write_text(f'[summary]\nenabled = true\napi_key_file = "{key_file}"\n')
+    path.write_text(
+        f'[summary]\nenabled = true\napi_key_file = "{key_file}"\n{INTEREST}'
+    )
     return load_config(path)
 
 
@@ -50,7 +57,9 @@ def working_config(tmp_path: Path):
     key_file = tmp_path / "working.env"
     key_file.write_text("ANTHROPIC_API_KEY=sk-test-not-a-real-key\n")
     path = tmp_path / "config.toml"
-    path.write_text(f'[summary]\nenabled = true\napi_key_file = "{key_file}"\n')
+    path.write_text(
+        f'[summary]\nenabled = true\napi_key_file = "{key_file}"\n{INTEREST}'
+    )
     return load_config(path)
 
 
@@ -80,7 +89,7 @@ def _valid_response(topics=None, candidates=None) -> ApiResponse:
             {
                 "topic": "Municipal bond yields",
                 "why": "Recurs across three newsletters this week.",
-                "dataset": "FRED municipal bond yield series",
+                "source": "FRED municipal bond yield series",
             }
         ],
     }
@@ -166,21 +175,41 @@ def test_read_api_key_rejects_an_empty_value(tmp_path: Path) -> None:
 
 def test_build_prompt_includes_every_newsletters_publication_and_subject() -> None:
     built = [_built(0, publication="Money Stuff", title="Bank Runs"), _built(1)]
-    prompt = _build_prompt(built)
+    prompt = _build_prompt(built, INTEREST_TEXT)
     assert "Money Stuff" in prompt
     assert "Bank Runs" in prompt
     assert "Newsletter 01" in prompt
 
 
-def test_build_prompt_mentions_pandas_and_public_datasets() -> None:
-    prompt = _build_prompt([_built(0)])
-    lowered = prompt.lower()
-    assert "pandas" in lowered
-    assert "dataset" in lowered
+def test_the_readers_own_interest_reaches_the_prompt() -> None:
+    """The second page used to be hardcoded to one person's newsletter.
+    What it asks for now comes from config, so the configured words have
+    to actually arrive in the prompt."""
+    prompt = _build_prompt([_built(0)], INTEREST_TEXT)
+    assert INTEREST_TEXT in prompt
+    assert "candidates" in prompt
+
+
+def test_no_interest_asks_only_for_topics() -> None:
+    """With nothing configured there is no second page to ask for, and
+    the prompt must not invent a purpose for the reader."""
+    prompt = _build_prompt([_built(0)], "")
+    assert "candidates" not in prompt
+    assert "topics" in prompt
+
+
+def test_the_schema_follows_the_interest() -> None:
+    """A model asked for topics only must not be handed a schema that
+    requires candidates it was never asked to produce."""
+    from newsprint.summarize import _schema_for
+
+    assert "candidates" in _schema_for(INTEREST_TEXT)["required"]
+    assert "candidates" not in _schema_for("")["required"]
+    assert "topics" in _schema_for("")["required"]
 
 
 def test_build_prompt_asks_for_honesty_over_padding() -> None:
-    prompt = _build_prompt([_built(0)]).lower()
+    prompt = _build_prompt([_built(0)], INTEREST_TEXT).lower()
     assert "nothing" in prompt or "honest" in prompt
 
 
@@ -194,39 +223,44 @@ def test_parse_content_accepts_a_well_formed_payload() -> None:
         json.dumps(
             {
                 "topics": [{"title": "T", "detail": "D"}],
-                "candidates": [{"topic": "C", "why": "W", "dataset": "S"}],
+                "candidates": [{"topic": "C", "why": "W", "source": "S"}],
             }
-        )
+        ),
+        INTEREST_TEXT,
     )
     assert content == SummaryContent(
         topics=(Topic(title="T", detail="D"),),
-        candidates=(Candidate(topic="C", why="W", dataset="S"),),
+        candidates=(Candidate(topic="C", why="W", source="S"),),
     )
 
 
 def test_parse_content_accepts_empty_lists() -> None:
-    content = _parse_content(json.dumps({"topics": [], "candidates": []}))
+    content = _parse_content(
+        json.dumps({"topics": [], "candidates": []}), INTEREST_TEXT
+    )
     assert content == SummaryContent(topics=(), candidates=())
 
 
 def test_parse_content_rejects_invalid_json() -> None:
     with pytest.raises(SummaryError):
-        _parse_content("not json at all {")
+        _parse_content("not json at all {", INTEREST_TEXT)
 
 
 def test_parse_content_rejects_a_non_object_top_level() -> None:
     with pytest.raises(SummaryError):
-        _parse_content(json.dumps([1, 2, 3]))
+        _parse_content(json.dumps([1, 2, 3]), INTEREST_TEXT)
 
 
 def test_parse_content_rejects_missing_keys() -> None:
     with pytest.raises(SummaryError):
-        _parse_content(json.dumps({"topics": [{"title": "T"}], "candidates": []}))
+        _parse_content(
+            json.dumps({"topics": [{"title": "T"}], "candidates": []}), INTEREST_TEXT
+        )
 
 
 def test_parse_content_rejects_a_missing_top_level_key() -> None:
     with pytest.raises(SummaryError):
-        _parse_content(json.dumps({"topics": []}))
+        _parse_content(json.dumps({"topics": []}), INTEREST_TEXT)
 
 
 # --------------------------------------------------------------------------
@@ -342,7 +376,7 @@ def test_the_real_api_key_never_appears_in_a_failure_reason(
 
     leaking_config = replace(config, summary=replace(config.summary, api_key_file=path))
 
-    def leaking_caller(api_key, model, prompt, timeout):
+    def leaking_caller(api_key, model, prompt, timeout, schema):
         raise RuntimeError(f"connection failed while using key {api_key}")
 
     outcome = build_summary_pages(
@@ -366,7 +400,7 @@ def test_caller_receives_the_configured_model_and_timeout(
     my_config = replace(config, summary=replace(config.summary, api_key_file=path))
     calls = []
 
-    def recording_caller(api_key, model, prompt, timeout):
+    def recording_caller(api_key, model, prompt, timeout, schema):
         calls.append((api_key, model, prompt, timeout))
         return _valid_response()
 
@@ -456,7 +490,7 @@ def test_default_caller_calls_the_sdk_and_returns_usage(monkeypatch) -> None:
             return _FakeStreamContext(self._message)
 
     monkeypatch.setattr(summarize_module.anthropic, "Anthropic", FakeAnthropic)
-    response = _default_caller("sk-test", "claude-opus-5", "prompt text", 12.5)
+    response = _default_caller("sk-test", "claude-opus-5", "prompt text", 12.5, _SCHEMA)
     assert response.text == json.dumps({"topics": [], "candidates": []})
     assert response.input_tokens == 100
     assert response.output_tokens == 20
@@ -487,7 +521,7 @@ def test_default_caller_raises_on_refusal(monkeypatch) -> None:
 
     monkeypatch.setattr(summarize_module.anthropic, "Anthropic", RefusingAnthropic)
     with pytest.raises(SummaryError):
-        _default_caller("sk-test", "claude-opus-5", "prompt", 10.0)
+        _default_caller("sk-test", "claude-opus-5", "prompt", 10.0, _SCHEMA)
 
 
 def test_default_caller_raises_a_clear_error_when_no_text_block_is_present(
@@ -515,4 +549,4 @@ def test_default_caller_raises_a_clear_error_when_no_text_block_is_present(
 
     monkeypatch.setattr(summarize_module.anthropic, "Anthropic", ThinkingOnlyAnthropic)
     with pytest.raises(SummaryError, match="no text content"):
-        _default_caller("sk-test", "claude-opus-5", "prompt", 10.0)
+        _default_caller("sk-test", "claude-opus-5", "prompt", 10.0, _SCHEMA)

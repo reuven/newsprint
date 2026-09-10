@@ -440,8 +440,9 @@ def retire_printed(config: Config, uids: list[int], trash: str) -> RetireResult:
     "summary",
     default=None,
     help=(
-        "Generate the two AI summary pages (a topic summary and Bamboo "
-        "Weekly candidates). Needs an Anthropic API key and adds time to "
+        "Generate the AI summary pages (what recurs across this week's "
+        "reading, and optionally what to follow up - see [summary] in "
+        "config.toml). Needs an Anthropic API key and adds time to "
         "the run - one Claude API call over the whole packet's text. "
         "Overrides [summary] enabled in config.toml; with neither flag "
         "given, the config value decides."
