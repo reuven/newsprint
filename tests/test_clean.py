@@ -1857,7 +1857,8 @@ def _sponsor_html(after: str) -> str:
         "<tr><td><p>The Fed declined to move rates this month, which surprised "
         "almost nobody watching the minutes.</p></td></tr>"
         "<tr><td><p>A MESSAGE FROM AXIOS</p></td></tr>"
-        "<tr><td><p>Media is shifting fast. Our reporters see it first.</p></td></tr>"
+        "<tr><td><p>Media is shifting fast. <em>Our reporters</em> see it "
+        "first.</p></td></tr>"
         "<tr><td><p>Sara Fischer and Kerry Flynn go deeper than the headlines, "
         "tracking the deals and disruptions that matter.</p></td></tr>"
         f"<tr><td><p>{after}</p></td></tr>"
@@ -1878,6 +1879,18 @@ def test_a_sponsor_block_is_removed_with_its_body() -> None:
     assert "Sara Fischer" not in cleaned.html
     assert "surprised almost nobody" in cleaned.html, "the article must survive"
     assert "Warsh" in cleaned.html, "the next section heading must survive"
+    # An ad is removed silently otherwise, and this pass takes whole blocks
+    # of prose rather than a named phrase - so the report of what it took
+    # is the only way a wrong removal becomes visible. It is printed for
+    # the reader, one line per block, in the order they were taken.
+    assert [block.text for block in cleaned.blocks_dropped] == [
+        "A MESSAGE FROM AXIOS",
+        "Media is shifting fast. Our reporters see it first.",
+        (
+            "Sara Fischer and Kerry Flynn go deeper than the headlines, "
+            "tracking the deals and disruptions that matter."
+        ),
+    ]
 
 
 def test_a_numbered_section_heading_stops_the_sponsor_removal() -> None:
@@ -1917,6 +1930,47 @@ def test_at_most_two_blocks_follow_a_sponsor_header_into_the_bin() -> None:
     cleaned = clean_document(document(html))
     assert "finest anvils" not in cleaned.html
     assert "Buy one today" not in cleaned.html
+    assert "Fed said nothing" in cleaned.html
+
+
+def test_a_spacer_row_inside_an_ad_does_not_count_against_the_block_cap() -> None:
+    """The cap counts blocks of ad copy, not table rows. A spacer row is
+    swept up with the rest but spends none of the two, or a template that
+    puts one in the middle of its ad would leave the second half of the ad
+    standing."""
+    html = (
+        "<html><body><table>"
+        "<tr><td><p>A MESSAGE FROM ACME</p></td></tr>"
+        "<tr><td>\n\t\t</td></tr>"
+        "<tr><td><p>Acme makes the finest anvils in the west.</p></td></tr>"
+        "<tr><td><p>Buy one today and save a bundle.</p></td></tr>"
+        "<tr><td><p>Meanwhile the Fed said nothing at all this month.</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "finest anvils" not in cleaned.html
+    assert "Buy one today" not in cleaned.html
+    assert "Fed said nothing" in cleaned.html
+
+
+def test_an_ad_body_exactly_at_the_character_cap_is_still_taken() -> None:
+    """600 is the longest an ad body may be, not the first length that is
+    too long: the measured ads run to 394 and the article blocks behind
+    them start at 831, so the boundary itself belongs to the ad side."""
+    head = "Acme anvils, forged in the west. " * 18
+    tail = "Buy it"
+    # The line renders as head, one separator space, then tail - 600 on
+    # the nose, the longest _SPONSOR_MAX_CHARS allows.
+    assert len(head.strip()) + 1 + len(tail) == 600
+    html = (
+        "<html><body><table>"
+        "<tr><td><p>A MESSAGE FROM ACME</p></td></tr>"
+        f"<tr><td><p>{head}<em>{tail}</em></p></td></tr>"
+        "<tr><td><p>2. The Fed said nothing at all this month.</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "forged in the west" not in cleaned.html
     assert "Fed said nothing" in cleaned.html
 
 
@@ -2087,6 +2141,28 @@ def test_alt_text_with_no_data_word_gets_no_placeholder() -> None:
     assert "<img" not in cleaned.html
 
 
+def test_a_trailing_spacer_row_does_not_end_the_anchor_climb() -> None:
+    """Puck nests the ad's own header in an inner table, and closes that
+    table with a spacer row - so the header's row has a sibling, but not
+    one that says anything. Stopping there would anchor the block on the
+    inner table and leave the ad copy, which sits a level further out,
+    standing."""
+    html = (
+        "<html><body><table>"
+        "<tr><td><table>"
+        "<tr><td><p>A MESSAGE FROM ACME</p></td></tr>"
+        "<tr><td>\n\t\t</td></tr>"
+        "</table></td></tr>"
+        "<tr><td><p>Acme makes the finest anvils in the west.</p></td></tr>"
+        "<tr><td><p>2. The Fed said nothing at all this month.</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "A MESSAGE FROM" not in cleaned.html
+    assert "finest anvils" not in cleaned.html
+    assert "Fed said nothing" in cleaned.html
+
+
 def test_a_sponsor_anchor_looks_past_empty_siblings() -> None:
     """Bulk-mail HTML is full of spacer rows with no text in them; the
     anchor is the first ancestor with a sibling that actually says
@@ -2094,7 +2170,9 @@ def test_a_sponsor_anchor_looks_past_empty_siblings() -> None:
     html = (
         "<html><body><table>"
         "<tr><td><p>A MESSAGE FROM ACME</p></td></tr>"
-        "<tr><td></td></tr>"
+        # Indented rather than truly empty: the spacer rows bulk mail
+        # emits carry the template's own newlines and tabs.
+        "<tr><td>\n\t\t</td></tr>"
         "<tr><td><p>Acme makes the finest anvils in the west.</p></td></tr>"
         # Longer than _SPONSOR_MAX_CHARS, which is what stops the block
         # from running out of the ad and into the article.
