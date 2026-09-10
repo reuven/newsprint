@@ -436,7 +436,16 @@ def test_trash_folder_is_discovered_from_special_use() -> None:
 def test_trash_folder_raises_when_absent() -> None:
     fake = FakeIMAP("imap.example.com")
     fake.list_response = [b'(\\HasNoChildren) "/" "INBOX/toprint"']
-    with mailbox(fake) as box, pytest.raises(MailError, match="Trash"):
+    # Anchored on the whole message: this is what the reader is told when
+    # a run cannot find anywhere to retire mail to, and "Trash" alone
+    # matches almost anything the sentence could decay into.
+    with (
+        mailbox(fake) as box,
+        pytest.raises(
+            MailError,
+            match=r"^no folder advertises the \\Trash special-use attribute$",
+        ),
+    ):
         box.trash_folder()
 
 
@@ -888,9 +897,17 @@ def test_reconnect_refuses_when_uidvalidity_changed() -> None:
         fake.messages = {7: RAW}
     with (
         reconnecting_mailbox([dead, live]) as box,
-        pytest.raises(MailError, match="renumbered"),
+        pytest.raises(MailError) as caught,
     ):
         box.fetch_many([7])
+    # The whole sentence, including both UIDVALIDITY values: this is the
+    # only account the reader gets of why a run stopped, and the two
+    # numbers are what tells a renumbering from any other server trouble.
+    assert str(caught.value) == (
+        "the folder was renumbered while this run was in progress "
+        "(UIDVALIDITY b'1' -> b'999'); "
+        "the messages this run selected can no longer be identified"
+    )
 
 
 def test_a_second_drop_is_not_retried() -> None:
