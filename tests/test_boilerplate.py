@@ -889,3 +889,82 @@ def test_a_section_lead_in_is_not_a_masthead_credit(line: str) -> None:
     """Every word after the colon must be capitalized; each of these has a
     lower-case word, which is what keeps a lead-in out."""
     assert not is_definite_chrome_line(line)
+
+
+# ---------------------------------------------------------------------------
+# Round 7: the trailing blocks the user reported from Bloomberg, Puck, The
+# Bulwark and DealBook. Each ran past SHORT_LINE, so it read as a sentence
+# and held the trailing chrome run open.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Like getting this newsletter? Subscribe to Bloomberg.com for access.",
+        "Before it's here, it's on the Bloomberg Terminal.",
+        "Want to sponsor this newsletter? Get in touch here.",
+        "Bloomberg L.P. 731 Lexington, New York, NY, 10022",
+        (
+            "Need help? Review our FAQ page or contact us. For brand"
+            " partnerships, email ads@puck.news."
+        ),
+        "Update your email and payment preferences by visiting your account page.",
+        "Visit our FAQ for help or send a message to members@thebulwark.com.",
+        (
+            "We'd like your feedback. Please email thoughts and suggestions"
+            " to dealbook@nytimes.com."
+        ),
+    ],
+)
+def test_reported_trailing_lines_score_as_chrome(line: str) -> None:
+    assert is_boilerplate_line(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Andrew Ross Sorkin, Founder/Editor-at-Large, New York @andrewrsorkin",
+        "Brian O'Keefe, Managing Editor, New York @brianbokeefe",
+        "Lauren Hirsch, Reporter, New York @LaurenSHirsch",
+        # Lower-case particles in the middle of a name. Requiring every word
+        # to be capitalised skipped exactly this one while catching his six
+        # colleagues, which left the whole masthead standing.
+        "Michael J. de la Merced, Reporter, London @m_delamerced",
+    ],
+)
+def test_a_masthead_credit_ending_in_a_handle_is_chrome(line: str) -> None:
+    assert is_definite_chrome_line(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Follow DealBook on Instagram: @nytdealbook",
+        "Follow Axios across:",
+        "Follow us on:",
+    ],
+)
+def test_a_follow_us_row_is_chrome(line: str) -> None:
+    assert is_full_line_chrome(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Follow the money on Wall Street and see where it actually goes",
+        "Follow up on this story tomorrow",
+    ],
+)
+def test_a_sentence_starting_with_follow_survives(line: str) -> None:
+    assert not is_full_line_chrome(line)
+
+
+def test_a_company_prefixed_address_scores_but_is_not_deletable() -> None:
+    """Same discipline as the Axios PO box: scored as chrome so the
+    trailing run can pass it, never a deletion rule, because that match
+    fires against the raw document where it can carry a whole enclosing
+    element away."""
+    address = "Bloomberg L.P. 731 Lexington, New York, NY, 10022"
+    assert is_definite_chrome_line(address)
+    assert not is_full_line_chrome(address)

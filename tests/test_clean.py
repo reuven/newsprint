@@ -1987,3 +1987,64 @@ def test_a_new_york_times_masthead_tail_is_removed() -> None:
         "New York Times app",
     ):
         assert chrome not in cleaned.html, f"still present: {chrome!r}"
+
+
+# ---------------------------------------------------------------------------
+# The sign-off guard. Once the boilerplate behind it is chrome, the author's
+# valediction is the next thing the backward walk reaches - and it scores as
+# chrome too ("Have a great weekend," is short and ends in a comma). Losing
+# it reads as the newsletter being cut off mid-thought.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "signoff",
+    [
+        "Have a great weekend,\nJon",
+        "Until next time,",
+        "Thanks for reading! We’ll see you tomorrow.",
+        "See you next week,\nSam",
+        "Best,\nReuven",
+    ],
+)
+def test_a_sign_off_stops_the_trailing_chrome_run(signoff: str) -> None:
+    from newsprint.clean import _is_signoff
+
+    assert _is_signoff(signoff)
+
+
+@pytest.mark.parametrize(
+    "not_a_signoff",
+    [
+        # Axios's, which leads into a referral ask and must stay chrome.
+        "Thanks for reading! Please invite your friends to join AM.",
+        # A paragraph that merely opens with the words keeps going.
+        (
+            "Have a great deal of sympathy for the central bankers here:\n"
+            "they are being asked to do something no one has managed\n"
+            "before, and the politics are worse than the economics."
+        ),
+        "Best of all, the data is public.",
+    ],
+)
+def test_prose_is_not_mistaken_for_a_sign_off(not_a_signoff: str) -> None:
+    from newsprint.clean import _is_signoff
+
+    assert not _is_signoff(not_a_signoff)
+
+
+def test_the_authors_sign_off_survives_the_boilerplate_behind_it() -> None:
+    """End to end: the FAQ block goes, the valediction stays."""
+    html = (
+        "<html><body><div>"
+        "<p>The Fed declined to move rates this month, which surprised almost "
+        "nobody who had been watching the minutes and the dot plot closely.</p>"
+        "<p>Have a great weekend,<br>Jon</p>"
+        "<p>Need help? Review our FAQ page or contact us for assistance. "
+        "For brand partnerships, email ads@puck.news.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Have a great weekend" in cleaned.html
+    assert "brand partnerships" not in cleaned.html
+    assert "surprised almost nobody" in cleaned.html
