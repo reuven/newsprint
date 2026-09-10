@@ -49,7 +49,7 @@ def test_title_and_publication_appear(config, tmp_path: Path) -> None:
     assert "Private Credit Gets Complicated" in text
     # The masthead is deliberately rendered in uppercase (text-transform,
     # paired with letter-spacing), so compare case-insensitively rather
-    # than bending production behaviour to fit the test.
+    # than bending production behavior to fit the test.
     assert "money stuff" in text.replace("\n", " ").lower()
 
 
@@ -271,7 +271,7 @@ class _FakeResponse:
 
 
 def _wide_rgb_png(width: int = 900, height: int = 300) -> bytes:
-    """A synthetic in-memory chart-shaped image: wide, colourful, and
+    """A synthetic in-memory chart-shaped image: wide, colorful, and
     nothing like a real chart - grayscale conversion is easy to see on a
     saturated red source, and the width is comfortably past any reasonable
     cell cap so the resize path is actually exercised."""
@@ -324,7 +324,7 @@ def test_a_fetched_image_is_embedded_grayscale_and_capped_to_the_cell(
         xref = images[0][0]
         base_image = opened.extract_image(xref)
     with Image.open(BytesIO(base_image["image"])) as embedded:
-        assert embedded.mode == "L"  # grayscale, not colour
+        assert embedded.mode == "L"  # grayscale, not color
         assert embedded.width <= _cap_width_px(config)
 
 

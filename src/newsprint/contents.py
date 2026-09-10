@@ -115,7 +115,7 @@ def _row_text(item: Built, remaining_width_pt: float, font_size_pt: float) -> st
     starting-cell number a reader navigates by is never truncated. The
     subject is truncated with an ellipsis rather than dropped outright
     whenever the full "name — subject" does not fit, since a reader can
-    still recognise a truncated headline but gets nothing at all from a
+    still recognize a truncated headline but gets nothing at all from a
     bare byline; it is dropped only in the extreme case where not even
     one truncated character of it would fit next to the name.
 

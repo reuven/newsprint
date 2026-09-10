@@ -425,7 +425,7 @@ def _content_root(soup: BeautifulSoup) -> Tag:
 def _strip_images(root: Tag, publication: str) -> tuple[int, tuple[DroppedImage, ...]]:
     """Decide each image's fate: kept, given a text placeholder, or
     dropped outright. Most images are still dropped, exactly as before -
-    only the small subset _is_argument_figure recognises as an author's
+    only the small subset _is_argument_figure recognizes as an author's
     own evidence survives as a real <img>, to be fetched at render time
     (see render.py). No other image is ever fetched: only its `src` is
     recorded here, for reporting, never dereferenced.
@@ -439,7 +439,7 @@ def _strip_images(root: Tag, publication: str) -> tuple[int, tuple[DroppedImage,
     width/height/style still get stripped by the later, unconditional
     pass, same as any other retained tag; render.py's CSS caps its display
     width instead - see that module). For the smaller, non-overlapping
-    subset _figure_placeholder_text recognises among what is NOT kept, the
+    subset _figure_placeholder_text recognizes among what is NOT kept, the
     <img> is replaced with a small, textual placeholder element so it
     keeps its place in the document's flow like any other line; every
     other image is decomposed exactly as before.
@@ -613,7 +613,7 @@ def _strip_trailing_chrome_run(root: Tag) -> tuple[DroppedBlock, ...]:
     chrome - nothing is removed. A newsletter that is entirely chrome
     should be reported (by whatever ran clean_document), not silently
     vanished by this pass; _strip_chrome_blocks, which runs after this
-    one, already has its own, separately-tested behaviour for that case.
+    one, already has its own, separately-tested behavior for that case.
     """
     leaves = list(_iter_text_elements(root))
     removed: list[tuple[Tag, str]] = []
@@ -880,7 +880,7 @@ def _strip_sponsor_blocks(root: Tag) -> tuple[DroppedBlock, ...]:
         # at all - the ad body lives in sibling <tr>s or <table>s further
         # up - so _sponsor_anchor had to climb to find one. A header that
         # is simply one line among paragraphs is a chrome *line*, and
-        # taking its neighbours would eat the article around it;
+        # taking its neighbors would eat the article around it;
         # _strip_line_chrome removes that one on its own.
         own_block = node.find_parent(sorted(_SPONSOR_BLOCK_TAGS))
         if own_block is not None and anchor is own_block:
@@ -1027,8 +1027,8 @@ def _normalize_title_text(text: str) -> str:
 
 
 def _title_line_matches(line: str, title: str) -> bool:
-    """True when `line`, normalised by case-folding and stripping every
-    non-word character, is the same as the normalised Subject or a prefix
+    """True when `line`, normalized by case-folding and stripping every
+    non-word character, is the same as the normalized Subject or a prefix
     of it in either direction - publications truncate a long title in
     either the Subject header or their own rendered copy, so whichever one
     is shorter must be a prefix of the longer one."""
@@ -1141,14 +1141,14 @@ def _strip_duplicate_title_block(
 # (used to control the preview snippet an inbox shows). Unlike every
 # other check in this module, get_text(strip=True) is not enough to
 # detect either: bs4's strip only removes characters Python's
-# str.isspace() recognises. That covers ASCII whitespace and a few
+# str.isspace() recognizes. That covers ASCII whitespace and a few
 # Unicode space characters (NBSP, FIGURE SPACE, NARROW NO-BREAK SPACE),
 # but not the zero-width and other format characters - soft hyphen,
 # combining grapheme joiner, zero-width space/joiner/non-joiner, word
 # joiner, BOM - that real preheader padding is actually built from, so
 # those survive get_text(strip=True) as if they were real text.
 # content_ratio then scores a padding div as a substantial "line" no
-# PHRASES entry recognises, and _is_protected_heading's short-line
+# PHRASES entry recognizes, and _is_protected_heading's short-line
 # exception - built to spare a genuine short subtitle - protects it
 # outright, the same way it protects "So far, so good". Once
 # _strip_presentational_attrs removes the style="display:none" that hid

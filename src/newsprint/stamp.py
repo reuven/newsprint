@@ -25,11 +25,11 @@ from .pipeline import Built
 
 FONT = "helv"
 FONT_SIZE_PT = 6.0
-# #555555, the same grey render.py's old @bottom-center counter used.
+# #555555, the same gray render.py's old @bottom-center counter used.
 COLOR = (0x55 / 0xFF, 0x55 / 0xFF, 0x55 / 0xFF)
 SEGMENT_GAP_PT = 6.0
 # The gap before the packet cell number, which is deliberately much wider
-# than SEGMENT_GAP_PT. The counter ("10/13") used to sit centred in the
+# than SEGMENT_GAP_PT. The counter ("10/13") used to sit centered in the
 # cell, which wasted ~70pt of dead space to its right while the subject on
 # the left was being cut mid-word. Moving it right recovers that space,
 # but it then sits beside another number ("361 · 9 Sep 2026"), and two
@@ -222,7 +222,7 @@ def _draw_footer(
         counter, fontname=FONT, fontsize=FONT_SIZE_PT
     )
     right_x = cell_width_pt - margin_pt - right_width
-    # Right-aligned against the date rather than centred in the cell, so
+    # Right-aligned against the date rather than centered in the cell, so
     # every column the counter is not using goes to the subject. Clamped
     # at the left margin so a pathologically narrow cell degrades to
     # overlapping text rather than negative coordinates.

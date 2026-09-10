@@ -133,7 +133,7 @@ def fetch_unstarred(
     date correctly from those (body/html simply comes back empty, which
     the listing never reads). Most of what this returns will never be
     picked, so fetching full content for all of it here - the previous
-    behaviour, and the actual cost behind the ~17s unstarred scan - would
+    behavior, and the actual cost behind the ~17s unstarred scan - would
     make a large window slow for no reason; full content for whatever the
     user actually picks is fetched separately, only for those uids, by
     fetch_picked().

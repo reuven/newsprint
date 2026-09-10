@@ -30,7 +30,7 @@ The manual process fails in five specific ways. The design addresses each:
 - Circumventing hard paywalls. Sites where the user holds a subscription are
   fetched with that subscription's session; sites where they do not are
   fetched anonymously and may yield nothing.
-- Colour. The target printer is a monochrome laser.
+- Color. The target printer is a monochrome laser.
 
 ## Decisions
 
@@ -262,7 +262,7 @@ place for `trim.py`'s cell-level judgment to catch instead. See the note in
 the README about why an unsubscribe line may still appear on a printout.
 
 **Post-hoc, in `trim.py`.** The safety net, for chrome the stripper failed to
-recognise and therefore rendered inline.
+recognize and therefore rendered inline.
 
 The rule is about what the text *is*, never how much of it there is. A last
 cell holding 1,200 characters of pure link roundup should go; one holding 200
@@ -462,7 +462,7 @@ Resolved during implementation, not now:
 
 - The Trash folder's actual name on Rackspace. Discovered via the `\Trash`
   special-use attribute, with a config fallback.
-- Whether the Brother driver honours `print-scaling=none`. Verified with one
+- Whether the Brother driver honors `print-scaling=none`. Verified with one
   test sheet before trusting it.
 - Font family and size. 9pt on 1.35 line-height over A6's 87mm measure gives
   roughly 55 characters per line and 30 lines per cell, which is a reasonable

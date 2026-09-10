@@ -9,7 +9,7 @@ or two.
 word_count() measures what survives cleaning, so pipeline.py can compare it
 against config.packet.min_words and skip a document that is not worth a
 whole cell. A long headline must not be able to lift a teaser over the
-threshold by itself, so any line whose normalised text matches the subject
+threshold by itself, so any line whose normalized text matches the subject
 is excluded from the count - exactly the case that flagged this feature:
 David French's "Pete Hegseth Is a Wrecking Ball" is a 32-character headline
 that would otherwise inflate a near-empty cell into looking substantial.
@@ -35,14 +35,14 @@ def _normalize(text: str) -> str:
 
 
 def word_count(document: Document) -> int:
-    """Words in the cleaned body, excluding any line whose normalised text
+    """Words in the cleaned body, excluding any line whose normalized text
     equals the subject (Document.title).
 
     Each of BeautifulSoup's stripped_strings is one rendered text node -
     in the semantic HTML clean.py produces, that is a paragraph, heading,
     or list item, which is exactly the granularity "a line that echoes the
     subject" means: a genuine subtitle or byline that merely resembles the
-    subject is not an exact match once normalised, and still counts.
+    subject is not an exact match once normalized, and still counts.
     """
     soup = BeautifulSoup(document.html, "lxml")
     normalized_title = _normalize(document.title)

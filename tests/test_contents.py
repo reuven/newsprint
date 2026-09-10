@@ -48,7 +48,7 @@ def test_starting_cells_account_for_the_contents_own_length(
     assert result.cells == 1
     text = page_text(result.pdf, 0)
     # The header line ("2 newsletters · 7 cells") also starts with a digit,
-    # so match on the capitalised "Newsletter NN" row content specifically
+    # so match on the capitalized "Newsletter NN" row content specifically
     # rather than "starts with a digit" alone.
     starts = re.findall(r"^(\d+)\s+Newsletter", text, re.MULTILINE)
     assert starts == ["2", "5"]

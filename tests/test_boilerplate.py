@@ -886,6 +886,6 @@ def test_an_article_title_with_a_colon_is_not_a_masthead_credit(line: str) -> No
     ],
 )
 def test_a_section_lead_in_is_not_a_masthead_credit(line: str) -> None:
-    """Every word after the colon must be capitalised; each of these has a
+    """Every word after the colon must be capitalized; each of these has a
     lower-case word, which is what keeps a lead-in out."""
     assert not is_definite_chrome_line(line)

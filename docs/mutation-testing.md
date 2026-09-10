@@ -75,7 +75,7 @@ segfaults had been hiding. Any score taken without it is worthless.
   publication/author pairs never once decided anything
   `_shares_most_words` had not already decided.
 - **Equivalent mutants exist.** Prove it by running both branches over
-  real inputs and showing no behavioural difference - do not assume it.
+  real inputs and showing no behavioral difference - do not assume it.
 - String-literal mutations (`"PNG"` -> `"png"`, `"Content-Type"` ->
   `"CONTENT-TYPE"`) that survive are usually noise: the value is passed
   to a library that does not care.

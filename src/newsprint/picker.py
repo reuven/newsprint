@@ -132,7 +132,7 @@ def _registrable(host: str) -> str:
     Senders route mail through per-newsletter subdomains that name the
     mail stream, not the publication - the New York Times sends DealBook
     from dk.nytimes.com and The Morning from nn.nytimes.com. "nytimes.com"
-    is the part a reader recognises; "dk." and "nn." are noise. Taking the
+    is the part a reader recognizes; "dk." and "nn." are noise. Taking the
     last two labels gets that without a hand-maintained list of every
     prefix a sender might invent.
     """
@@ -171,7 +171,7 @@ def source_label(publication: str, source_host: str | None) -> str | None:
     TLD and any platform suffix removed, against the publication name.
     Either containing the other means the name already says it. This is
     deliberately not an attempt to detect whether a name is a person's:
-    measured against the archive, capitalisation and word-count rules
+    measured against the archive, capitalization and word-count rules
     classify "Axios Macro" and "The Economist" as people.
     """
     if not source_host:
@@ -412,10 +412,10 @@ def _truncate_to_width(text: str, max_width: int) -> str:
 def _heading_rule(publication: str, source: str | None, width: int) -> str:
     """`── PUBLICATION ──────...`, filled to `width` terminal columns.
 
-    Capitalised, with rule characters on both sides - unmistakably a
+    Capitalized, with rule characters on both sides - unmistakably a
     heading rather than a caption trailing the row above it, and legible
-    without relying on colour as the only cue (some users' terminal
-    themes make a dim colour hard to see - see picker-layout.md point 2).
+    without relying on color as the only cue (some users' terminal
+    themes make a dim color hard to see - see picker-layout.md point 2).
     """
     # The publication is upper-cased, the source is not: a host read as
     # "PUCK.NEWS" looks like shouting rather than an address.
