@@ -382,6 +382,8 @@ def test_an_image_cache_avoids_a_second_fetch_of_the_same_url(
     lets a caller (pipeline.build_one) share one dict across every
     render() call for one document, so a URL already fetched and
     processed is reused rather than fetched again."""
+    import pymupdf
+
     fetcher_calls = []
 
     def fake_fetcher(url: str) -> _FakeResponse:
@@ -396,14 +398,25 @@ def test_an_image_cache_avoids_a_second_fetch_of_the_same_url(
         url_fetcher=fake_fetcher,
         image_cache=cache,
     )
-    render(
+    failures: list[str] = []
+    second = render(
         _image_document(),
         config,
         out_dir=tmp_path / "two",
         url_fetcher=fake_fetcher,
         image_cache=cache,
+        image_fetch_failures=failures,
     )
     assert fetcher_calls == ["https://example.com/chart.png"]
+    # Not fetching again is only half of it: what was cached has to be the
+    # image. Caching the *failure* of a successful fetch would look
+    # identical here - one call, no second - while quietly dropping the
+    # chart from every compression retry after the first.
+    assert failures == []
+    with pymupdf.open(second) as opened:
+        assert opened[0].get_images(full=True), (
+            "the cached chart must still be embedded on the second render"
+        )
 
 
 def test_a_cached_failure_is_not_retried_but_is_still_reported(
@@ -504,3 +517,155 @@ def test_a_very_short_image_keeps_at_least_one_pixel_of_height() -> None:
     processed = _grayscale_and_cap(buffer.getvalue(), max_width_px=100)
     with Image.open(BytesIO(processed)) as result:
         assert (result.width, result.height) == (100, 1)
+
+
+# ---------------------------------------------------------------------------
+# Where a rendered PDF goes, and what it is called.
+# ---------------------------------------------------------------------------
+
+
+def test_the_filename_names_the_message_and_the_compression(config, tmp_path) -> None:
+    """trim.fit re-renders one document at several compressions and keeps
+    whichever fits, so the attempts have to be able to sit side by side
+    without one overwriting another. The name is a digest of the message's
+    own identifier - twelve hex characters of it, enough to separate a
+    morning's newsletters and short enough to read in a listing - and the
+    compression that produced it.
+    """
+    import hashlib
+
+    doc = document("<p>Hello</p>")
+    digest = hashlib.sha256(doc.origin.identifier.encode()).hexdigest()[:12]
+
+    loose = render(doc, config, out_dir=tmp_path)
+    tight = render(doc, config, compression=0.9, out_dir=tmp_path)
+
+    assert loose.name == f"{digest}-1.00.pdf"
+    assert tight.name == f"{digest}-0.90.pdf"
+    assert loose != tight, "two attempts at one document must not collide"
+
+
+def test_a_different_message_renders_to_a_different_file(config, tmp_path) -> None:
+    """Two newsletters in one packet, both at the same compression: the
+    identifier is the whole of what tells their files apart."""
+    first = document("<p>Hello</p>")
+    second = Document(
+        origin=Origin(kind="email", identifier="<other@example.com>"),
+        publication=first.publication,
+        title=first.title,
+        date=first.date,
+        html="<p>Hello</p>",
+    )
+    assert render(first, config, out_dir=tmp_path) != render(
+        second, config, out_dir=tmp_path
+    )
+
+
+def test_with_no_directory_given_the_pdf_lands_somewhere_temporary(config) -> None:
+    """out_dir is optional - a caller that only wants the bytes back need
+    not invent a home for them first."""
+    output = render(document("<p>Hello</p>"), config)
+    assert output.exists()
+    assert output.parent != Path.cwd()
+
+
+def test_a_downscaled_chart_is_resampled_with_lanczos(config) -> None:
+    """Pillow's default resampling for a downscale is bicubic, which
+    softens the one-pixel gridlines and hairline series a chart is mostly
+    made of. Lanczos is chosen deliberately, and at 200 dpi onto a cell
+    barely three inches wide almost every chart is downscaled, so the
+    choice applies to nearly all of them."""
+    from newsprint.render import _grayscale_and_cap
+
+    source = Image.new("L", (400, 120), color=255)
+    for x in range(0, 400, 8):  # hairline gridlines, one pixel wide
+        for y in range(120):
+            source.putpixel((x, y), 0)
+    buffer = BytesIO()
+    source.save(buffer, format="PNG")
+
+    processed = _grayscale_and_cap(buffer.getvalue(), 100)
+
+    def resampled(filter_: Image.Resampling | None) -> bytes:
+        out = BytesIO()
+        if filter_ is None:
+            source.resize((100, 30)).save(out, format="PNG")
+        else:
+            source.resize((100, 30), filter_).save(out, format="PNG")
+        return out.getvalue()
+
+    assert processed == resampled(Image.Resampling.LANCZOS)
+    assert processed != resampled(None), "the default would have been bicubic"
+
+
+def test_the_default_compression_leaves_the_line_height_alone(config) -> None:
+    """Compression is a multiplier on the configured line height, and 1.0
+    is the identity - the first attempt at a document renders it exactly
+    as the config asks, and only a retry squeezes it."""
+    from newsprint.render import _build_html
+
+    html = _build_html(document(PROSE), config)
+    assert f"line-height: {config.layout.line_height:.4f}" in html
+
+
+def test_an_undecodable_image_is_cached_as_a_failure_too(config, tmp_path) -> None:
+    """A dead CDN returning an error page instead of an image costs a
+    fetch and a decode attempt, and both are wasted a second time on every
+    compression retry. The failure is remembered the same way a network
+    failure is - and each render still reports it, since each reports its
+    own outcome."""
+    fetcher_calls = []
+
+    def bad_fetcher(url: str) -> _FakeResponse:
+        fetcher_calls.append(url)
+        return _FakeResponse(b"not actually an image")
+
+    cache: dict[str, bytes | None] = {}
+    failures_one: list[str] = []
+    failures_two: list[str] = []
+    render(
+        _image_document(),
+        config,
+        out_dir=tmp_path / "one",
+        url_fetcher=bad_fetcher,
+        image_cache=cache,
+        image_fetch_failures=failures_one,
+    )
+    render(
+        _image_document(),
+        config,
+        out_dir=tmp_path / "two",
+        url_fetcher=bad_fetcher,
+        image_cache=cache,
+        image_fetch_failures=failures_two,
+    )
+    assert fetcher_calls == ["https://example.com/chart.png"], "not fetched again"
+    assert failures_one == ["https://example.com/chart.png"]
+    assert failures_two == ["https://example.com/chart.png"]
+
+
+def test_the_default_image_fetcher_is_given_a_timeout(config, tmp_path) -> None:
+    """Nothing in a print run is worth waiting on an unresponsive host
+    for: a newsletter with a dead chart still has to reach the printer.
+    The timeout is on the fetcher render() builds when the caller gives it
+    none, which is every real run."""
+    import newsprint.render as render_module
+    from newsprint.render import _IMAGE_FETCH_TIMEOUT_S
+
+    built: list[float | None] = []
+
+    class SpyFetcher:
+        def __init__(self, timeout: float | None = None) -> None:
+            built.append(timeout)
+
+        def __call__(self, url: str) -> object:
+            raise TimeoutError("never reached")
+
+    original = render_module.URLFetcher
+    render_module.URLFetcher = SpyFetcher  # type: ignore[misc]
+    try:
+        render(document("<p>No images here at all.</p>"), config, out_dir=tmp_path)
+    finally:
+        render_module.URLFetcher = original  # type: ignore[misc]
+    assert built == [_IMAGE_FETCH_TIMEOUT_S]
+    assert _IMAGE_FETCH_TIMEOUT_S > 0
