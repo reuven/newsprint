@@ -95,7 +95,9 @@ def test_letter_paper_gives_letter_sheets(tmp_path: Path) -> None:
 
 
 def test_imposing_nothing_is_an_error(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="nothing to impose"):
+    # Anchored: pytest's match= is a search, so an unanchored pattern
+    # still matches a message that has grown a prefix or a tail.
+    with pytest.raises(ValueError, match=r"^nothing to impose$"):
         impose([], A4, tmp_path / "sheets.pdf")
 
 
