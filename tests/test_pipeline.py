@@ -255,3 +255,95 @@ def test_the_rerender_callback_reaches_render_fn_with_the_same_document(
     assert len(built) == 1
     assert calls == [(0.99, "<rerender@x>")]
     assert isinstance(built[0].pdf, _Path)
+
+
+def test_each_document_is_built_under_its_own_numbered_directory(
+    config, tmp_path: Path
+) -> None:
+    """Every document gets a directory of its own, numbered by its place
+    in the packet. Two messages can carry the same identifier - bulk mail
+    with no Message-ID falls back to the sender address - and render()
+    names its file from that, so without the number one would overwrite
+    the other. Letting the files land somewhere temporary instead would
+    hide that just as well, and lose the run's own working directory with
+    it."""
+    built, failed = build(
+        [
+            document(LONG_PROSE, "<same@example.com>"),
+            document(LONG_PROSE, "<same@example.com>"),
+        ],
+        config,
+        tmp_path,
+    )
+    assert failed == []
+    assert [item.pdf.parent for item in built] == [tmp_path / "000", tmp_path / "001"]
+
+
+def test_a_rerender_reuses_the_first_attempts_cache_and_failure_list(
+    monkeypatch, config, tmp_path: Path
+) -> None:
+    """The compression retry is the whole reason the cache and the shared
+    failure list exist, and it is the one call that never took them: the
+    cache test makes a single render, so only the first call's wiring was
+    ever checked. A retry that starts with an empty cache re-fetches every
+    chart, which is what the live measurement found - 61 requests for 35
+    images."""
+    from newsprint.models import Verdict
+
+    seen: list[tuple[int | None, int | None]] = []
+    directories: list[Path | None] = []
+
+    def _recording_render(document, config, out_dir=None, **kwargs):
+        cache = kwargs.get("image_cache")
+        failures = kwargs.get("image_fetch_failures")
+        seen.append(
+            (
+                id(cache) if cache is not None else None,
+                id(failures) if failures is not None else None,
+            )
+        )
+        directories.append(out_dir)
+        from newsprint.render import render as real_render
+
+        return real_render(document, config, out_dir=out_dir)
+
+    def _fit_that_rerenders(pdf, paper, layout, rerender):
+        rerender(0.99)
+        return pdf, Verdict.FULL
+
+    monkeypatch.setattr("newsprint.pipeline.fit", _fit_that_rerenders)
+    _built, failed = build(
+        [document(LONG_PROSE, "<retry@x>")],
+        config,
+        tmp_path,
+        render_fn=_recording_render,
+    )
+    assert failed == []
+    assert len(seen) == 2, "one first attempt and one retry"
+    assert None not in seen[1], "the retry must be given both, not neither"
+    assert seen[0] == seen[1], "and the very same two objects"
+    # And it writes beside the first attempt, so trim.fit can choose
+    # between them rather than hunting through a temporary directory.
+    assert directories == [tmp_path / "000", tmp_path / "000"]
+
+
+def test_a_build_failure_says_what_went_wrong(config, tmp_path: Path) -> None:
+    """The CLI prints "SKIPPED <publication>: <error>" for a document that
+    could not be built, and that line is the whole of what the reader is
+    told about a newsletter missing from the packet - so the error has to
+    say something. The teaser case reports its own counts, which the CLI
+    formats itself, but they belong in the message too for anyone reading
+    a traceback or a log."""
+    from newsprint.pipeline import EmptyDocumentError, TeaserSkippedError
+
+    _built, failed = build([document("")], config, tmp_path)
+    assert isinstance(failed[0].error, EmptyDocumentError)
+    assert str(failed[0].error) == "Test Weekly: nothing left after cleaning"
+
+    teaser = document("<h1>An Issue</h1><p>Read more online.</p>", "<t@x>")
+    _built, failed = build([teaser], config, tmp_path)
+    error = failed[0].error
+    assert isinstance(error, TeaserSkippedError)
+    assert str(error) == (
+        f"{error.word_count} words, below the {error.min_words}-word threshold"
+    )
