@@ -124,3 +124,35 @@ def test_readers_are_closed_after_writing(
 
     assert created
     assert all(reader.stream.closed for reader in created)
+
+
+def test_each_cell_lands_at_its_exact_offset(tmp_path: Path) -> None:
+    """Which quadrant a cell falls in is a coarse measure - it survives a
+    cell being off by a point, or by a millimetre, in any direction. What
+    the fold and the guillotine care about is the offset itself, so this
+    reads the four back off the sheet exactly.
+
+    Every cell carries its label at the same place within itself, so the
+    label's position on the sheet is that place plus the cell's own
+    origin, and nothing else.
+    """
+    cells = numbered_cells(tmp_path / "cells.pdf", 4)
+    out = tmp_path / "sheets.pdf"
+    impose([cells], A4, out)
+
+    cell_width, cell_height = A4.cell.as_points()
+    with pymupdf.open(out) as sheets:
+        sheet = sheets[0]
+        found = {n: sheet.search_for(f"PAGE {n}")[0] for n in range(1, 5)}
+
+    # Reading order: top-left, top-right, bottom-left, bottom-right.
+    within_x, within_y = found[1].x0, found[1].y0
+    expected = {
+        1: (within_x, within_y),
+        2: (within_x + cell_width, within_y),
+        3: (within_x, within_y + cell_height),
+        4: (within_x + cell_width, within_y + cell_height),
+    }
+    for number, (x, y) in expected.items():
+        assert found[number].x0 == pytest.approx(x, abs=0.01), f"cell {number} across"
+        assert found[number].y0 == pytest.approx(y, abs=0.01), f"cell {number} down"
