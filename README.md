@@ -47,6 +47,59 @@ See `config.example.toml` for the full set of options, including a note on
 what Gmail specifically needs (an app password, and a folder path that isn't
 `INBOX/toprint`).
 
+## Choosing what to print
+
+Star the messages you want, then run the tool. That is the whole workflow,
+and it is not specific to any mail client: the tool never talks to your mail
+program at all. It connects to your IMAP server and asks it for
+
+```
+UID SEARCH FLAGGED
+```
+
+`\Flagged` is a system flag defined by IMAP itself (RFC 3501), so whatever
+you use to star a message — Thunderbird's star, Apple Mail's flag, Outlook's
+follow-up flag, Gmail's star, your phone — is setting the same server-side
+bit that this reads back. Star from anywhere; run this from your desktop.
+
+Two things select a message: the **folder** narrows, the **star** picks. The
+tool selects one mailbox (`mail.folder`) and searches for flagged messages
+inside it. A mail rule that files newsletters into that folder as they
+arrive, and a star on the ones you actually want this week, is the intended
+shape.
+
+Anything in that folder you did *not* star is offered to you at run time, in
+a checklist, so a newsletter you forgot to star is one keypress away rather
+than a lost cause.
+
+### Gmail
+
+Gmail has no folders, only labels — but a label is exactly what IMAP shows
+as a mailbox, so the workflow maps over cleanly:
+
+| Other clients | Gmail |
+| --- | --- |
+| A rule moves newsletters into a `toprint` folder | A filter applies a `toprint` label |
+| `folder = "INBOX/toprint"` | `folder = "toprint"` — a label is a top-level mailbox, not nested under INBOX |
+| Star the ones to print | Star the ones to print |
+
+You can also skip the label and set `folder = "INBOX"`, relying on stars
+alone. That is less setup, but the "what else arrived this week" checklist
+then offers your whole inbox rather than just newsletters.
+
+Gmail also needs an app password rather than your account password; see
+`config.example.toml`, which covers both points.
+
+Two Gmail details worth checking on your first run, with `--no-retire` so
+nothing is modified:
+
+- **Superstars.** Gmail can show several star colours. They are widely
+  reported to all map to the one `\Flagged` bit over IMAP, so "only red
+  stars" is unlikely to survive the protocol — confirm before relying on it.
+- **Retiring.** Messages are unstarred, marked read, and moved to the
+  server's `\Trash` mailbox, which on Gmail is `[Gmail]/Trash`. That
+  discovery is automatic, but worth watching once.
+
 ## Usage
 
 ```
@@ -61,6 +114,13 @@ Preview for a look, and asks before printing. Useful flags:
 - `--no-retire` — print for real, but leave mail untouched (the messages
   stay starred and will be reprinted next run). Useful for checking that a
   real printout looks right without consuming the print queue.
+- `--output PATH` — write the finished PDF somewhere you can find it
+  instead of a temp directory. An existing directory gets a dated file
+  inside it (`shabbat-2026-09-11.pdf`).
+- `--no-print` — build the PDF but do not send it to a printer; print it
+  yourself from the file. Still offers to retire the mail, after asking
+  whether the printing actually worked. `--no-print --output ~/reading/` is
+  a complete workflow on a machine with no printer configured at all.
 - `--no-preview` — skip opening the PDF in Preview.
 - `--paper a4` / `--paper letter` — override the configured paper size for
   one run.
