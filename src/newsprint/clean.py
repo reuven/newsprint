@@ -358,8 +358,18 @@ def _figure_placeholder_text(image: Tag, publication: str) -> str | None:
     dominated by decorative illustration alt text ("Illustration of a
     burger with star-shaped pickles") and machine-generated captions
     ("Image may contain: Logo, Symbol, and Electronics") - clutter, not
-    signal. This rule was measured at roughly 0.2 per newsletter instead:
-    rare enough that a placeholder appearing means something.
+    signal.
+
+    This rule is far rarer, and rarer than an earlier note here claimed
+    ("roughly 0.2 per newsletter"). Re-measured: 9 placeholders across 250
+    messages sampled from the live archive (0.04 per newsletter), and 1
+    across the 268-message fixture corpus. That is calibration rather than
+    decay - of the 292 fixture images that are wide enough and carry alt
+    text at all, 250 are rejected for having no data word in the alt, and
+    reading them confirms the rejections are right ("The Conflict Playbook
+    on MasterClass", "Ad", the publication's own name). The scarce
+    ingredient is a real chart whose author wrote a descriptive alt text,
+    which is simply not something most newsletters do.
 
     Two further exclusions - self-described illustrations
     (_ILLUSTRATION_ALT) and bare generic labels (_BARE_GENERIC_ALT) - were
