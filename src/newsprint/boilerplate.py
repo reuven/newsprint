@@ -178,9 +178,43 @@ PHRASES: tuple[str, ...] = (
     # lines runs past SHORT_LINE, so it read as a sentence and blocked the
     # trailing chrome run.
     "reach our team at",
+    # Round 7 (the user's Bloomberg/Puck/Bulwark/DealBook report). All
+    # scoring-only substrings: each of these lines runs past SHORT_LINE, so
+    # it read as a sentence and held the trailing chrome run open.
+    "sponsor this newsletter",
+    "getting this newsletter?",
+    "on the bloomberg terminal",
+    "email and payment preferences",
+    "visit our faq",
+    "review our faq",
+    "for brand partnerships",
+    "email thoughts and suggestions",
+    "your account page",
     "new york times app",
     "nyt cooking app",
 )
+
+# A masthead credit in the other shape newsletters use: a name, then
+# comma-separated role and place, ending in a social handle - "Andrew Ross
+# Sorkin, Founder/Editor-at-Large, New York @andrewrsorkin". DealBook signs
+# off with seven of them. The colon form is _MASTHEAD_CREDIT above; this one
+# has no colon at all, and is recognised by the trailing handle plus the
+# comma-separated title-case run before it.
+# Only the first word must be capitalised: "Michael J. de la Merced" has
+# lower-case particles in the middle, and requiring every word to be
+# capitalised silently skipped him while catching his six colleagues. The
+# trailing handle plus the comma-separated segments carry the signal.
+_HANDLE_CREDIT = re.compile(
+    r"^[A-Z][\w.'\u2019-]*(?:\s+[\w.'\u2019/-]+)*"
+    r"(?:\s*,\s*[^,@]{2,40})+\s+@\w{2,30}$"
+)
+
+# A line that is a postal address's tail - "... New York, NY, 10022".
+# Scoring only, never a deletion rule: widening _ADDRESS_LINE to match a
+# company-prefixed address was measured to destroy an entire newsletter
+# (see its own comment), because that match fires against the raw document
+# where it can carry a whole enclosing element away.
+_ADDRESS_TAIL = re.compile(r",\s*[A-Z]{2},?\s+\d{5}(?:-\d{4})?\.?$")
 
 _URL_ONLY = re.compile(r"^(https?://\S+|www\.\S+)$", re.IGNORECASE)
 
@@ -229,7 +263,12 @@ def _is_masthead_credit(line: str) -> bool:
 # short brand name so it cannot match a real sentence beginning "Follow".
 _FOLLOW_ACROSS_LINE = re.compile(
     r"^follow\s+(?:us|[\w'.\u2019-]+(?:\s+[\w'.\u2019-]+){0,2})"
-    r"\s+(?:across|on)\s*:?$",
+    r"\s+(?:across|on)"
+    # An optional platform and handle: "Follow DealBook on Instagram:
+    # @nytdealbook" as well as the bare "Follow Axios across:". Bounded to
+    # one platform word and one handle, so a sentence that merely starts
+    # "Follow the money on Wall Street and..." keeps going and cannot match.
+    r"(?:\s+[A-Za-z]{2,15})?\s*:?\s*(?:@\s*\w{0,30})?$",
     re.IGNORECASE,
 )
 _SENTENCE_END = (".", "!", "?", '"', "'", ")", ":", "”", "’")
@@ -277,6 +316,10 @@ def is_definite_chrome_line(line: str) -> bool:
     if _URL_ONLY.match(stripped):
         return True
     if _is_masthead_credit(stripped):
+        return True
+    if _HANDLE_CREDIT.match(stripped):
+        return True
+    if _ADDRESS_TAIL.search(stripped):
         return True
     return bool(_ADDRESS_LINE.fullmatch(stripped))
 

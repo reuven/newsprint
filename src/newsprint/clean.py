@@ -473,6 +473,47 @@ def _strip_images(root: Tag, publication: str) -> tuple[int, tuple[DroppedImage,
     return kept, tuple(dropped)
 
 
+# An author's sign-off: the last thing they wrote, and the first thing the
+# trailing chrome run reaches once the boilerplate behind it is gone. It
+# scores as chrome under the short-line fallback ("Have a great weekend,"
+# is short and ends in a comma, not a full stop), so nothing else stops
+# the walk - and losing it reads as the newsletter being cut off
+# mid-thought. boilerplate.py's PHRASES comment names this exact case as a
+# known risk; this is the guard for it.
+#
+# The short closers require their trailing comma, so the word "best" in a
+# sentence cannot match.
+_VALEDICTION = re.compile(
+    r"^(?:"
+    r"have a (?:great|good|lovely|nice|wonderful)\b.*"
+    r"|see you (?:next|tomorrow|soon|then)\b.*"
+    r"|until (?:next|then)\b.*"
+    r"|talk soon[,.!]?"
+    # "Thanks for reading! We\u2019ll see you tomorrow." is DealBook signing
+    # off. The see-you clause is required: Axios's bare "Thanks for
+    # reading! Please invite your friends to join AM." is chrome, and
+    # protecting that would hold the trailing run open on every issue.
+    r"|thanks for reading[!.]?\s*(?:we[\u2019']ll\s+)?see you\b.*"
+    r"|(?:best|warmly|cheers|regards|sincerely|yours truly|all the best)[,.]"
+    r")$",
+    re.IGNORECASE,
+)
+
+
+def _is_signoff(text: str) -> bool:
+    """True when `text` reads as an author's valediction.
+
+    At most two lines, because that is the shape one has: the closing
+    phrase and the name under it ("Have a great weekend, / Jon"). A
+    paragraph that merely opens with those words is prose, not a sign-off,
+    and keeps going for far longer than two lines.
+    """
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    if not lines or len(lines) > 2:
+        return False
+    return bool(_VALEDICTION.match(lines[0]))
+
+
 def _is_protected_heading(block: Tag, text: str) -> bool:
     """A block spared from ratio-based removal even though it may score as
     chrome under content_ratio.
@@ -567,7 +608,10 @@ def _strip_chrome_blocks(root: Tag) -> tuple[DroppedBlock, ...]:
                 continue
             block.decompose()
             continue
-        if _is_protected_heading(block, text):
+        # A sign-off is spared here as well as in the trailing run: this
+        # pass runs after it, so guarding only the walk left the
+        # valediction to be removed a moment later by the block sweep.
+        if _is_protected_heading(block, text) or _is_signoff(text):
             continue
         if content_ratio(text) < CHROME_RATIO:
             dropped.append(DroppedBlock(text=text))
@@ -629,7 +673,11 @@ def _strip_trailing_chrome_run(root: Tag) -> tuple[DroppedBlock, ...]:
     removed: list[tuple[Tag, str]] = []
     for leaf in reversed(leaves):
         text = "\n".join(_rendered_lines(leaf))
-        if _is_protected_heading(leaf, text) or content_ratio(text) >= CHROME_RATIO:
+        if (
+            _is_protected_heading(leaf, text)
+            or _is_signoff(text)
+            or content_ratio(text) >= CHROME_RATIO
+        ):
             break
         removed.append((leaf, text))
     else:
