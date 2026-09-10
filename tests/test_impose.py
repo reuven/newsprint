@@ -20,12 +20,12 @@ def numbered_cells(path: Path, count: int, paper: Paper = A4) -> Path:
 
 
 def quadrant_of(sheet: pymupdf.Page, label: str) -> tuple[str, str]:
-    """Which quadrant of the sheet a label's centre falls in."""
+    """Which quadrant of the sheet a label's center falls in."""
     rects = sheet.search_for(label)
     assert rects, f"{label} not found on this sheet"
-    centre = rects[0].tl
-    vertical = "top" if centre.y < sheet.rect.height / 2 else "bottom"
-    horizontal = "left" if centre.x < sheet.rect.width / 2 else "right"
+    center = rects[0].tl
+    vertical = "top" if center.y < sheet.rect.height / 2 else "bottom"
+    horizontal = "left" if center.x < sheet.rect.width / 2 else "right"
     return vertical, horizontal
 
 

@@ -1100,7 +1100,7 @@ def test_fetch_queue_skips_trash_lookup_when_nothing_is_flagged(
     assert trash is None
 
 
-def test_fetch_queue_honours_a_configured_literal_trash_folder(
+def test_fetch_queue_honors_a_configured_literal_trash_folder(
     monkeypatch, tmp_path: Path
 ) -> None:
     """config.mail.trash was declared, advertised in config.example.toml,
@@ -1182,7 +1182,7 @@ def test_fetch_queue_uses_the_configured_trash_folder_without_discovering(
     assert "Using configured Trash folder: Configured-Trash" in output
 
 
-def test_fetch_queue_progress_bar_leaves_no_artefacts_when_not_a_tty(
+def test_fetch_queue_progress_bar_leaves_no_artifacts_when_not_a_tty(
     monkeypatch, mail_config, capsys
 ) -> None:
     """click.progressbar over a chunked fetch must hide itself the same
@@ -1191,7 +1191,7 @@ def test_fetch_queue_progress_bar_leaves_no_artefacts_when_not_a_tty(
     Mailbox.FETCH_CHUNK_SIZE uids - every ordinary run - there is no bar
     at all (see cli._fetch_documents), so this asserts the more general
     property: whatever fetch_queue prints, it never contains bar
-    artefacts."""
+    artifacts."""
     _FakeBox.instances.clear()
     monkeypatch.setattr("newsprint.cli.Mailbox", _FakeBox)
     monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
@@ -1511,7 +1511,7 @@ def test_preview_falls_back_to_xdg_open_when_open_is_missing(
     assert attempted[1][0] == "xdg-open"
 
 
-def test_the_progress_bar_leaves_no_artefacts_in_captured_output(
+def test_the_progress_bar_leaves_no_artifacts_in_captured_output(
     monkeypatch, tmp_path: Path
 ) -> None:
     """click.progressbar hides its bar rendering when the output is not a
