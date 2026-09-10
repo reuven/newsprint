@@ -312,6 +312,23 @@ a filler page, not `clean.py`'s removal.
 
 ## Development
 
+The test suite runs on a clone with no extra setup, and reaches 100%
+statement and branch coverage there:
+
+```
+uv sync
+uv run pytest --cov=newsprint --cov-branch --cov-fail-under=100
+```
+
+A few tests need `tests/fixtures/` — a local archive of real newsletters,
+built by `make fixtures` from the author's own mail. That directory is
+gitignored, because it is other people's copyrighted writing and not the
+author's to redistribute. Those tests assert corpus-wide properties ("no
+real newsletter loses a headline to this rule") and skip cleanly when the
+archive is absent; every line and branch they cover also has a unit test,
+so the coverage guarantee does not depend on having them.
+
+
 Rendering newsletters to PDF uses [WeasyPrint](https://weasyprint.org/), which
 depends on Pango, Cairo, and gdk-pixbuf. On macOS, install them with Homebrew:
 

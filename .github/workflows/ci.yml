@@ -65,14 +65,14 @@ jobs:
       - name: Types
         run: uv run mypy src
 
-      # --cov-fail-under is 98, not 100, and that is not slack: the suite
-      # reaches 100% only with tests/fixtures/, a local archive of the
-      # author's own newsletters that is gitignored (it is other people's
-      # copyrighted mail). Without it four corpus tests skip and coverage
-      # lands at 99%. 98 still catches a real regression; restoring the
-      # 100% guarantee here needs a redistributable fixture set.
+      # 100%, and reachable here: the corpus tests that need
+      # tests/fixtures/ - a local archive of the author's own newsletters,
+      # gitignored because it is other people's copyrighted mail - skip
+      # cleanly, and every line and branch they used to be the only cover
+      # for now has a unit test of its own. A contributor gets the same
+      # guarantee the author does.
       - name: Tests
         run: >
           uv run pytest -q
           --cov=newsprint --cov-branch --cov-report=term-missing
-          --cov-fail-under=98
+          --cov-fail-under=100

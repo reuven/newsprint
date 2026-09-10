@@ -479,3 +479,33 @@ def test_a_subject_with_an_encoded_leading_space_is_stripped() -> None:
         "<p>x</p>",
     )
     assert extract(encoded).title == "Leading encoded"
+
+
+def test_a_message_with_no_list_id_falls_through_to_the_address() -> None:
+    """Plenty of newsletters carry no List-Id at all; the resolution order
+    then reaches the From display name, or the domain behind it."""
+    raw = message(
+        "From: Axios Macro <noreply@axios.com>\n"
+        "Subject: New trade stakes\n"
+        "Date: Mon, 8 Sep 2026 09:00:00 +0000\n"
+        'Content-Type: text/html; charset="utf-8"',
+        "<html><body><p>Hello.</p></body></html>",
+    )
+    document = extract(raw)
+    assert document.publication == "Axios Macro"
+    assert document.source_host == "axios.com"
+
+
+def test_a_list_id_with_no_label_falls_through_to_the_address() -> None:
+    """RFC 2919 allows a List-Id that is only a host - "<x.example.com>"
+    with no descriptive part - which names the list to a mail system and
+    nobody else."""
+    raw = message(
+        "From: Someone <someone@example.com>\n"
+        "Subject: An issue\n"
+        "Date: Mon, 8 Sep 2026 09:00:00 +0000\n"
+        "List-Id: <bare.example.com>\n"
+        'Content-Type: text/html; charset="utf-8"',
+        "<html><body><p>Hello.</p></body></html>",
+    )
+    assert extract(raw).publication == "Someone"
