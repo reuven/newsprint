@@ -80,6 +80,48 @@ segfaults had been hiding. Any score taken without it is worthless.
   `"CONTENT-TYPE"`) that survive are usually noise: the value is passed
   to a library that does not care.
 
+## The September 2026 sweep
+
+Every module was run at least once, and the survivors triaged. The counts
+below are before and after; the modules at zero had every survivor killed.
+
+| module | before | after |
+|---|---|---|
+| clean.py | 147 | 27 |
+| cli.py | 145 | ~85 |
+| mail.py | 56 | 8 |
+| extract.py | 50 | 26 |
+| render.py | 30 | 13 |
+| contents.py | 27 | 14 |
+| stamp.py | 27 | 7 |
+| summarize.py | 92 | triaged in part |
+| setup.py | 87 | triaged in part |
+| runlog.py | 23 | 18 |
+| pipeline.py | 15 | 0 |
+| printer.py | 15 | 8 |
+| picker.py | 11 | 5 |
+| trim.py | 7 | 2 |
+| impose.py | 5 | 0 |
+| boilerplate.py | 3 | 0 |
+
+Two rules of thumb came out of it.
+
+**Redundant defenses hide each other.** Most of clean.py's survivors had
+one cause: several passes each remove chrome, and every fixture put chrome
+where two or three of them would catch it. Any one pass could be deleted
+outright with the suite still green. The fixtures that fix this are the
+ones only a single pass can reach.
+
+**A stub that answers OK to everything tests nothing.** mail.py's fake
+IMAP server accepted any UID command without looking at its arguments, and
+the assertions kept only the verbs - so the uid, the mailbox, and the flag
+being set were all invisible on the path that deletes mail.
+
+What was *not* worth pinning: the exact wording of a prompt or an error,
+where the words are the thing most likely to be improved later. Where such
+a message is load-bearing - the two that explain why a run stopped - it is
+asserted whole; otherwise what the message *does* is tested instead.
+
 ## Equivalent mutants
 
 Some survivors cannot be killed, because the edit does not change what the
