@@ -978,12 +978,31 @@ def _uid_commands(fake: FakeIMAP) -> list[str]:
     return [call[1] for call in fake.calls if call[0] == "uid"]
 
 
+def _uid_calls(fake: FakeIMAP) -> list[tuple[object, ...]]:
+    """Every UID command with its arguments.
+
+    _uid_commands above keeps only the verb, which is enough to say what
+    order things happened in but says nothing about which message they
+    happened to. On the copy-and-delete path that is the whole of what
+    matters: a \\Deleted flag or an EXPUNGE naming the wrong uid takes a
+    newsletter the reader has not read yet, and no verb-only check would
+    see it.
+    """
+    return [call[1:] for call in fake.calls if call[0] == "uid"]
+
+
 def test_a_server_without_move_copies_marks_deleted_and_expunges() -> None:
     fake = NoMoveIMAP("h")
     with mailbox(fake) as box:
         result = box.retire([7], "INBOX/Trash")
     assert result.retired == (7,)
-    assert _uid_commands(fake) == ["STORE", "STORE", "COPY", "STORE", "EXPUNGE"]
+    assert _uid_calls(fake) == [
+        ("STORE", "7", "+FLAGS", "(\\Seen)"),
+        ("STORE", "7", "-FLAGS", "(\\Flagged)"),
+        ("COPY", "7", '"INBOX/Trash"'),
+        ("STORE", "7", "+FLAGS", "(\\Deleted)"),
+        ("EXPUNGE", "7"),
+    ]
 
 
 def test_without_uidplus_the_message_is_flagged_but_never_expunged() -> None:
@@ -994,9 +1013,12 @@ def test_without_uidplus_the_message_is_flagged_but_never_expunged() -> None:
     with mailbox(fake) as box:
         result = box.retire([7], "INBOX/Trash")
     assert result.retired == (7,)
-    commands = _uid_commands(fake)
-    assert commands == ["STORE", "STORE", "COPY", "STORE"]
-    assert "EXPUNGE" not in commands
+    assert _uid_calls(fake) == [
+        ("STORE", "7", "+FLAGS", "(\\Seen)"),
+        ("STORE", "7", "-FLAGS", "(\\Flagged)"),
+        ("COPY", "7", '"INBOX/Trash"'),
+        ("STORE", "7", "+FLAGS", "(\\Deleted)"),
+    ]
 
 
 def test_a_server_with_move_still_uses_it() -> None:
@@ -1213,8 +1235,19 @@ def test_unretire_restars_before_moving_back() -> None:
     assert fake.flagged == ["91", "92"]
     # The target is quoted, as any mailbox name handed to MOVE must be.
     assert fake.moved == [("91", '"INBOX/toprint"'), ("92", '"INBOX/toprint"')]
-    store_before_move = [c[1] for c in fake.calls if c[0] == "uid"]
-    assert store_before_move.index("STORE") < store_before_move.index("MOVE")
+    # Every argument, not just the verbs: a STORE that names the wrong
+    # flag item, or the wrong uid, puts the star on the wrong message or
+    # on nothing at all, and a verb-only check sees neither.
+    assert _uid_calls(fake) == [
+        ("SEARCH", None, 'HEADER Message-ID "<a@x>"'),
+        ("STORE", "91", "+FLAGS", "(\\Flagged)"),
+        ("MOVE", "91", '"INBOX/toprint"'),
+        ("SEARCH", None, 'HEADER Message-ID "<b@x>"'),
+        ("STORE", "92", "+FLAGS", "(\\Flagged)"),
+        ("MOVE", "92", '"INBOX/toprint"'),
+    ]
+    # And the trash has to be opened writable, or none of it can happen.
+    assert ("select", '"INBOX/Trash"', False) in fake.calls
 
 
 def test_unretire_reports_messages_the_trash_no_longer_holds() -> None:
@@ -1222,7 +1255,9 @@ def test_unretire_reports_messages_the_trash_no_longer_holds() -> None:
     restore, and the run log cannot help."""
     fake = TrashIMAP("h")
     with mailbox(fake) as box:
-        result = box.unretire(["<a@x>", "<gone@x>"], "INBOX/Trash")
+        # The missing one first: a message the trash no longer holds is a
+        # reason to go on to the next, never to abandon the rest.
+        result = box.unretire(["<gone@x>", "<a@x>"], "INBOX/Trash")
     assert result.restored == ("<a@x>",)
     assert result.missing == ("<gone@x>",)
 
@@ -1237,8 +1272,10 @@ def test_unretire_reports_a_move_that_fails() -> None:
 
     fake = StuckIMAP("h")
     with mailbox(fake) as box:
-        result = box.unretire(["<a@x>"], "INBOX/Trash")
-    assert result.failed == ("<a@x>",) and result.restored == ()
+        # And a move that fails is likewise no reason to stop: the second
+        # message here is refused too, so both must be reported.
+        result = box.unretire(["<a@x>", "<b@x>"], "INBOX/Trash")
+    assert result.failed == ("<a@x>", "<b@x>") and result.restored == ()
 
 
 def test_unretire_with_nothing_to_do_touches_no_mail() -> None:
@@ -1286,3 +1323,38 @@ def test_folders_raises_when_the_server_refuses_to_list() -> None:
         mailbox(FailingIMAP("h")) as box,
     ):
         box.folders()
+
+
+def test_unretire_treats_an_empty_search_answer_as_missing() -> None:
+    """Servers differ in how they say "nothing matched": some answer OK
+    with a single empty line, some with no lines at all, and a server
+    under strain can answer NO outright. None of the three is a uid, and
+    reading one as though it were would restar and move whatever came
+    back first.
+    """
+
+    class TerseIMAP(TrashIMAP):
+        """OK, and no data lines whatsoever."""
+
+        def uid(self, command: str, *args):
+            if command == "SEARCH":
+                self.calls.append(("uid", command, *args))
+                return ("OK", [])
+            return super().uid(command, *args)
+
+    class RefusingIMAP(TrashIMAP):
+        """NO, with a uid in the data - which must still not be used."""
+
+        def uid(self, command: str, *args):
+            if command == "SEARCH":
+                self.calls.append(("uid", command, *args))
+                return ("NO", [b"91"])
+            return super().uid(command, *args)
+
+    for server in (TerseIMAP("h"), RefusingIMAP("h")):
+        with mailbox(server) as box:
+            result = box.unretire(["<a@x>"], "INBOX/Trash")
+        assert result.missing == ("<a@x>",), f"{type(server).__name__} misread"
+        assert result.restored == ()
+        assert server.flagged == [], "nothing may be starred on a failed search"
+        assert server.moved == []
