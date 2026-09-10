@@ -3,7 +3,13 @@ from datetime import date
 
 import pytest
 
-from newsprint.mail import FETCH_CHUNK_SIZE, Mailbox, MailError, password_for
+from newsprint.mail import (
+    FETCH_CHUNK_SIZE,
+    Mailbox,
+    MailError,
+    UnretireResult,
+    password_for,
+)
 
 RAW = b"From: someone@example.com\r\nSubject: Hello\r\n\r\nBody.\r\n"
 
@@ -1166,3 +1172,93 @@ def test_a_list_with_no_delimiter_anywhere_gives_up() -> None:
         mailbox(NoDelimiterIMAP("h")),
     ):
         pass
+
+
+class TrashIMAP(FakeIMAP):
+    """A server holding retired messages in the trash, searchable by
+    Message-ID the way a real one is."""
+
+    def __init__(self, host: str) -> None:
+        super().__init__(host)
+        self.in_trash = {"<a@x>": 91, "<b@x>": 92}
+        self.moved: list[tuple[str, str]] = []
+        self.flagged: list[str] = []
+
+    def uid(self, command: str, *args):
+        self.calls.append(("uid", command, *args))
+        if command == "SEARCH":
+            criteria = " ".join(str(a) for a in args if a is not None)
+            for message_id, uid in self.in_trash.items():
+                if f'"{message_id}"' in criteria:
+                    return ("OK", [str(uid).encode()])
+            return ("OK", [b""])
+        if command == "STORE" and len(args) > 2 and "Flagged" in str(args[2]):
+            self.flagged.append(str(args[0]))
+            return ("OK", [b""])
+        if command == "MOVE":
+            self.moved.append((str(args[0]), str(args[1])))
+            return ("OK", [b""])
+        return ("OK", [b""])
+
+
+def test_unretire_restars_before_moving_back() -> None:
+    """Flags travel with a message, so starring it while it is still in
+    the trash avoids needing its new uid afterwards - which would take
+    UIDPLUS's COPYUID to learn."""
+    fake = TrashIMAP("h")
+    with mailbox(fake) as box:
+        result = box.unretire(["<a@x>", "<b@x>"], "INBOX/Trash")
+    assert result.restored == ("<a@x>", "<b@x>")
+    assert result.missing == () and result.failed == ()
+    assert fake.flagged == ["91", "92"]
+    # The target is quoted, as any mailbox name handed to MOVE must be.
+    assert fake.moved == [("91", '"INBOX/toprint"'), ("92", '"INBOX/toprint"')]
+    store_before_move = [c[1] for c in fake.calls if c[0] == "uid"]
+    assert store_before_move.index("STORE") < store_before_move.index("MOVE")
+
+
+def test_unretire_reports_messages_the_trash_no_longer_holds() -> None:
+    """Bounded by the trash: once the host empties it there is nothing to
+    restore, and the run log cannot help."""
+    fake = TrashIMAP("h")
+    with mailbox(fake) as box:
+        result = box.unretire(["<a@x>", "<gone@x>"], "INBOX/Trash")
+    assert result.restored == ("<a@x>",)
+    assert result.missing == ("<gone@x>",)
+
+
+def test_unretire_reports_a_move_that_fails() -> None:
+    class StuckIMAP(TrashIMAP):
+        def uid(self, command: str, *args):
+            if command == "MOVE":
+                self.calls.append(("uid", command, *args))
+                return ("NO", [b"refused"])
+            return super().uid(command, *args)
+
+    fake = StuckIMAP("h")
+    with mailbox(fake) as box:
+        result = box.unretire(["<a@x>"], "INBOX/Trash")
+    assert result.failed == ("<a@x>",) and result.restored == ()
+
+
+def test_unretire_with_nothing_to_do_touches_no_mail() -> None:
+    fake = TrashIMAP("h")
+    with mailbox(fake) as box:
+        assert box.unretire([], "INBOX/Trash") == UnretireResult()
+    assert not any(call[0] == "uid" for call in fake.calls)
+
+
+def test_unretire_needs_the_trash_folder_writable() -> None:
+    class ReadOnlyTrashIMAP(TrashIMAP):
+        def select(self, folder: str, readonly: bool = False):
+            self.calls.append(("select", folder, readonly))
+            if not readonly:
+                return ("NO", [b"read-only"])
+            self.selected = (folder, readonly)
+            return ("OK", [b"1"])
+
+    with (
+        pytest.raises(MailError, match="writable"),
+        mailbox(ReadOnlyTrashIMAP("h")) as box,
+    ):
+        box.unretire(["<a@x>"], "INBOX/Trash")

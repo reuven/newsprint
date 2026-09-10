@@ -381,6 +381,70 @@ def retire_printed(config: Config, uids: list[int], trash: str) -> RetireResult:
     return result
 
 
+def unretire_last(config: Config) -> None:
+    """Put the most recently retired messages back where they came from.
+
+    Reads the last "retired" entry from the run log, finds those messages
+    in the trash by Message-ID, moves them back and re-stars them. Bounded
+    by the trash: once the mail host empties it there is nothing left to
+    restore, and no amount of run log helps.
+    """
+    entry = runlog.last_retirement()
+    if entry is None:
+        raise click.ClickException(
+            "No retirement in the run log, so there is nothing to undo."
+        )
+    message_ids = [str(i) for i in entry.get("retired_ids") or []]
+    trash = str(entry.get("trash") or "")
+    folder = str(entry.get("folder") or config.mail.folder)
+    if not message_ids or not trash:
+        raise click.ClickException(
+            "The last retirement predates --unretire and did not record which "
+            "messages it moved; they can only be restored by hand."
+        )
+
+    click.echo(
+        f"Last retirement ({entry.get('at')}): "
+        f"{len(message_ids)} message(s) moved to {trash}."
+    )
+    if not click.confirm(
+        f"Move them back to {folder} and re-star them?", default=False
+    ):
+        click.echo("Nothing changed.")
+        return
+
+    password = password_for(config.mail.host, config.mail.user)
+    with Mailbox(
+        host=config.mail.host,
+        user=config.mail.user,
+        password=password,
+        folder=folder,
+        notify=lambda message: click.echo(f"  {message}"),
+    ) as box:
+        result = box.unretire(message_ids, trash)
+
+    click.echo(f"Restored {len(result.restored)} message(s) to {folder}.")
+    if result.missing:
+        click.echo(
+            f"  {len(result.missing)} not found in {trash} - most likely the "
+            "host has emptied it since.",
+            err=True,
+        )
+    if result.failed:
+        click.echo(f"  {len(result.failed)} could not be moved back.", err=True)
+    click.echo("They are starred again, but still marked read.")
+    runlog.record(
+        {
+            "outcome": "unretired",
+            "folder": folder,
+            "trash": trash,
+            "restored": list(result.restored),
+            "missing": list(result.missing),
+            "failed": list(result.failed),
+        }
+    )
+
+
 _PACKAGE = "newsprint"
 
 
@@ -453,6 +517,14 @@ def about() -> str:
         "mail, after asking whether the printing actually worked."
     ),
 )
+@click.option(
+    "--unretire",
+    is_flag=True,
+    help=(
+        "Undo the last retirement: move those messages back out of the "
+        "trash and re-star them. Builds nothing and prints nothing."
+    ),
+)
 @click.option("--no-preview", is_flag=True, help="Skip opening the PDF in Preview.")
 @click.option(
     "--no-pick",
@@ -479,12 +551,20 @@ def main(
     no_retire: bool,
     output: Path | None,
     no_print: bool,
+    unretire: bool,
     no_preview: bool,
     no_pick: bool,
     summary: bool | None,
 ) -> None:
     """Print this week's starred newsletters, four to a side, duplex."""
     click.echo(f"Reading config: {config_path}")
+    if unretire:
+        try:
+            config = load_config(config_path, paper_override=paper)
+            unretire_last(config)
+        except (MailError, ConfigError) as error:
+            raise click.ClickException(str(error)) from error
+        return
     try:
         config = load_config(config_path, paper_override=paper)
         documents, trash = fetch_queue(config, no_pick)
@@ -779,10 +859,20 @@ def main(
                 f"Printed, but could not retire: {error}\n"
                 f"Mail may be partly modified; check {trash} by hand."
             ) from error
+        # folder and retired_ids are what --unretire reads: the uids below
+        # name nothing once a message has moved, but a Message-ID is the
+        # same wherever the message goes.
+        retired_uids = set(retirement.retired)
         runlog.record(
             {
                 "outcome": "retired",
+                "folder": config.mail.folder,
                 "trash": trash,
+                "retired_ids": [
+                    item.document.origin.identifier
+                    for item in built
+                    if item.document.origin.uid in retired_uids
+                ],
                 "retired": list(retirement.retired),
                 "failed": list(retirement.failed),
                 "unrecoverable": list(retirement.unrecoverable),

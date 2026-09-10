@@ -160,6 +160,9 @@ Preview for a look, and asks before printing. Useful flags:
   yourself from the file. Still offers to retire the mail, after asking
   whether the printing actually worked. `--no-print --output ~/reading/` is
   a complete workflow on a machine with no printer configured at all.
+- `--unretire` — undo the last retirement: move those messages back out of
+  the trash and re-star them. Builds nothing and prints nothing. See
+  [Undoing a retirement](#undoing-a-retirement).
 - `--no-preview` — skip opening the PDF in Preview.
 - `--paper a4` / `--paper letter` — override the configured paper size for
   one run.
@@ -269,6 +272,34 @@ Measured across a 268-newsletter archive: **0.97 images kept per
 newsletter**, about 16 dropped, and one text placeholder in the entire
 corpus. Roughly one figure per newsletter is about what a reader would
 point at and call a chart, and the 16 are mastheads, icons and spacers.
+
+## Undoing a retirement
+
+Retiring is the one irreversible thing newsprint does: printed messages are
+marked read, unstarred, and moved to your trash. If a run retires something
+it should not have, `newsprint --unretire` puts the last batch back.
+
+```
+newsprint --unretire
+```
+
+It reads the most recent retirement from the run log, finds those messages
+in the trash **by Message-ID** — the uids the run recorded name nothing once
+a message has moved — moves them back to the folder they came from, and
+re-stars them. It asks before touching anything.
+
+Two limits worth knowing:
+
+- **It cannot outlive your trash.** Once the mail host empties it, the
+  messages are gone and no run log will bring them back. Unretire soon or
+  not at all.
+- **Messages come back starred but read.** Retirement never records whether
+  a message had already been read before the run, so that cannot be undone
+  honestly, and is not guessed at.
+
+Only the most recent retirement can be undone. If you need an older one, its
+run log entry is in `~/.local/state/newsprint/runs/` and lists the
+Message-IDs, which your mail client can search for.
 
 ## Filtering
 

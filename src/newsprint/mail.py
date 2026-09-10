@@ -169,6 +169,22 @@ def password_for(host: str, user: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class UnretireResult:
+    """What --unretire managed to put back.
+
+    Keyed by Message-ID rather than uid: a moved message has a different
+    uid in its new folder, so the uids the run logged are of no use
+    afterwards. The Message-ID is the same wherever the message goes.
+    """
+
+    restored: tuple[str, ...] = ()
+    # In the trash no longer - most likely the host emptied it.
+    missing: tuple[str, ...] = ()
+    # Found, but the move back failed.
+    failed: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class RetireResult:
     retired: tuple[int, ...]
     failed: tuple[int, ...]
@@ -217,7 +233,7 @@ def _with_server_delimiter(imap: imaplib.IMAP4, folder: str) -> str | None:
     return translated if translated != folder else None
 
 
-def _retire_one(connection: imaplib.IMAP4, identifier: str, trash_folder: str) -> str:
+def _move_message(connection: imaplib.IMAP4, identifier: str, target: str) -> str:
     """Move one message to `trash_folder`, by whatever the server supports.
 
     UID MOVE is RFC 6851, an extension - Gmail, Dovecot and Rackspace all
@@ -235,9 +251,9 @@ def _retire_one(connection: imaplib.IMAP4, identifier: str, trash_folder: str) -
     pending deletions is not a trade this makes to save them that step.
     """
     if "MOVE" in connection.capabilities:
-        status, _ = connection.uid("MOVE", identifier, _quote_mailbox(trash_folder))
+        status, _ = connection.uid("MOVE", identifier, _quote_mailbox(target))
         return str(status)
-    status, _ = connection.uid("COPY", identifier, _quote_mailbox(trash_folder))
+    status, _ = connection.uid("COPY", identifier, _quote_mailbox(target))
     if status != "OK":
         return str(status)
     status, _ = connection.uid("STORE", identifier, "+FLAGS", "(\\Deleted)")
@@ -491,6 +507,47 @@ class Mailbox:
                 return match.group(1).decode()
         raise MailError("no folder advertises the \\Trash special-use attribute")
 
+    def unretire(self, message_ids: Sequence[str], trash_folder: str) -> UnretireResult:
+        """Move messages back out of the trash and re-star them.
+
+        The inverse of retire(), and deliberately not a perfect one.
+        Messages are found by Message-ID, since the uids retire() logged
+        name nothing once a message has moved. The star is restored *before*
+        the move, because flags travel with a message and asking for its
+        new uid afterwards would need UIDPLUS's COPYUID.
+
+        \\Seen is not restored, for the same reason retire() never rolled
+        it back: whether a message had been read before that run cannot be
+        known now. Restored mail comes back starred but read.
+        """
+        if not message_ids:
+            return UnretireResult()
+
+        connection = self._connection
+        status, _ = connection.select(_quote_mailbox(trash_folder), readonly=False)
+        if status != "OK":
+            raise MailError(f"could not open {trash_folder!r} writable: {status}")
+
+        restored: list[str] = []
+        missing: list[str] = []
+        failed: list[str] = []
+        for message_id in message_ids:
+            criteria = f'HEADER Message-ID "{message_id}"'
+            status, data = connection.uid("SEARCH", None, criteria)  # type: ignore[arg-type]
+            found = data[0].split() if status == "OK" and data and data[0] else []
+            if not found:
+                missing.append(message_id)
+                continue
+            identifier = found[0].decode()
+            connection.uid("STORE", identifier, "+FLAGS", "(\\Flagged)")
+            if _move_message(connection, identifier, self._folder) != "OK":
+                failed.append(message_id)
+                continue
+            restored.append(message_id)
+        return UnretireResult(
+            restored=tuple(restored), missing=tuple(missing), failed=tuple(failed)
+        )
+
     def retire(self, uids: Sequence[int], trash_folder: str) -> RetireResult:
         """Mark each message read and unstar it, then move it to Trash.
 
@@ -543,7 +600,7 @@ class Mailbox:
             identifier = str(uid)
             connection.uid("STORE", identifier, "+FLAGS", "(\\Seen)")
             connection.uid("STORE", identifier, "-FLAGS", "(\\Flagged)")
-            status = _retire_one(connection, identifier, trash_folder)
+            status = _move_message(connection, identifier, trash_folder)
             if status != "OK":
                 failed.append(uid)
                 restore_status, _ = connection.uid(

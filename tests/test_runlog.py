@@ -99,3 +99,36 @@ def test_last_successful_run_survives_a_non_string_at_field(tmp_path: Path) -> N
     )
     found = runlog.last_successful_run(state_dir=tmp_path)
     assert found == datetime(2026, 9, 4, 15, 0, tzinfo=UTC)
+
+
+def test_last_retirement_is_none_without_a_state_directory(tmp_path: Path) -> None:
+    assert runlog.last_retirement(tmp_path / "never-created") is None
+
+
+def test_last_retirement_ignores_other_outcomes_and_bad_files(tmp_path: Path) -> None:
+    """A run log accumulates every outcome, and a half-written file is a
+    real possibility; neither may stop --unretire finding the retirement."""
+    import json
+
+    (tmp_path / "a.json").write_text(
+        json.dumps({"outcome": "printed", "at": "2026-09-10T10:00:00+00:00"})
+    )
+    (tmp_path / "b.json").write_text("{ not json at all")
+    (tmp_path / "c.json").write_text(json.dumps([1, 2, 3]))
+    (tmp_path / "d.json").write_text(json.dumps({"outcome": "retired"}))
+    assert runlog.last_retirement(tmp_path) is None
+
+
+def test_last_retirement_takes_the_most_recent_one(tmp_path: Path) -> None:
+    import json
+
+    for name, when, trash in (
+        ("old.json", "2026-09-01T10:00:00+00:00", "OLD"),
+        ("new.json", "2026-09-10T10:00:00+00:00", "NEW"),
+        ("older.json", "2026-08-01T10:00:00+00:00", "OLDER"),
+    ):
+        (tmp_path / name).write_text(
+            json.dumps({"outcome": "retired", "at": when, "trash": trash})
+        )
+    entry = runlog.last_retirement(tmp_path)
+    assert entry is not None and entry["trash"] == "NEW"
