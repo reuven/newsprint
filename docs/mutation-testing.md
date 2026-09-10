@@ -108,3 +108,19 @@ the reason rather than re-derive it.
   None`, and the initial value of `end_idx`** - the two indices are only
   ever assigned together, so `or` and `and` agree and the initial value is
   never the one that is read.
+- **`cast(...)`** - `typing.cast` does nothing at runtime, so every
+  mutation of its first argument survives by construction. All eight of
+  `_rendered_lines`' survivors are this.
+- **`_is_argument_figure`'s `before.rstrip()`** - `_nearest_rendered_text`
+  strips what it returns.
+
+## Known survivors that are not equivalent
+
+- **`_iter_text_elements`'s `node.get_text(strip=True)` in the leaf
+  branch.** Under `strip=False` a whitespace-only element is yielded as a
+  content leaf. That is a real difference - a blank leaf scores as
+  content, so it can stop a directional walk where a real one would not -
+  but every attempt at a fixture put the blank leaf somewhere a walk
+  never reached, because in practice blank leaves do not sit at the
+  boundary of a chrome run. Left open rather than covered by a fixture
+  shaped only to reach it.

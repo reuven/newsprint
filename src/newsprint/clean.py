@@ -1300,7 +1300,7 @@ def _has_visible_text(tag: Tag) -> bool:
     return not any(char in _INVISIBLE_CHARS for char in text)
 
 
-def _prune_invisible_elements(root: Tag) -> int:
+def _prune_invisible_elements(root: Tag) -> None:
     """Remove any element with no visible text, anywhere in the document.
 
     Unlike every other pass in this module, this one is not a judgement
@@ -1342,14 +1342,11 @@ def _prune_invisible_elements(root: Tag) -> int:
     already-gone descendant in this same pass's tag list can never raise
     or double-count.
     """
-    removed = 0
     for tag in root.find_all(True):
         if tag.name in ("br", "hr", "img"):
             continue
         if not _has_visible_text(tag):
             tag.decompose()
-            removed += 1
-    return removed
 
 
 def _strip_presentational_attrs(root: Tag) -> None:

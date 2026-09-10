@@ -2582,6 +2582,109 @@ def test_a_sponsor_anchor_looks_past_empty_siblings() -> None:
     assert "surprised almost nobody" in cleaned.html
 
 
+# ---------------------------------------------------------------------------
+# Finding the content root, and pruning what has nothing to say. Both walk
+# a tree whose whitespace is exactly as the mail template left it, which is
+# what these fixtures keep: newlines and indentation between every tag.
+# ---------------------------------------------------------------------------
+
+_INDENTED = (
+    "<html>\n"
+    "  <body>\n"
+    "    <div>\n"
+    "      <p>The Fed declined to move rates this month, which surprised "
+    "almost nobody who had been watching the minutes closely.</p>\n"
+    "      <p>Markets took the news calmly, which is not at all what "
+    "anyone had forecast at the start of a week like this one.</p>\n"
+    "    </div>\n"
+    "  </body>\n"
+    "</html>"
+)
+
+
+def test_the_cleaned_document_carries_no_page_scaffolding() -> None:
+    """What comes back is the newsletter's content, ready to drop into a
+    cell - not a page. The <html> and <body> the parser synthesizes around
+    every input are where the search for that content starts, never part
+    of what it returns."""
+    cleaned = clean_document(document(_INDENTED))
+    assert "<html" not in cleaned.html
+    assert "<body" not in cleaned.html
+    assert cleaned.html.startswith("<p>The Fed declined")
+
+
+def test_indentation_between_tags_is_not_a_second_child() -> None:
+    """The descent through layout wrappers counts children that say
+    something. The newlines and tabs a template leaves between its tags
+    say nothing, and counting them would stop the descent at the first
+    wrapper - leaving the wrapper itself as the root, and its single div
+    as the one block every later pass gets to judge as a unit."""
+    cleaned = clean_document(document(_INDENTED))
+    assert "<div" not in cleaned.html, "the wrapper is descended through"
+    assert "surprised almost nobody" in cleaned.html
+    assert "took the news calmly" in cleaned.html
+
+
+def test_an_empty_wrapper_beside_the_real_one_is_not_a_second_child() -> None:
+    """Same descent, the other kind of silent child: a wrapper the
+    template emitted and never filled. It is an element, so it survives
+    the isinstance test, and only having nothing to say keeps it from
+    counting - which is what lets the descent go on into the wrapper that
+    does have something."""
+    prose = (
+        "<p>The Fed declined to move rates this month, which surprised "
+        "almost nobody who had been watching the minutes closely.</p>"
+        "<p>Markets took the news calmly, which is not at all what anyone "
+        "had forecast at the start of a week like this one.</p>"
+    )
+    html = f"<html><body><div>{prose}</div><div>\n   </div></body></html>"
+    cleaned = clean_document(document(html))
+    assert "<div" not in cleaned.html
+    assert cleaned.html.startswith("<p>The Fed declined")
+
+
+def test_a_title_with_an_empty_wrapper_after_it_is_still_a_leaf() -> None:
+    """A headline closed by an empty div. It is an element and it is not
+    inline, so only having nothing to say keeps it from counting as a
+    block child - and if it counted, the walk would recurse past the
+    headline into it, the headline's own text would never be offered to
+    any pass, and the duplicated header would stay on the page."""
+    title = "Neo-Nazis and the Impotence of Trumponomics"
+    html = (
+        "<html><body><div>"
+        f"<div>{title}<div>  </div></div>"
+        "<p>Sep 7</p>"
+        "<p>Crude economics doesn't explain what just happened, and here "
+        "is a real paragraph of genuine article prose.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html, title=title))
+    assert "Neo-Nazis" not in cleaned.html
+    assert "Crude economics" in cleaned.html
+
+
+def test_an_invisible_paragraph_mid_document_is_pruned() -> None:
+    """Zero-width spaces are how bulk mail pads its layout. An element
+    holding nothing else has no text to mis-score and simply goes -
+    including one sitting between two paragraphs, which is a reason to
+    keep sweeping rather than to stop."""
+    html = (
+        "<html><body><div>"
+        "<p>The Fed declined to move rates this month, which surprised "
+        "almost nobody<br>who had been watching the minutes closely.</p>"
+        "<p>\u200b\u200b</p>"
+        "<p>Markets took the news calmly, which is not at all what anyone "
+        "had forecast at the start of a week like this one.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "\u200b" not in cleaned.html
+    # The <br> above it is exempt, and stepping over it is not a reason to
+    # stop sweeping.
+    assert "<br" in cleaned.html
+    assert "took the news calmly" in cleaned.html
+
+
 def test_a_bare_text_node_of_chrome_is_extracted() -> None:
     """A postal address is often just text between two <br> tags, never
     its own element - so it is extracted rather than decomposed."""
