@@ -1390,12 +1390,26 @@ def test_retire_printed_moves_messages_with_no_failures(
 ) -> None:
     _FakeBox.instances.clear()
     monkeypatch.setattr("newsprint.cli.Mailbox", _FakeBox)
-    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+    asked: list[tuple[str, str]] = []
+
+    def recording_password_for(host: str, user: str) -> str:
+        asked.append((host, user))
+        return "secret"
+
+    monkeypatch.setattr("newsprint.cli.password_for", recording_password_for)
 
     result = retire_printed(mail_config, [4], "INBOX/Trash")
 
     assert _FakeBox.instances[0].retire_calls == [((4,), "INBOX/Trash")]
     assert result == RetireResult(retired=(), failed=())
+    # This is the one call that moves mail, so it has to move it out of
+    # the account and the folder the run actually read from.
+    kwargs = _FakeBox.instances[0].kwargs
+    assert kwargs["host"] == mail_config.mail.host
+    assert kwargs["user"] == mail_config.mail.user
+    assert kwargs["folder"] == mail_config.mail.folder
+    assert kwargs["password"] == "secret"
+    assert asked == [(mail_config.mail.host, mail_config.mail.user)]
 
 
 def test_retire_printed_reports_a_partial_failure(
