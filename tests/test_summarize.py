@@ -284,7 +284,10 @@ def test_a_successful_call_renders_two_pages(working_config, tmp_path: Path) -> 
     assert all(page.cells >= 1 for page in outcome.pages)
     assert outcome.input_tokens == 1234
     assert outcome.output_tokens == 56
-    assert outcome.elapsed_seconds >= 0.0
+    # How long this call took, not how long the machine has been up. The
+    # CLI prints it as "(after N.Ns)", and a clock read straight out of
+    # time.monotonic() is a plausible-looking positive number.
+    assert 0.0 <= outcome.elapsed_seconds < 60.0
     topics_text = page_text(outcome.pages[0].pdf, 0)
     assert "Interest rates" in topics_text
     candidates_text = page_text(outcome.pages[1].pdf, 0)
@@ -349,6 +352,10 @@ def test_a_caller_exception_degrades_and_reports_one_reason(
     )
     assert outcome.pages == ()
     assert "timed out" in outcome.reason
+    # The failure path is timed the same way, and it is the one a reader
+    # is most likely to want a number for - a run that waited out a
+    # timeout should say how long it waited.
+    assert 0.0 <= outcome.elapsed_seconds < 60.0
 
 
 def test_malformed_json_from_the_model_degrades_rather_than_crashing(
@@ -595,3 +602,32 @@ def test_read_api_key_reads_empty_quotes_as_empty(tmp_path: Path) -> None:
     path.write_text("ANTHROPIC_API_KEY=''\n")
     with pytest.raises(SummaryError, match="is empty"):
         read_api_key(path, "ANTHROPIC_API_KEY")
+
+
+def test_the_two_summary_pages_are_identified_and_kept_apart(
+    working_config, tmp_path: Path
+) -> None:
+    """render() names a file from the document's identifier, so the two
+    summary pages need identifiers of their own - they are not mail and
+    have no Message-ID - and they are rendered into directories of their
+    own, so neither can land on the other's file. Both are full cells,
+    since a summary page is never trimmed.
+    """
+    outcome = build_summary_pages(
+        [_built(0)],
+        working_config,
+        PACKET_DATE,
+        tmp_path,
+        caller=lambda *a, **kw: _valid_response(),
+    )
+    topics, candidates = outcome.pages
+    assert topics.document.origin.identifier == "summary-topics"
+    assert candidates.document.origin.identifier == "summary-candidates"
+    assert topics.document.origin.kind == candidates.document.origin.kind == "url"
+    assert topics.pdf.parent == tmp_path / "topics"
+    assert candidates.pdf.parent == tmp_path / "candidates"
+    assert topics.verdict is candidates.verdict is Verdict.FULL
+    # Dated like every other page in the packet, and time-zone aware, or
+    # the contents page cannot sort it beside them.
+    assert topics.document.date.tzinfo is not None
+    assert topics.document.date.date() == PACKET_DATE
