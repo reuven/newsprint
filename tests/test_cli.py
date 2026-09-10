@@ -9,6 +9,7 @@ from click.testing import CliRunner
 from newsprint.cli import fetch_queue, main, retire_printed
 from newsprint.config import load_config
 from newsprint.mail import RetireResult
+from newsprint.picker import DISPLAY_LIMIT
 
 SAMPLE_CONFIG = """
 [mail]
@@ -3365,3 +3366,143 @@ def test_a_fetch_applies_the_readers_own_publication_names(
         "The Renamed Weekly",
         "The Renamed Weekly",
     ]
+
+
+# ---------------------------------------------------------------------------
+# _offer_picks: the unstarred review list. Called directly here rather
+# than through the whole command, so the listing it prints and the
+# arguments it threads are both visible.
+# ---------------------------------------------------------------------------
+
+
+def _offer(
+    box, mail_config, since=date(2026, 9, 1), today=date(2026, 9, 5), names=None
+):
+    """Run _offer_picks against a fake box, returning (result, output)."""
+    from newsprint.cli import _offer_picks
+    from newsprint.config import PublicationNames
+
+    runner = CliRunner()
+    with runner.isolation() as (out, _err, _):
+        result = _offer_picks(
+            box,
+            mail_config,
+            names or PublicationNames(by_address={}, by_list_id={}),
+            since,
+            today,
+        )
+        printed = out.getvalue().decode()
+    return result, printed
+
+
+def test_an_empty_review_window_names_the_date_it_looked_back_to(
+    monkeypatch, mail_config
+) -> None:
+    """Nothing to offer is worth saying, and worth saying *since when* -
+    "no unstarred newsletters" on its own leaves the reader wondering
+    whether the window was a day or a month."""
+
+    class _Empty(_QueueBox):
+        unstarred_uids = ()
+
+    (picked, uids), printed = _offer(_Empty(), mail_config, since=date(2026, 9, 1))
+    assert (picked, uids) == ([], [])
+    assert "No unstarred newsletters since 1 Sep" in printed
+
+
+def test_the_review_list_dates_its_rows_against_the_run_date(
+    monkeypatch, mail_config
+) -> None:
+    """ "today" and "yesterday" are the two labels a reader actually reads,
+    and they only mean anything relative to the day the run is happening -
+    which the caller supplies rather than the picker reading a clock."""
+
+    class _Box(_QueueBox):
+        unstarred_uids = (21,)
+        extra_messages: ClassVar[dict[int, bytes]] = {
+            21: _candidate_raw(21, "Alpha Weekly", "Pick One"),
+        }
+
+    monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: False)
+    # The candidate is dated 4 September; a run on the 5th makes it
+    # yesterday's, and a run on the 4th makes it today's.
+    _result, on_the_fifth = _offer(_Box(), mail_config, today=date(2026, 9, 5))
+    _result, on_the_fourth = _offer(_Box(), mail_config, today=date(2026, 9, 4))
+    assert "yesterday" in on_the_fifth
+    assert "today" in on_the_fourth
+
+
+def test_a_review_list_that_fits_is_not_described_as_a_sample(
+    monkeypatch, mail_config
+) -> None:
+    """Two different sentences: "N found" when the reader is seeing all of
+    them, and "N found; showing the most recent M" when they are not. A
+    list that exactly fills the cap is the whole list, not a sample of
+    itself."""
+
+    class _Box(_QueueBox):
+        unstarred_uids = tuple(range(21, 21 + DISPLAY_LIMIT))
+        extra_messages: ClassVar[dict[int, bytes]] = {
+            uid: _candidate_raw(uid, f"Paper {uid}", f"Issue {uid}")
+            for uid in range(21, 21 + DISPLAY_LIMIT)
+        }
+
+    monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: False)
+    _result, printed = _offer(_Box(), mail_config)
+    assert f"{DISPLAY_LIMIT} unstarred newsletter(s) found." in printed
+    assert "showing the most recent" not in printed
+
+
+def test_a_review_list_too_long_to_show_says_how_many_it_kept(
+    monkeypatch, mail_config
+) -> None:
+    """One past the cap, and the reader is told both numbers - otherwise
+    a newsletter they were looking for is simply absent with no
+    explanation."""
+    total = DISPLAY_LIMIT + 1
+
+    class _Box(_QueueBox):
+        unstarred_uids = tuple(range(21, 21 + total))
+        extra_messages: ClassVar[dict[int, bytes]] = {
+            uid: _candidate_raw(uid, f"Paper {uid}", f"Issue {uid}")
+            for uid in range(21, 21 + total)
+        }
+
+    monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: False)
+    _result, printed = _offer(_Box(), mail_config)
+    assert f"{total} found; showing the most recent {DISPLAY_LIMIT}." in printed
+
+
+def test_a_picked_newsletter_gets_the_readers_own_publication_name(
+    monkeypatch, mail_config
+) -> None:
+    """The rename overrides have to reach the second fetch as well as the
+    first. Dropped here, a picked newsletter prints under whatever name
+    its sender chose while a starred one prints under the reader's."""
+    from newsprint.config import PublicationNames
+
+    class _Box(_QueueBox):
+        unstarred_uids = (21,)
+        extra_messages: ClassVar[dict[int, bytes]] = {
+            21: _candidate_raw(21, "Alpha Weekly", "Pick One", buildable=True),
+        }
+
+    monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr("newsprint.cli.questionary_prompt", _pick_by_title("Pick One"))
+    names = PublicationNames(
+        by_address={"pub21@example.com": "The Renamed Weekly"}, by_list_id={}
+    )
+    (picked, uids), _printed = _offer(_Box(), mail_config, names=names)
+    assert uids == [21]
+    assert [document.publication for document in picked] == ["The Renamed Weekly"]
+
+    # And the scan behind the listing, not just the fetch behind the
+    # pick. The listing is what the reader reads while choosing, so a
+    # rename taking effect only afterwards shows them the wrong name at
+    # the one moment it matters. (The listing is printed on the
+    # non-interactive path; the interactive one hands straight to the
+    # prompt.)
+    monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: False)
+    _result, listed = _offer(_Box(), mail_config, names=names)
+    assert "The Renamed Weekly" in listed
+    assert "Alpha Weekly" not in listed
