@@ -1262,3 +1262,27 @@ def test_unretire_needs_the_trash_folder_writable() -> None:
         mailbox(ReadOnlyTrashIMAP("h")) as box,
     ):
         box.unretire(["<a@x>"], "INBOX/Trash")
+
+
+def test_folders_lists_only_what_can_be_opened() -> None:
+    """\\Noselect marks a container that exists only to hold others -
+    Gmail's "[Gmail]" is the common one - and offering it would hand the
+    user a name that cannot be selected."""
+    fake = FakeIMAP("h")
+    fake.list_response = [
+        b'(\\HasChildren) "." INBOX',
+        b'(\\HasNoChildren) "." "INBOX.Beverly and Ed"',
+        b'(\\Noselect \\HasChildren) "/" "[Gmail]"',
+        (b"unexpected", b"tuple"),
+        b"not a list line at all",
+    ]
+    with mailbox(fake) as box:
+        assert box.folders() == ["INBOX", "INBOX.Beverly and Ed"]
+
+
+def test_folders_raises_when_the_server_refuses_to_list() -> None:
+    with (
+        pytest.raises(MailError, match="LIST failed"),
+        mailbox(FailingIMAP("h")) as box,
+    ):
+        box.folders()

@@ -20,6 +20,12 @@ IMAPFactory = Callable[[str], imaplib.IMAP4]
 
 _TRASH_LINE = re.compile(rb'\\Trash\b[^"]*"[^"]*"\s+"?([^"]+?)"?\s*$')
 
+# Every LIST line ends with the mailbox's own name, quoted when it needs to
+# be. \Noselect marks a folder that exists only to hold others - Gmail's
+# "[Gmail]" container is the common one - and offering it would just give
+# the user a name that cannot be opened.
+_LIST_LINE = re.compile(rb'^\(([^)]*)\)\s+"?[^"\s]"?\s+"?(.+?)"?\s*$')
+
 # A UID FETCH response line always carries the message's own UID as a
 # data item (RFC 3501), regardless of what else was asked for - which is
 # how _parse_fetch_response maps a response tuple back to its uid, rather
@@ -506,6 +512,30 @@ class Mailbox:
             if match:
                 return match.group(1).decode()
         raise MailError("no folder advertises the \\Trash special-use attribute")
+
+    def folders(self) -> list[str]:
+        """Every mailbox on the server that can actually be opened.
+
+        Setup asks the server rather than asking the user to guess: the
+        hierarchy delimiter is not standardised, and on Gmail a "folder"
+        is a label, so a name that looks obvious ("INBOX/toprint") is
+        often simply not what this server calls it.
+        """
+        status, lines = self._connection.list()
+        if status != "OK":
+            raise MailError(f"LIST failed: {status}")
+        names: list[str] = []
+        for line in lines:
+            if not isinstance(line, bytes):
+                continue
+            match = _LIST_LINE.match(line)
+            if match is None:
+                continue
+            attributes, name = match.group(1), match.group(2)
+            if b"\\Noselect" in attributes:
+                continue
+            names.append(name.decode(errors="replace"))
+        return names
 
     def unretire(self, message_ids: Sequence[str], trash_folder: str) -> UnretireResult:
         """Move messages back out of the trash and re-star them.
