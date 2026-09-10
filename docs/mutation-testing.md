@@ -273,6 +273,16 @@ the reason rather than re-derive it.
   there are always at least two segments - and a blank segment is caught
   by the per-segment chrome test below regardless.
 
+### summarize.py
+
+- **`read_api_key`'s `stripped.startswith("#")` guard.** A commented-out
+  assignment cannot pass the name check behind it either: the "#" ends up
+  as part of the name, which then does not match the variable being looked
+  for. The guard skips such a line one step earlier, and nothing else.
+  (The `"=" not in stripped` half of the same condition *is* load-bearing,
+  and is tested - it is what makes the variable's bare name report "does
+  not define" rather than "is empty".)
+
 ## Known survivors that are not equivalent
 
 - **`_iter_text_elements`'s `node.get_text(strip=True)` in the leaf

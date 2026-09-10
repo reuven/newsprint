@@ -552,3 +552,46 @@ def test_default_caller_raises_a_clear_error_when_no_text_block_is_present(
     monkeypatch.setattr(summarize_module.anthropic, "Anthropic", ThinkingOnlyAnthropic)
     with pytest.raises(SummaryError, match="no text content"):
         _default_caller("sk-test", "claude-opus-5", "prompt", 10.0, _SCHEMA)
+
+
+def test_read_api_key_keeps_a_value_containing_an_equals_sign(tmp_path: Path) -> None:
+    """The name ends at the first "=" and everything after it is the
+    value. Splitting on the last one instead would hand back the tail of
+    any key that carries base64 padding, and the failure arrives from
+    Anthropic as an authentication error with nothing pointing here."""
+    path = tmp_path / ".env"
+    path.write_text("ANTHROPIC_API_KEY=sk-ant-abc=def==\n")
+    assert read_api_key(path, "ANTHROPIC_API_KEY") == "sk-ant-abc=def=="
+
+
+def test_read_api_key_skips_a_commented_out_assignment(tmp_path: Path) -> None:
+    """A commented-out key is the ordinary way to keep an old one around,
+    and it looks exactly like a live one apart from the "#". Reading it
+    would send a revoked key and report the wrong reason for the
+    failure."""
+    path = tmp_path / ".env"
+    path.write_text(
+        "# ANTHROPIC_API_KEY=sk-old-revoked\nANTHROPIC_API_KEY=sk-current\n"
+    )
+    assert read_api_key(path, "ANTHROPIC_API_KEY") == "sk-current"
+
+
+def test_read_api_key_ignores_a_line_that_assigns_nothing(tmp_path: Path) -> None:
+    """The variable's own name on a line by itself, with no "=" after it,
+    assigns nothing - so the file does not define the key, rather than
+    defining it as empty. The two are different problems and the reader
+    is told which one they have."""
+    path = tmp_path / ".env"
+    path.write_text("ANTHROPIC_API_KEY\n")
+    with pytest.raises(SummaryError, match="does not define"):
+        read_api_key(path, "ANTHROPIC_API_KEY")
+
+
+def test_read_api_key_reads_empty_quotes_as_empty(tmp_path: Path) -> None:
+    """Two quote characters and nothing between them is an empty value,
+    not a two-character one - the reader is told the key is empty rather
+    than sent a pair of quote marks as their credentials."""
+    path = tmp_path / ".env"
+    path.write_text("ANTHROPIC_API_KEY=''\n")
+    with pytest.raises(SummaryError, match="is empty"):
+        read_api_key(path, "ANTHROPIC_API_KEY")
