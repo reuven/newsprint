@@ -2228,3 +2228,81 @@ def test_the_run_extends_one_sibling_at_a_time() -> None:
     assert _standalone(
         "<p><span></span>Unsubscribe<span></span><br>tail</p>", "Unsubscribe"
     )
+
+
+# ---------------------------------------------------------------------------
+# _strip_line_chrome's sweep. To reach this pass and only this pass, the
+# chrome has to sit on its own line *inside* a block whose other lines are
+# real prose: the block-level pass scores that block as content and leaves
+# it whole, so anything these fixtures lose, the line sweep took.
+# ---------------------------------------------------------------------------
+
+_PROSE_A = (
+    "The Federal Reserve declined to move rates this month, which "
+    "surprised almost nobody who had been watching the minutes closely."
+)
+_PROSE_B = (
+    "Markets took the news calmly, which is not at all what anyone had "
+    "forecast at the start of a week like this one."
+)
+
+
+def _around(middle: str) -> str:
+    """A paragraph with real prose on both sides of middle."""
+    return f"<html><body><div><p>{_PROSE_A}<br>{middle}<br>{_PROSE_B}</p></div></body></html>"
+
+
+def test_a_bare_chrome_text_node_between_prose_lines_is_removed() -> None:
+    """A chrome line is often a bare string between two <br> tags, with no
+    element of its own - invisible to any walk over tags alone."""
+    cleaned = clean_document(document(_around("\n  Unsubscribe\n  ")))
+    assert "Unsubscribe" not in cleaned.html
+    assert "surprised almost nobody" in cleaned.html
+    assert "took the news calmly" in cleaned.html
+    # Every removal is reported, and that report is printed for the reader
+    # to check: it records the line, not the newlines and indentation the
+    # mail template happened to wrap it in.
+    assert "Unsubscribe" in [block.text for block in cleaned.blocks_dropped]
+
+
+def test_inline_chrome_alone_on_its_line_is_removed() -> None:
+    """The standalone check is what separates an inline node that owns its
+    line from one sharing it with prose. Skipping every inline node instead
+    would leave the <span>- and <a>-wrapped chrome most newsletters use.
+
+    Splitting the phrase across two spans is how mail templates that style
+    part of a link actually look, and it means no single text node reads as
+    chrome: only the enclosing <a>, joined back together, does."""
+    middle = "<a href='#'>\n  <span>View</span> <span>in browser</span>\n</a>"
+    cleaned = clean_document(document(_around(middle)))
+    assert "in browser" not in cleaned.html
+    assert "took the news calmly" in cleaned.html
+    assert "View in browser" in [block.text for block in cleaned.blocks_dropped]
+
+
+def test_a_chrome_word_inside_a_sentence_survives_the_sweep() -> None:
+    """The other half of that guard: an inline node sharing its line with
+    prose is left alone, however chrome-shaped its own text."""
+    middle = "Look for the <a href='#'>Unsubscribe</a> link at the bottom of this page."
+    cleaned = clean_document(document(_around(middle)))
+    assert "Unsubscribe" in cleaned.html
+
+
+def test_chrome_late_in_the_sweep_is_still_removed() -> None:
+    """The sweep visits every candidate, and it skips a great many on the
+    way: whitespace between tags, prose that shares its line with a link,
+    and the text nodes inside a chrome element an earlier match already
+    decomposed. Abandoning the loop at any of those - rather than stepping
+    over it - would leave every candidate after it in place, so this puts
+    one of each ahead of a plain chrome line and checks the line still
+    goes."""
+    middle = (
+        "Look for the <a href='#'>tiny link</a> at the bottom of this page."
+        "<br>\n  <a href='#'><span>View</span> <span>in browser</span></a>\n  "
+        "<br>Unsubscribe"
+    )
+    cleaned = clean_document(document(_around(middle)))
+    assert "in browser" not in cleaned.html
+    assert "Unsubscribe" not in cleaned.html
+    assert "tiny link" in cleaned.html
+    assert "took the news calmly" in cleaned.html
