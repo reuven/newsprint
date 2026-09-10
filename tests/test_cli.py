@@ -3015,7 +3015,11 @@ def _retirement_log(tmp_path: Path, **overrides) -> Path:
 def test_unretire_restores_the_last_retirement(monkeypatch, tmp_path: Path) -> None:
     from newsprint.mail import UnretireResult
 
-    directory = _retirement_log(tmp_path)
+    # A folder deliberately unlike the configured one: the entry records
+    # where these messages actually came from, and a run made against a
+    # different folder has to send them back there rather than to
+    # whatever the config happens to say today.
+    directory = _retirement_log(tmp_path, folder="INBOX/lastweek")
     monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", directory)
     monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "r")
     seen: dict[str, object] = {}
@@ -3052,8 +3056,11 @@ def test_unretire_restores_the_last_retirement(monkeypatch, tmp_path: Path) -> N
     assert result.exit_code == 0, result.output
     assert seen["ids"] == ["<a@x>", "<b@x>"]
     assert seen["trash"] == "INBOX/Trash"
-    assert seen["folder"] == "INBOX/toprint"
-    assert "Restored 2 message(s)" in result.output
+    assert seen["folder"] == "INBOX/lastweek"
+    assert "Restored 2 message(s) to INBOX/lastweek" in result.output
+    # The line naming which retirement is about to be undone carries its
+    # timestamp, so two of them can be told apart.
+    assert "Last retirement (2026-09-10T12:00:00+00:00)" in result.output
     assert "still marked read" in result.output
     # The mailbox is opened with the account from the config and the
     # folder the retirement came out of - not the configured folder, if
@@ -3135,12 +3142,20 @@ def test_unretire_reports_what_it_could_not_restore(
 
     monkeypatch.setattr("newsprint.cli.Mailbox", PartialBox)
     result = CliRunner().invoke(
-        main, ["--unretire", "--config", str(tmp_path / "absent.toml")], input="y\n"
+        main,
+        ["--unretire", "--config", str(tmp_path / "absent.toml")],
+        input="y\n",
     )
     assert result.exit_code == 0
     assert "Restored 1 message(s)" in result.output
     assert "1 not found in INBOX/Trash" in result.output
     assert "1 could not be moved back" in result.output
+    # Both of those are warnings and belong on stderr: what goes to
+    # stdout is the run's own account of itself, which a reader may well
+    # be piping somewhere.
+    assert "not found in" in result.stderr
+    assert "could not be moved back" in result.stderr
+    assert "Restored 1 message(s)" not in result.stderr
 
 
 def test_unretire_turns_a_mail_error_into_a_clean_message(
