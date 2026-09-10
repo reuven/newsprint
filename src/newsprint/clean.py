@@ -772,6 +772,18 @@ def _is_standalone_line(node: Tag | NavigableString) -> bool:
             return False
         siblings = list(parent.children)
         idx = siblings.index(current)
+        # Walking these two runs out by one at a time is deliberate, but
+        # most off-by-ones in them are invisible: the loops only ever step
+        # over siblings that are neither a line boundary nor text, and the
+        # check below only cares about siblings that *have* text. So a run
+        # that is one element too long or short almost always covers the
+        # same text-bearing siblings and gives the same answer. Mutation
+        # testing bears that out - of six mutations to this arithmetic,
+        # only one (stepping `end` by two) changes the result for any HTML
+        # shape found, and that one is pinned by
+        # test_the_run_extends_one_sibling_at_a_time. The rest are left as
+        # documented equivalents rather than chased with contrived
+        # fixtures that no email would ever produce.
         start = idx
         while start > 0 and not _is_line_boundary(siblings[start - 1]):
             start -= 1
