@@ -1700,6 +1700,116 @@ def test_br_and_hr_are_never_removed_for_having_no_text() -> None:
 # Credit/Data: caption after it - rather than dropping every image
 # outright. The width gate is the same one _figure_placeholder_text
 # already uses, reused rather than re-derived.
+def test_every_image_decision_is_reported_and_counted() -> None:
+    """The three outcomes in one document: a chart kept whole, a spacer
+    dropped outright, and a data figure kept as a line of text. Each is
+    counted and named, because the report is what tells the reader an
+    image went and why - a spacer with no src at all still has to appear,
+    rather than being recorded under whatever the parser returns for an
+    attribute that is not there.
+
+    Keeping an image is also not a reason to stop looking at the rest.
+    """
+    lead_in = (
+        "<p>Real prose sets up the argument, and in the best model scores "
+        "between the two countries:</p>"
+    )
+    html = (
+        "<html><body><div>"
+        f"{lead_in}"
+        '<img src="https://example.com/first.png" width="600">'
+        "<p>More prose after, long enough to read as an article paragraph "
+        "and not a caption of any kind at all, and it ends like this:</p>"
+        '<img src="https://example.com/second.png" width="600">'
+        "<p>A third paragraph of ordinary prose, carrying the argument on "
+        "towards whatever it is the writer wants to say next.</p>"
+        '<img width="1">'
+        '<img src="https://example.com/fig.png" width="600" '
+        'alt="Fed funds rate against core inflation, 2019 to 2027">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 2
+    assert [(d.src, d.reason) for d in cleaned.images_dropped] == [
+        ("", "no lead-in or caption (decoration)"),
+        ("https://example.com/fig.png", "kept as a text placeholder (figure)"),
+    ]
+    assert (
+        '<p class="figure-placeholder">[figure: Fed funds rate against core '
+        "inflation, 2019 to 2027]</p>" in cleaned.html
+    )
+
+
+def test_a_generic_alt_is_still_generic_with_a_full_stop_after_it() -> None:
+    """ "Chart" names the kind of thing an image is, not what it shows, so
+    it earns no placeholder. Writing it "Chart." changes nothing about
+    that - and every one of these words is also a data term, so the
+    trailing stop is all that stands between the two judgements."""
+    html = (
+        "<html><body><div>"
+        "<p>Real prose sets up the argument, and here is the evidence for "
+        "it, which we have been building towards all along.</p>"
+        '<img src="https://example.com/chart.png" width="600" alt="Chart.">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "[figure:" not in cleaned.html
+
+
+def test_an_alt_text_at_the_length_cap_is_kept_whole() -> None:
+    """70 is the longest an alt text may be, not the first length that is
+    too long. One character more and it is cut to 69 and given an
+    ellipsis - and cut back through any space it lands on, so the ellipsis
+    follows a word rather than floating clear of one."""
+    exactly_70 = (
+        "Fed funds rate against core inflation and unemployment, 2019 to 2027!!"
+    )
+    assert len(exactly_70) == 70
+    cut_on_a_space = (
+        "Fed funds rate against core inflation and unemployment, 2019 to 2027"
+        " and beyond"
+    )
+    assert cut_on_a_space[68] == " "
+
+    def placeholder_for(alt: str) -> str:
+        html = (
+            "<html><body><div>"
+            "<p>Real prose sets up the argument, and here is the evidence "
+            "for it, which we have been building towards all along.</p>"
+            f'<img src="https://example.com/c.png" width="600" alt="{alt}">'
+            "</div></body></html>"
+        )
+        return clean_document(document(html)).html
+
+    cut_mid_word = (
+        "Fed funds rate against core inflation and joblessness, 2019 to 2027 and beyond"
+    )
+    assert cut_mid_word[68] == "a", "this one keeps the character rstrip spares"
+
+    assert f"[figure: {exactly_70}]" in placeholder_for(exactly_70)
+    assert (
+        "[figure: Fed funds rate against core inflation and joblessness, "
+        "2019 to 2027 a\u2026]" in placeholder_for(cut_mid_word)
+    )
+    assert (
+        "[figure: Fed funds rate against core inflation and unemployment, "
+        "2019 to 2027\u2026]" in placeholder_for(cut_on_a_space)
+    )
+
+
+def test_an_image_exactly_at_the_minimum_width_is_wide_enough() -> None:
+    """300px is the narrowest a figure may be, not the first width that is
+    too narrow - a chart mailed at exactly the minimum is a chart."""
+    html = (
+        "<html><body><div><p>Real prose sets up the argument, and in the "
+        "best model scores between the two countries:</p>"
+        '<img src="https://example.com/chart.png" width="300">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 1
+
+
 def test_a_colon_lead_in_keeps_a_wide_image() -> None:
     html = (
         "<html><body><div><p>Real prose sets up the argument, and in the "

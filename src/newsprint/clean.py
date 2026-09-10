@@ -329,6 +329,9 @@ def _is_argument_figure(image: Tag) -> bool:
     if width is None or width < _ARGUMENT_FIGURE_MIN_WIDTH_PX:
         return False
     before = _nearest_rendered_text(image, forward=False)
+    # The rstrip is belt and braces: _nearest_rendered_text strips what it
+    # returns, so a mutation of it survives the suite. Kept because this
+    # line reads as a claim about the text, not about the helper.
     if before is not None and (
         before.rstrip().endswith(":") or _LEAD_IN_PHRASE.search(before)
     ):
