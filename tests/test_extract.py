@@ -455,3 +455,27 @@ Content-Type: text/html; charset="utf-8"
         "<html><body><p>Hello.</p></body></html>",
     )
     assert extract(raw).source_host == "cloudirregular.substack.com"
+
+
+def test_a_subject_is_normalized_to_a_single_line() -> None:
+    """A folded Subject header keeps its CRLF and continuation indent, and
+    an RFC 2047 encoded word can begin with a space. Both reach the
+    contents page, the picker and the per-cell footer, and each of those
+    then has to defend itself - picker._sanitize_subject exists for
+    exactly this. Cleaning it once, here, is the version that scales.
+    """
+    folded = message(
+        "From: A <a@example.com>\nSubject: First\r\n   second part\n"
+        "Date: Mon, 8 Sep 2026 09:00:00 +0000\nContent-Type: text/html",
+        "<p>x</p>",
+    )
+    assert extract(folded).title == "First second part"
+
+
+def test_a_subject_with_an_encoded_leading_space_is_stripped() -> None:
+    encoded = message(
+        "From: A <a@example.com>\nSubject: =?utf-8?q?=20Leading_encoded?=\n"
+        "Date: Mon, 8 Sep 2026 09:00:00 +0000\nContent-Type: text/html",
+        "<p>x</p>",
+    )
+    assert extract(encoded).title == "Leading encoded"

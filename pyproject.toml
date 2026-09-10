@@ -5,7 +5,7 @@ description = "Fetch starred newsletters over IMAP, reduce them to article conte
 readme = "README.md"
 license = "MIT"
 authors = [
-    { name = "Reuven Lerner", email = "reuven@lerner.co.il" }
+    { name = "Reuven Lerner", email = "reuven@lernerpython.com" }
 ]
 requires-python = ">=3.12"
 keywords = ["email", "imap", "newsletter", "pdf", "printing", "imposition"]

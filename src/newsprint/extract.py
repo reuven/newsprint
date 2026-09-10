@@ -150,6 +150,19 @@ def _source_host(message: Message, address: str) -> str | None:
     return address.partition("@")[2].lower() or None
 
 
+# A Subject header can arrive folded across lines (keeping its CRLF and
+# continuation indent) or with a leading space smuggled in by an RFC 2047
+# encoded word. Both reach the contents page, the picker and the per-cell
+# footer; normalizing once here is cheaper than each of those defending
+# itself, which is what picker._sanitize_subject was written to do.
+_SUBJECT_WHITESPACE = re.compile(r"\s+")
+
+
+def _subject(message: Message) -> str:
+    raw = _header(message, "Subject", default="(no subject)")
+    return _SUBJECT_WHITESPACE.sub(" ", raw).strip() or "(no subject)"
+
+
 def _date(message: Message) -> datetime:
     raw = message.get("Date")
     if raw:
@@ -180,7 +193,7 @@ def extract(
             uid=uid,
         ),
         publication=_publication(message, address, display, names or _EMPTY_NAMES),
-        title=_header(message, "Subject", default="(no subject)"),
+        title=_subject(message),
         author=display or None,
         source_host=_source_host(message, address),
         date=_date(message),

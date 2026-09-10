@@ -1,5 +1,5 @@
 import re
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pymupdf
@@ -462,3 +462,62 @@ def test_the_trailing_space_goes_not_the_leading_one() -> None:
     result = _truncate_to_width(LONG_SUBJECT, 120.0, 9.0)
     assert not result.startswith(" ")
     assert " …" not in result
+
+
+def test_one_newsletter_is_singular_in_the_header(config, tmp_path: Path) -> None:
+    """ "1 newsletters · 3 cells" is the kind of thing a reader notices
+    every single week. Nothing asserted the plural, so a rule that always
+    said "s" passed."""
+    contents, _converged = build_contents([_built(0)], config, PACKET_DATE, tmp_path)
+    assert contents is not None
+    assert "1 newsletter ·" in contents.document.title
+    assert "newsletters" not in contents.document.title
+
+
+def test_several_newsletters_are_plural_in_the_header(config, tmp_path: Path) -> None:
+    contents, _converged = build_contents(
+        [_built(0), _built(1)], config, PACKET_DATE, tmp_path
+    )
+    assert contents is not None
+    assert "2 newsletters ·" in contents.document.title
+
+
+def test_the_contents_page_is_bylined_contents(config, tmp_path: Path) -> None:
+    """stamp.py prints document.publication in every cell's footer, so
+    this string is on the printed page, not just in a structure."""
+    contents, _converged = build_contents([_built(0)], config, PACKET_DATE, tmp_path)
+    assert contents is not None
+    assert contents.document.publication == "Contents"
+
+
+def test_the_contents_page_date_is_timezone_aware(config, tmp_path: Path) -> None:
+    """Every other Document.date is UTC-aware (extract._date guarantees
+    it), and cli.py sorts the packet by date - a naive one among aware
+    ones raises TypeError rather than sorting wrongly."""
+    contents, _converged = build_contents([_built(0)], config, PACKET_DATE, tmp_path)
+    assert contents is not None
+    assert contents.document.date.tzinfo is not None
+    assert contents.document.date.utcoffset() == timedelta(0)
+
+
+def test_the_contents_page_is_a_full_cell_not_a_verdict_of_none(
+    config, tmp_path: Path
+) -> None:
+    """trim.py's verdict is what the run report reads; the contents page
+    is never trimmed, so it is FULL by construction."""
+    contents, _converged = build_contents([_built(0)], config, PACKET_DATE, tmp_path)
+    assert contents is not None
+    assert contents.verdict is Verdict.FULL
+
+
+def test_a_starts_and_built_length_mismatch_is_an_error_not_a_silent_drop(
+    monkeypatch, config, tmp_path: Path
+) -> None:
+    """zip(..., strict=True) guards an internal invariant: one starting
+    cell per newsletter. Relaxing it drops the tail of the contents page
+    silently, which is exactly the failure a reader would never spot."""
+    from newsprint import contents as contents_module
+
+    monkeypatch.setattr(contents_module, "_starting_cells", lambda *args, **kwargs: [1])
+    with pytest.raises(ValueError):
+        build_contents([_built(0), _built(1)], config, PACKET_DATE, tmp_path)
