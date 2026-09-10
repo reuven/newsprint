@@ -140,7 +140,9 @@ This fetches the starred messages, builds the imposed PDF, opens it in
 Preview for a look, and asks before printing. Useful flags:
 
 - `--dry-run` — build and preview the PDF, but print nothing and retire
-  nothing.
+  nothing. Exactly equivalent to passing `--no-print --no-retire` together;
+  it exists as one flag because "show me what I would get" is a thing you
+  want often enough to have a name.
 - `--no-retire` — print for real, but leave mail untouched (the messages
   stay starred and will be reprinted next run). Useful for checking that a
   real printout looks right without consuming the print queue.
