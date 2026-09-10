@@ -3430,6 +3430,12 @@ def test_the_review_list_dates_its_rows_against_the_run_date(
     _result, on_the_fourth = _offer(_Box(), mail_config, today=date(2026, 9, 4))
     assert "yesterday" in on_the_fifth
     assert "today" in on_the_fourth
+    # Each row also carries how long the newsletter is, which is the
+    # other thing a reader chooses on. That takes a size per candidate,
+    # so a listing whose sizes were never fetched reads "length unknown"
+    # against every row while looking otherwise complete.
+    assert "length unknown" not in on_the_fifth
+    assert "[short]" in on_the_fifth
 
 
 def test_a_review_list_that_fits_is_not_described_as_a_sample(
