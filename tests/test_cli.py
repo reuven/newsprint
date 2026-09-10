@@ -2922,3 +2922,37 @@ def test_dry_run_is_exactly_no_print_plus_no_retire(
     assert dry == both, f"--dry-run {dry} diverged from --no-print --no-retire {both}"
     assert dry[1] == {"spool": 0, "retire": 0, "runlog": []}
     assert dry[2], "both must still build the PDF"
+
+
+def test_version_reports_release_project_page_and_author() -> None:
+    """Three lines: what this is, where it lives, who wrote it."""
+    from importlib.metadata import version as installed_version
+
+    result = CliRunner().invoke(main, ["--version"])
+    assert result.exit_code == 0
+    lines = result.output.strip().splitlines()
+    assert lines[0] == f"newsprint {installed_version('newsprint')}"
+    assert lines[1] == "https://pypi.org/project/newsprint/"
+    assert lines[2].startswith("Reuven Lerner <")
+
+
+def test_the_version_is_not_hardcoded_in_the_source() -> None:
+    """Read from the installed metadata, so it cannot drift from
+    pyproject.toml the way the README's Python version did."""
+    from importlib.metadata import version as installed_version
+
+    from newsprint import cli
+
+    assert installed_version("newsprint") not in Path(cli.__file__).read_text()
+
+
+def test_help_carries_the_same_three_lines() -> None:
+    """A person reaching for --help should not have to also know that
+    --version exists to find out who wrote this or where it lives."""
+    from importlib.metadata import version as installed_version
+
+    result = CliRunner().invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert f"newsprint {installed_version('newsprint')}" in result.output
+    assert "https://pypi.org/project/newsprint/" in result.output
+    assert "Reuven Lerner <" in result.output

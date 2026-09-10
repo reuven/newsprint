@@ -165,7 +165,8 @@ Preview for a look, and asks before printing. Useful flags:
   one run.
 - `--config PATH` — use a config file other than the default.
 
-Run `newsprint --help` for the full list.
+Run `newsprint --help` for the full list, and `newsprint --version` for the
+release, project page and author.
 
 ## Summary pages (optional)
 
@@ -196,12 +197,23 @@ it instead:
 ```toml
 [summary]
 enabled = true
-api_key_file = "~/.env"          # a dotenv-format file
-api_key_var = "ANTHROPIC_API_KEY"
-model = "claude-opus-5"
+```
 
-# Optional. Leave this section out entirely and you get only the topics
-# page; its presence is the switch, so there is no flag to set.
+That is the whole of it. Every other key has a default, so set one only to
+change it:
+
+| key | default |
+| --- | --- |
+| `api_key_file` | `~/.env` — a dotenv-format file |
+| `api_key_var` | `ANTHROPIC_API_KEY` |
+| `model` | `claude-opus-5` |
+| `timeout_seconds` | `120.0` |
+
+Optionally, add a page of your own. Leave this section out entirely and you
+get only the topics page — its presence is the switch, so there is no flag
+to set:
+
+```toml
 [summary.personal]
 title = "Bamboo Weekly Candidates"
 looking_for = """

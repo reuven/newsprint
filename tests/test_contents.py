@@ -409,3 +409,56 @@ def test_non_convergence_within_the_cap_reports_rather_than_hangs(
     assert result is None
     assert not converged
     assert len(calls) == 3  # capped, not unbounded
+
+
+# ---------------------------------------------------------------------------
+# _truncate_to_width. The contents page is where the user noticed subjects
+# being cut inconsistently, and mutation testing found the boundaries and
+# the word-boundary snap were all untested: 45 survivors in this module.
+# ---------------------------------------------------------------------------
+
+LONG_SUBJECT = "A Subject Line So Long It Cannot Possibly Fit"
+
+
+def test_truncation_snaps_back_to_a_whole_word() -> None:
+    """ "A Subject Line So…" reads as a title clipped for space; "A Subject
+    Line So Lon…" reads as a bug. Nothing tested the snap, so a rule that
+    never snapped passed."""
+    from newsprint.contents import _truncate_to_width
+
+    assert _truncate_to_width(LONG_SUBJECT, 120.0, 9.0) == "A Subject Line So Long It…"
+    assert _truncate_to_width(LONG_SUBJECT, 60.0, 9.0) == "A Subject…"
+
+
+def test_truncation_falls_back_to_a_mid_word_cut() -> None:
+    """When not even one whole word fits, a mid-word cut beats nothing."""
+    from newsprint.contents import _truncate_to_width
+
+    assert _truncate_to_width(LONG_SUBJECT, 30.0, 9.0) == "A…"
+
+
+def test_text_that_exactly_fills_the_width_is_not_truncated() -> None:
+    """The fit test is <=, not <."""
+    from newsprint.contents import _text_width_pt, _truncate_to_width
+
+    exact = _text_width_pt("Money Stuff", 9.0)
+    assert _truncate_to_width("Money Stuff", exact, 9.0) == "Money Stuff"
+    assert _truncate_to_width("Money Stuff", exact - 1.0, 9.0) != "Money Stuff"
+
+
+def test_a_width_too_narrow_for_anything_yields_nothing() -> None:
+    """Not a bare ellipsis with no text in front of it: the caller reads
+    the empty string as "drop the subject entirely"."""
+    from newsprint.contents import _truncate_to_width
+
+    assert _truncate_to_width(LONG_SUBJECT, 6.0, 9.0) == ""
+
+
+def test_the_trailing_space_goes_not_the_leading_one() -> None:
+    """The snap leaves the space that preceded the last word; it comes off
+    the end. Stripping the other end would leave "A Subject Line So …"."""
+    from newsprint.contents import _truncate_to_width
+
+    result = _truncate_to_width(LONG_SUBJECT, 120.0, 9.0)
+    assert not result.startswith(" ")
+    assert " …" not in result

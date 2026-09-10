@@ -14,6 +14,7 @@ import textwrap
 import time
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
+from importlib.metadata import metadata, version
 from pathlib import Path
 
 import click
@@ -380,7 +381,30 @@ def retire_printed(config: Config, uids: list[int], trash: str) -> RetireResult:
     return result
 
 
-@click.command()
+_PACKAGE = "newsprint"
+
+
+def about() -> str:
+    """Three lines: what this is, where it lives, who wrote it.
+
+    Read from the installed package metadata rather than repeated in the
+    source, so it cannot drift from pyproject.toml - which is exactly how
+    the README came to claim a Python version the project had already
+    stopped requiring.
+    """
+    return "\n".join(
+        (
+            f"{_PACKAGE} {version(_PACKAGE)}",
+            f"https://pypi.org/project/{_PACKAGE}/",
+            str(metadata(_PACKAGE)["Author-email"]),
+        )
+    )
+
+
+# The leading \b is click's marker for "do not rewrap the paragraph that
+# follows"; without it the three lines are reflowed into one.
+@click.command(epilog="\b\n" + about())
+@click.version_option(version=version(_PACKAGE), message=about())
 @click.option(
     "--paper",
     type=click.Choice(["a4", "letter"], case_sensitive=False),
