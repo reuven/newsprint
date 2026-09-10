@@ -218,6 +218,31 @@ the reason rather than re-derive it.
   `__exit__` is real, and tested: it is what makes a mailbox used after
   its block say so plainly instead of failing deeper.)
 
+### contents.py
+
+- **The case of every HTML tag and CSS property.** `<tr>` against `<TR>`,
+  `text-align` against `TEXT-ALIGN` - both are case-insensitive to the
+  parser, and the rendered page is identical. Confirmed by rendering, not
+  assumed.
+- **`_truncate_to_width`'s `lo, hi = 0, len(text)`.** A `mid` of 0 makes
+  the candidate a bare ellipsis, which the `best == _ELLIPSIS` check
+  discards a few lines later - so starting the search at 1 only skips a
+  candidate that could never be kept.
+- **`_truncate_to_width`'s `best.removesuffix(_ELLIPSIS).rstrip()`.**
+  Neither half does anything: the candidate was already rstripped before
+  the ellipsis was appended, and the ellipsis always rides on the final
+  token, which the word-boundary snap discards anyway. `fitted = best`
+  behaves identically for every input.
+- **`_row_text`'s `if subject_budget_pt > 0`.** The guard is an
+  optimization, not a decision: any budget too small for the ellipsis -
+  about 5pt - makes `_truncate_to_width` return the empty string, which
+  the next line already treats as "no subject".
+- **The number column's `fontname` and `fontsize`.** Both are real, and
+  both move the subject budget by well under a point at any packet size a
+  person would print - a two-digit cell number measured in Helvetica
+  rather than Times differs by 0.4pt. Left uncovered rather than given a
+  ten-digit fixture that no packet would ever produce.
+
 ## Known survivors that are not equivalent
 
 - **`_iter_text_elements`'s `node.get_text(strip=True)` in the leaf
