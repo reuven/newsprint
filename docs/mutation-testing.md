@@ -114,6 +114,20 @@ the reason rather than re-derive it.
 - **`_is_argument_figure`'s `before.rstrip()`** - `_nearest_rendered_text`
   strips what it returns.
 
+- **`_is_protected_heading`'s `len(line) < SHORT_LINE`.** At 40
+  characters or more, a line can only score as chrome by matching a
+  phrase, and every phrase that makes a line boilerplate also makes it
+  definite chrome - so the second half of that `and` is already False
+  wherever the length test could have decided anything. Checked against
+  the phrase list, not assumed.
+- **`_normalize_title_text`'s `sub("")`.** Replacing punctuation with a
+  marker instead of removing it preserves every prefix relation, because
+  the pattern matches whole *runs* of punctuation: " - " and " " are one
+  run each, so the two copies of a title stay aligned. Breaking it needs
+  the two copies to differ in how many runs they contain, not in what the
+  runs are - "What's" against "Whats" - which no real pair of a Subject
+  and its rendered headline does.
+
 ## Known survivors that are not equivalent
 
 - **`_iter_text_elements`'s `node.get_text(strip=True)` in the leaf

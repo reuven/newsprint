@@ -815,6 +815,81 @@ def test_trailing_run_dropped_elements_are_reported() -> None:
     assert any("unsubscribe" in block.text.lower() for block in cleaned.blocks_dropped)
 
 
+# ---------------------------------------------------------------------------
+# The two directional runs. To reach one and only one, the chrome has to
+# sit inside a container the block sweep keeps whole, on lines that are not
+# chrome phrases in their own right - so neither the block pass nor the
+# line pass can be the one that took it.
+# ---------------------------------------------------------------------------
+
+_RUN_LEAD = "<p>Was this forwarded to you?<br>Sign up here</p>"
+_RUN_TAIL = "<p>Acme Inc, 12 Main Street<br>Springfield, IL 62704</p>"
+_RUN_ARTICLE = (
+    "<h1>Headline</h1>"
+    "<p>Real paragraph with enough content to read as genuine prose about "
+    "the subject at hand, not a caption or a label.</p>"
+)
+_RUN_ARTICLE_2 = (
+    "<p>Second real block of prose here, long enough to be an article "
+    "paragraph in its own right.</p>"
+)
+
+
+def test_both_runs_report_the_lines_they_took() -> None:
+    """A run walks in from one end and stops at the first real content, so
+    what it takes is bounded but not named in advance - which makes the
+    report of it the only account the reader gets. A leaf's own <br> lines
+    are reported as the lines they render as."""
+    html = (
+        "<html><body>"
+        f"<div>{_RUN_LEAD}{_RUN_ARTICLE}</div>"
+        f"<div>{_RUN_ARTICLE_2}{_RUN_TAIL}</div>"
+        "</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "forwarded to you" not in cleaned.html
+    assert "Springfield" not in cleaned.html
+    assert "Real paragraph with enough content" in cleaned.html
+    assert "Second real block of prose" in cleaned.html
+    assert [block.text for block in cleaned.blocks_dropped] == [
+        "Was this forwarded to you?\nSign up here",
+        "Acme Inc, 12 Main Street\nSpringfield, IL 62704",
+    ]
+
+
+def test_a_leaf_exactly_at_the_chrome_ratio_stops_both_runs() -> None:
+    """The same boundary the block sweep uses, applied to a single leaf:
+    0.15 is the highest content share a line can have and still count as
+    chrome, so a leaf sitting exactly on it is where each run stops. One
+    step the other way and both runs would walk straight through it into
+    the article behind."""
+    chrome = [
+        "Manage your preferences",
+        "Copyright 2026 Acme Inc",
+        "You received this because you signed up",
+        "Update your email preferences",
+        "Sent to you by Acme",
+        "Add us to your address book",
+        "Acme Inc, 12 Main Street, Springfield",
+        "Was this forwarded to you?",
+        "You can update your details here",
+    ]
+    content = "Rates held steady, and the chair said little."
+    # 45 characters of content against 255 of chrome: 0.15 on the nose.
+    assert len(content) / (len(content) + sum(len(line) for line in chrome)) == 0.15
+    boundary = "<p>" + "<br>".join([content, *chrome]) + "</p>"
+    html = (
+        "<html><body>"
+        f"<div>{_RUN_LEAD}{boundary}{_RUN_ARTICLE}</div>"
+        f"<div>{_RUN_ARTICLE_2}{boundary}{_RUN_TAIL}</div>"
+        "</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.html.count("Rates held steady") == 2, "neither run passes it"
+    assert "Sign up here" not in cleaned.html, "each still takes the run's start"
+    assert "Springfield, IL" not in cleaned.html
+
+
 def test_leading_chrome_run_is_removed() -> None:
     """F1: the leading-run rule mirrors the trailing one. 'Forwarded this
     email?' sits at the very start of several real newsletters, ahead of
@@ -1267,6 +1342,29 @@ def test_a_masthead_above_a_duplicate_title_does_not_hide_it() -> None:
     assert "Crude economics doesn't explain" in cleaned.html
 
 
+def test_a_line_with_no_words_in_it_is_not_a_match_for_any_title() -> None:
+    """A section break set as "* * *" normalizes to nothing at all, and
+    nothing is a prefix of every title there has ever been. Without the
+    guard the very first such line in the leading region would be taken
+    for the duplicated headline, and everything down to the next dateline
+    would go with it."""
+    html = (
+        "<html><body><div>"
+        "<p>* * *</p>"
+        "<p>Sep 7</p>"
+        "<p>Crude economics doesn't explain what just happened, and here "
+        "is a real paragraph of genuine article prose about the subject.</p>"
+        "<p>A second paragraph carrying the argument along towards its end "
+        "in the usual way.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(
+        document(html, title="Neo-Nazis and the Impotence of Trumponomics")
+    )
+    assert "* * *" in cleaned.html
+    assert "Sep 7" in cleaned.html
+
+
 def test_duplicate_title_match_is_a_prefix_or_truncation_in_either_direction() -> None:
     """Publications truncate: the body's own copy may be shorter (an
     ellipsis-truncated rendering) or the Subject may be shorter (a
@@ -1283,8 +1381,11 @@ def test_duplicate_title_match_is_a_prefix_or_truncation_in_either_direction() -
         "about the subject at hand, not a caption or a label.</p>"
         "</div></body></html>"
     )
+    # The Subject punctuates it differently from the body, which is the
+    # other half of what normalizing is for: the dash is only in one copy,
+    # so the two agree on their words and on nothing else.
     cleaned = clean_document(
-        document(html, title="What's new in DevEx - September 2 edition")
+        document(html, title="What's new in DevEx September 2 edition")
     )
     assert "What's new in DevEx" not in cleaned.html
     assert "genuine prose" in cleaned.html
