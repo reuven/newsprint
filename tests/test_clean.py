@@ -1974,6 +1974,90 @@ def test_an_ad_body_exactly_at_the_character_cap_is_still_taken() -> None:
     assert "Fed said nothing" in cleaned.html
 
 
+def test_the_anchor_climb_stops_at_the_body() -> None:
+    """Bulk mail often trails junk after </body>, which the parser leaves
+    as a sibling of body rather than tidying away. Without the stop, a
+    header with no ad under it would climb all the way out, anchor on the
+    body itself, and take the entire newsletter as its ad copy."""
+    html = (
+        "<html><body>"
+        "<div><p>The Fed declined to move rates this month, which surprised "
+        "almost nobody watching the minutes.</p></div>"
+        "<div><p>A MESSAGE FROM OUR SPONSOR</p></div>"
+        "</body><div>Sent by Acme, 12 Main St.</div></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "surprised almost nobody" in cleaned.html
+
+
+def test_a_header_that_cannot_be_anchored_does_not_end_the_search() -> None:
+    """Sitting loose in the body as a bare text node, a header has no
+    ancestor at all between it and the stop, so there is nothing to anchor
+    an ad on. That is a reason to move to the next header, not to stop
+    looking at them - the real block is further down."""
+    html = (
+        "<html><body>"
+        "<div><p>The Fed declined to move rates this month, which surprised "
+        "almost nobody watching the minutes.</p></div>"
+        "A MESSAGE FROM NOWHERE"
+        "<table>"
+        "<tr><td><p>A MESSAGE FROM ACME</p></td></tr>"
+        "<tr><td><p>Acme makes the finest anvils in the west.</p></td></tr>"
+        "<tr><td><p>2. The Fed said nothing at all this month.</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "finest anvils" not in cleaned.html
+    assert "Fed said nothing" in cleaned.html
+
+
+def test_a_header_that_is_one_line_among_paragraphs_takes_no_neighbors() -> None:
+    """ "A message from" also opens ordinary sentences. When the header
+    shares its container with nothing - the test is that the block it sits
+    in is the very thing the climb anchored on - there is no ad under it,
+    and taking the two paragraphs that follow would eat the article. The
+    inline wrapper matters: it is the enclosing block that has to be
+    compared against the anchor, not the <strong> around the words."""
+    html = (
+        "<html><body>"
+        "<div>"
+        "<p>The Fed declined to move rates this month, which surprised "
+        "almost nobody watching the minutes.</p>"
+        "<p><strong>A message from our friends at the desk</strong></p>"
+        "<p>The chair took questions for an hour and gave nothing away, "
+        "which is how these things usually go.</p>"
+        "</div>"
+        "<table>"
+        "<tr><td><p>A MESSAGE FROM ACME</p></td></tr>"
+        "<tr><td><p>Acme makes the finest anvils in the west.</p></td></tr>"
+        "<tr><td><p>2. Warsh's labor market calculus.</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "took questions for an hour" in cleaned.html
+    assert "finest anvils" not in cleaned.html, "the real ad still goes"
+
+
+def test_a_detached_header_does_not_end_the_search() -> None:
+    """One sponsor block can carry a later header away with it. Reaching
+    that header's detached node is a reason to step over it, not to stop
+    looking - there may be a third block behind it, as there is here."""
+    html = (
+        "<html><body><table>"
+        "<tr><td><p>A MESSAGE FROM ONE</p></td></tr>"
+        "<tr><td><p>Acme makes the finest anvils in the west.</p></td></tr>"
+        "<tr><td><p>A MESSAGE FROM TWO</p></td></tr>"
+        "<tr><td><p>A MESSAGE FROM THREE</p></td></tr>"
+        "<tr><td><p>Acme also makes the loudest whistles going.</p></td></tr>"
+        "<tr><td><p>2. The Fed said nothing at all this month.</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "finest anvils" not in cleaned.html
+    assert "loudest whistles" not in cleaned.html
+    assert "Fed said nothing" in cleaned.html
+
+
 def test_a_sponsor_header_with_nothing_after_it_is_left_to_the_line_pass() -> None:
     """No following sibling at any level means there is no ad body to
     find, so this pass declines and _strip_line_chrome removes the header

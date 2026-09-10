@@ -151,25 +151,28 @@ two can never drift out of agreement.
 @dataclass(frozen=True)
 class Document:
     """One thing to be printed, cleaned and ready to render."""
-    origin: Origin              # where it came from, and how to retire it
-    publication: str            # "Money Stuff", "The Economist"
-    title: str                  # subject line, or article headline
+
+    origin: Origin  # where it came from, and how to retire it
+    publication: str  # "Money Stuff", "The Economist"
+    title: str  # subject line, or article headline
     author: str | None
     date: datetime
-    html: str                   # cleaned; the only thing render.py reads
+    html: str  # cleaned; the only thing render.py reads
     images_kept: int
     images_dropped: list[DroppedImage]
+
 
 @dataclass(frozen=True)
 class Origin:
     kind: Literal["email", "url"]
-    identifier: str             # Message-ID, or the URL
-    uid: int | None             # IMAP UID; None for URLs
+    identifier: str  # Message-ID, or the URL
+    uid: int | None  # IMAP UID; None for URLs
+
 
 @dataclass(frozen=True)
 class DroppedImage:
     src: str
-    reason: str                 # "tracking-pixel", "banner-aspect", "too-small", ...
+    reason: str  # "tracking-pixel", "banner-aspect", "too-small", ...
 ```
 
 `Document` is the seam. Everything upstream of it deals in MIME parts, DOM

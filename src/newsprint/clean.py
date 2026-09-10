@@ -905,6 +905,14 @@ def _sponsor_anchor(node: NavigableString) -> Tag | None:
     The header itself is usually a <p> with no siblings at all - the ad's
     body sits in sibling <tr>s (Axios) or <table>s (Puck) of an ancestor
     several levels up, because bulk-mail HTML nests everything in tables.
+
+    The climb stops at body or html so that a header with no ad under it
+    can never anchor on the whole document and take the newsletter with
+    it. Only the body half of that is reachable as things stand: lxml
+    synthesizes a <body> for every input, including a bare fragment, so
+    the climb meets it first every time. The html half is kept against a
+    tree that arrives from somewhere else - a mutation of it survives the
+    suite for that reason, and deliberately.
     """
     current = node.parent
     while current is not None and current.name not in ("body", "html"):
