@@ -2956,3 +2956,159 @@ def test_help_carries_the_same_three_lines() -> None:
     assert f"newsprint {installed_version('newsprint')}" in result.output
     assert "https://pypi.org/project/newsprint/" in result.output
     assert "Reuven Lerner <" in result.output
+
+
+def _retirement_log(tmp_path: Path, **overrides) -> Path:
+    """A run-log directory holding one "retired" entry."""
+    import json
+
+    directory = tmp_path / "runs"
+    directory.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "outcome": "retired",
+        "at": "2026-09-10T12:00:00+00:00",
+        "folder": "INBOX/toprint",
+        "trash": "INBOX/Trash",
+        "retired_ids": ["<a@x>", "<b@x>"],
+        "retired": [4, 5],
+    }
+    entry.update(overrides)
+    (directory / "2026-09-10-120000-000000.json").write_text(json.dumps(entry))
+    return directory
+
+
+def test_unretire_restores_the_last_retirement(monkeypatch, tmp_path: Path) -> None:
+    from newsprint.mail import UnretireResult
+
+    directory = _retirement_log(tmp_path)
+    monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", directory)
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "r")
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    seen: dict[str, object] = {}
+
+    class FakeBox:
+        def __init__(self, **kwargs):
+            seen["folder"] = kwargs["folder"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def unretire(self, message_ids, trash):
+            seen["ids"] = list(message_ids)
+            seen["trash"] = trash
+            return UnretireResult(restored=tuple(message_ids))
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", FakeBox)
+
+    result = CliRunner().invoke(
+        main,
+        ["--unretire", "--config", str(tmp_path / "absent.toml")],
+        input="y\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert seen["ids"] == ["<a@x>", "<b@x>"]
+    assert seen["trash"] == "INBOX/Trash"
+    assert seen["folder"] == "INBOX/toprint"
+    assert "Restored 2 message(s)" in result.output
+    assert "still marked read" in result.output
+
+
+def test_unretire_declined_changes_nothing(monkeypatch, tmp_path: Path) -> None:
+    directory = _retirement_log(tmp_path)
+    monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", directory)
+
+    def explode(**kwargs):
+        raise AssertionError("no mailbox may be opened when the user declines")
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", explode)
+
+    result = CliRunner().invoke(
+        main, ["--unretire", "--config", str(tmp_path / "absent.toml")], input="n\n"
+    )
+    assert result.exit_code == 0
+    assert "Nothing changed" in result.output
+
+
+def test_unretire_with_no_retirement_logged_says_so(
+    monkeypatch, tmp_path: Path
+) -> None:
+    empty = tmp_path / "runs"
+    empty.mkdir()
+    monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", empty)
+    result = CliRunner().invoke(
+        main, ["--unretire", "--config", str(tmp_path / "absent.toml")]
+    )
+    assert result.exit_code != 0
+    assert "nothing to undo" in result.output
+
+
+def test_unretire_on_a_log_predating_the_feature_explains_itself(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Entries written before --unretire recorded uids but no Message-IDs,
+    and a uid names nothing once the message has moved."""
+    directory = _retirement_log(tmp_path, retired_ids=[])
+    monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", directory)
+    result = CliRunner().invoke(
+        main, ["--unretire", "--config", str(tmp_path / "absent.toml")]
+    )
+    assert result.exit_code != 0
+    assert "by hand" in result.output
+
+
+def test_unretire_reports_what_it_could_not_restore(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from newsprint.mail import UnretireResult
+
+    directory = _retirement_log(tmp_path)
+    monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", directory)
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "r")
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    class PartialBox:
+        def __init__(self, **kwargs) -> None: ...
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def unretire(self, message_ids, trash):
+            return UnretireResult(
+                restored=("<a@x>",), missing=("<b@x>",), failed=("<c@x>",)
+            )
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", PartialBox)
+    result = CliRunner().invoke(
+        main, ["--unretire", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code == 0
+    assert "Restored 1 message(s)" in result.output
+    assert "1 not found in INBOX/Trash" in result.output
+    assert "1 could not be moved back" in result.output
+
+
+def test_unretire_turns_a_mail_error_into_a_clean_message(
+    monkeypatch, tmp_path: Path
+) -> None:
+    directory = _retirement_log(tmp_path)
+    monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", directory)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    from newsprint.mail import MailError
+
+    def explode(**kwargs):
+        raise MailError("the trash folder is not selectable")
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", explode)
+    result = CliRunner().invoke(
+        main, ["--unretire", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code != 0
+    assert "not selectable" in result.output
+    assert "Traceback" not in result.output

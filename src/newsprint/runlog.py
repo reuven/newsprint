@@ -32,6 +32,32 @@ def record(entry: dict[str, Any], state_dir: Path | None = None) -> Path:
     return path
 
 
+def last_retirement(state_dir: Path | None = None) -> dict[str, Any] | None:
+    """The most recent run that actually retired mail, or None.
+
+    This is what makes --unretire possible. The uids in that entry are of
+    no use afterwards - a moved message has a different uid in its new
+    folder - but "documents" holds each message's Message-ID, which is
+    the same wherever the message goes, and is how the messages are found
+    again in the trash.
+    """
+    directory = state_dir if state_dir is not None else DEFAULT_STATE_DIR
+    if not directory.exists():
+        return None
+    newest: tuple[datetime, dict[str, Any]] | None = None
+    for path in sorted(directory.glob("*.json")):
+        try:
+            entry = json.loads(path.read_text())
+            if not isinstance(entry, dict) or entry.get("outcome") != "retired":
+                continue
+            when = datetime.fromisoformat(entry["at"])
+        except (OSError, ValueError, TypeError, KeyError):
+            continue
+        if newest is None or when > newest[0]:
+            newest = (when, entry)
+    return newest[1] if newest is not None else None
+
+
 def last_successful_run(state_dir: Path | None = None) -> datetime | None:
     directory = state_dir if state_dir is not None else DEFAULT_STATE_DIR
     if not directory.exists():
