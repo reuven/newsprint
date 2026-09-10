@@ -2958,6 +2958,63 @@ def test_inline_chrome_alone_on_its_line_is_removed() -> None:
     assert "View in browser" in [block.text for block in cleaned.blocks_dropped]
 
 
+def test_a_chrome_word_that_opens_or_closes_a_shared_line_is_kept() -> None:
+    """The run a node shares its line with reaches out in both directions
+    to the nearest break, and the node's own position in it is not
+    special. A chrome word at the very start of that run has as much
+    beside it as one in the middle, and so does one at the very end."""
+
+    def cleaned_html(inner: str) -> str:
+        html = (
+            f"<html><body><div><p>{inner}</p></div>"
+            "<p>A second block of real prose, long enough to stand as an "
+            "article paragraph.</p></body></html>"
+        )
+        return clean_document(document(html)).html
+
+    ends_the_run = f"{_PROSE_A}<br><em>Look for the </em>Unsubscribe<br>{_PROSE_B}"
+    opens_the_run = f"Unsubscribe<em> link</em><br>{_PROSE_A}<br><em>{_PROSE_B}</em>"
+    # And one where the run starts at the paragraph's own first child, so
+    # the walk back has to reach index 0 rather than stop just above it.
+    second_in_the_paragraph = f"<em>Look for the </em>Unsubscribe<br>{_PROSE_A}"
+    assert "Unsubscribe" in cleaned_html(ends_the_run)
+    assert "Unsubscribe" in cleaned_html(opens_the_run)
+    assert "Unsubscribe" in cleaned_html(second_in_the_paragraph)
+
+
+def test_a_chrome_line_between_two_paragraphs_owns_its_line() -> None:
+    """A bare chrome line sitting between two block siblings rather than
+    between two <br> tags. The blocks bound its line without being part of
+    it - which is the whole point of walking out to a boundary and
+    stopping there rather than stepping over it."""
+    prose = (
+        f"<div><p>{_PROSE_A}</p>Unsubscribe<p>{_PROSE_B}</p></div>"
+        "<p>A second block of real prose, long enough to stand as an "
+        "article paragraph.</p>"
+    )
+    cleaned = clean_document(document(f"<html><body>{prose}</body></html>"))
+    assert "Unsubscribe" not in cleaned.html
+    assert "surprised almost nobody" in cleaned.html
+    assert "took the news calmly" in cleaned.html
+
+
+def test_an_empty_span_beside_a_chrome_line_does_not_save_it() -> None:
+    """Templates scatter empty spans everywhere. One sharing a chrome
+    line's run is not something else on that line, so the line is still
+    the whole of what is there."""
+    html = (
+        "<html><body><div>"
+        f"<p>{_PROSE_A}<br><span>  </span>Unsubscribe<br>{_PROSE_B}</p>"
+        "</div>"
+        "<p>A second block of real prose, long enough to stand as an "
+        "article paragraph.</p>"
+        "</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Unsubscribe" not in cleaned.html
+    assert "took the news calmly" in cleaned.html
+
+
 def test_a_chrome_word_inside_a_sentence_survives_the_sweep() -> None:
     """The other half of that guard: an inline node sharing its line with
     prose is left alone, however chrome-shaped its own text."""
