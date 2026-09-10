@@ -61,7 +61,7 @@ from newsprint.mbox import find_thunderbird_mbox, split_mbox
 from newsprint.models import DroppedBlock
 from newsprint.teaser import word_count as teaser_word_count
 
-# The taxonomy this report groups by. Anything platform_of() recognises
+# The taxonomy this report groups by. Anything platform_of() recognizes
 # outside this set (e.g. mailgun, klaviyo - real platforms, just not ones
 # the brief asked this histogram to break out) folds into "other", so the
 # histogram's shape stays fixed even as the underlying detector grows.

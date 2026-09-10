@@ -1383,7 +1383,7 @@ def test_a_full_sentence_footer_paragraph_protects_the_sign_off_above_it() -> No
 # preview snippet an inbox shows. Both occupy block space on the printed
 # page (a tall blank gap, in the padding case) despite having nothing to
 # show. get_text(strip=True) is not enough to detect either: bs4's strip
-# only removes characters Python's str.isspace() recognises, which misses
+# only removes characters Python's str.isspace() recognizes, which misses
 # zero-width and other format characters (soft hyphen, zero-width space/
 # joiner/non-joiner, word joiner, BOM) that real preheader padding is
 # built from.

@@ -29,8 +29,8 @@ def test_word_count_excludes_a_line_that_echoes_the_subject() -> None:
 
 def test_word_count_ignores_punctuation_differences_from_the_subject() -> None:
     """The subject header and the body's own rendered headline often use
-    different quote characters or trailing punctuation - normalisation
-    must still recognise them as the same line."""
+    different quote characters or trailing punctuation - normalization
+    must still recognize them as the same line."""
     title = "It's Almost Here"
     html = "<h1>It’s Almost Here!</h1><p>One more paragraph.</p>"
     assert word_count(document(html, title=title)) == 3  # "One more paragraph."
@@ -39,7 +39,7 @@ def test_word_count_ignores_punctuation_differences_from_the_subject() -> None:
 def test_word_count_does_not_exclude_a_subtitle_that_merely_resembles_the_title() -> (
     None
 ):
-    """Only an exact (normalised) match is excluded - a genuine subtitle,
+    """Only an exact (normalized) match is excluded - a genuine subtitle,
     byline, or a section name that happens to be a prefix of the subject
     must still count toward the total."""
     title = "The GOP is MIA in North Carolina"

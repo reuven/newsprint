@@ -123,7 +123,7 @@ Gmail also needs an app password rather than your account password; see
 Two Gmail details worth checking on your first run, with `--no-retire` so
 nothing is modified:
 
-- **Superstars.** Gmail can show several star colours. They are widely
+- **Superstars.** Gmail can show several star colors. They are widely
   reported to all map to the one `\Flagged` bit over IMAP, so "only red
   stars" is unlikely to survive the protocol — confirm before relying on it.
 - **Retiring.** Messages are unstarred, marked read, and moved to the

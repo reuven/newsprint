@@ -1105,7 +1105,7 @@ def test_fetch_queue_honours_a_configured_literal_trash_folder(
 ) -> None:
     """config.mail.trash was declared, advertised in config.example.toml,
     and read nowhere: a server with no SPECIAL-USE support had no escape
-    hatch and aborted the run. A non-"auto" value must be honoured as a
+    hatch and aborted the run. A non-"auto" value must be honored as a
     literal folder name instead of ever calling trash_folder()."""
 
     class _NoTrashLookupBox(_FakeBox):
@@ -1725,7 +1725,7 @@ def test_no_summary_flag_disables_it_even_though_config_says_on(
 def test_summary_flag_absent_lets_config_decide(monkeypatch, tmp_path: Path) -> None:
     """With neither --summary nor --no-summary given, the config file's
     [summary].enabled value must be the one that decides - the same
-    behaviour as before these flags existed."""
+    behavior as before these flags existed."""
     from newsprint.summarize import SummaryOutcome
 
     calls: list[object] = []
@@ -2553,7 +2553,7 @@ def test_fetch_queue_merges_a_pick_between_two_starred_documents_by_date(
     complaint was entries 4-222 in date order, then the picks clumped in
     afterwards at 228, 235, 246... The starred pair here (1 Sep, 5 Sep)
     bracket the pick's own date (3 Sep); the previous starred-then-picked
-    behaviour would have put the pick last regardless of its date."""
+    behavior would have put the pick last regardless of its date."""
 
     class _Box(_FakeBox):
         def __init__(self, **kwargs) -> None:
@@ -2627,7 +2627,7 @@ def test_a_pick_between_two_starred_documents_appears_in_order_on_the_contents_p
         )
 
     # Already in the order fetch_queue's date-sorted merge would produce -
-    # this test is about build_contents/render honouring that order, not
+    # this test is about build_contents/render honoring that order, not
     # about the merge itself (covered above).
     built = [
         _built(1, "Alpha Weekly", "First", "2026-09-01"),

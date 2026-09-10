@@ -57,7 +57,7 @@ class ConfigError(Exception):
 # unknown keys through in total silence (PrintConfig is built by picking out
 # known keys by name, so a typo just vanished), while an unknown [mail] or
 # [layout] key blew up with a raw, unhelpful TypeError. Both were wrong, in
-# different directions; this is the one behaviour applied everywhere.
+# different directions; this is the one behavior applied everywhere.
 _SECTION_KEYS: dict[str, frozenset[str]] = {
     "mail": frozenset({"host", "user", "folder", "trash"}),
     "print": frozenset({"printer", "paper", "duplex"}),
@@ -240,7 +240,7 @@ def load_publication_names(
     """Load both override tables from publications.toml.
 
     Both keys are compared in lower case, because senders (and users
-    copying a List-Id by hand) are inconsistent about capitalisation and
+    copying a List-Id by hand) are inconsistent about capitalization and
     the mapping should not be.
     """
     if not path.exists():

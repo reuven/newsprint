@@ -124,7 +124,7 @@ def _is_opaque_host(host: str) -> bool:
 
     A dedicated `host.endswith("mcsv.net")` branch used to sit in front of
     this. Mutation testing showed it was dead: breaking that string
-    entirely changed no behaviour, because every Mailchimp host in the
+    entirely changed no behavior, because every Mailchimp host in the
     archive - all three of them - leads with a 32-character hex id the
     label rule already catches. The general rule is the whole rule.
     """

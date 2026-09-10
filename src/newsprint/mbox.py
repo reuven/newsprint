@@ -9,7 +9,7 @@ destructive:
 2. A buffered reader flushing on a fixed size dropped 60 MB from a folder
    holding two 95 MB messages.
 
-The defence against both is the same and is not optional: assert that the
+The defense against both is the same and is not optional: assert that the
 bytes parsed add up to the size of the file.
 """
 

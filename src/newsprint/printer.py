@@ -26,7 +26,7 @@ def build_command(pdf: Path, config: Config) -> list[str]:
     if config.printing.printer:
         command += ["-d", config.printing.printer]
     # With no -d, CUPS sends the job to its own default destination, which is
-    # the right behaviour for anyone who has not named a printer.
+    # the right behavior for anyone who has not named a printer.
     command += [
         "-o",
         f"media={config.printing.paper.name}",

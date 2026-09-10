@@ -18,7 +18,7 @@ mail, image judgment, web articles) are separate plans and are explicitly **out
 of scope** here.
 
 Until phase 7 lands, `clean.py` strips **all** images. That is a deliberate
-temporary simplification, not the final behaviour — the spec calls for keeping
+temporary simplification, not the final behavior — the spec calls for keeping
 content figures.
 
 Two functions are built and tested here but not yet called by anything:
@@ -686,7 +686,7 @@ destructive:
 2. A buffered reader flushing on a fixed size dropped 60 MB from a folder
    holding two 95 MB messages.
 
-The defence against both is the same and is not optional: assert that the
+The defense against both is the same and is not optional: assert that the
 bytes parsed add up to the size of the file.
 """
 
@@ -1223,7 +1223,7 @@ def load_publication_names(
     """Map a sender address to the name that should appear on the cell.
 
     Addresses are compared in lower case, because senders are inconsistent
-    about capitalisation and the mapping should not be.
+    about capitalization and the mapping should not be.
     """
     if not path.exists():
         return {}
@@ -2546,7 +2546,7 @@ def build_command(pdf: Path, config: Config) -> list[str]:
     if config.printing.printer:
         command += ["-d", config.printing.printer]
     # With no -d, CUPS sends the job to its own default destination, which is
-    # the right behaviour for anyone who has not named a printer.
+    # the right behavior for anyone who has not named a printer.
     command += [
         "-o",
         f"media={config.printing.paper.name}",
@@ -3711,7 +3711,7 @@ Check by eye in Preview: four cells to a side, text at a readable size, no
 unsubscribe footers, nothing scaled or cropped. Then verify the two open
 questions from the spec by printing one sheet:
 
-1. Does the Brother driver honour `print-scaling=none`? Measure a printed cell
+1. Does the Brother driver honor `print-scaling=none`? Measure a printed cell
    against 105 × 148.5 mm.
 2. Is 9pt on a 1.35 line-height comfortable to read at A6? Adjust
    `layout.font_size_pt` in the config if not.

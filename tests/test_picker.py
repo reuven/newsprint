@@ -343,7 +343,7 @@ def test_layout_picklist_never_emits_a_control_character_in_a_row() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _heading_rule - the ruled, capitalised group heading.
+# _heading_rule - the ruled, capitalized group heading.
 # ---------------------------------------------------------------------------
 
 
@@ -619,7 +619,7 @@ def test_the_date_is_unchanged_when_no_today_is_given() -> None:
 
 def test_a_per_newsletter_mail_subdomain_reduces_to_the_registered_domain() -> None:
     """The Times sends DealBook from dk.nytimes.com and The Morning from
-    nn.nytimes.com; "nytimes.com" is the part a reader recognises."""
+    nn.nytimes.com; "nytimes.com" is the part a reader recognizes."""
     from newsprint.picker import source_label
 
     assert source_label("DealBook", "dk.nytimes.com") == "nytimes.com"

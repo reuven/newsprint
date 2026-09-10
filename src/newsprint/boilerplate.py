@@ -190,7 +190,7 @@ _URL_ONLY = re.compile(r"^(https?://\S+|www\.\S+)$", re.IGNORECASE)
 # already score as chrome, but any over SHORT_LINE reads as a sentence and
 # scored 1.00 content, which held the trailing run open.
 #
-# Every word after the colon must be capitalised, which keeps this off a
+# Every word after the colon must be capitalized, which keeps this off a
 # real lead-in: Axios's "Between the lines: Survey responses about
 # economic questions..." and a chart credit's "Data: Federal Reserve Bank
 # of New York" both contain a lower-case word and so do not match.
@@ -502,7 +502,7 @@ _FULL_LINE_CHROME: frozenset[str] = frozenset(
         # ("Buy the ticket, take the ride") for a shape that short to be
         # safe: this is a publication-specific literal because no safe
         # general pattern was found, the same way "Get the Bulwark app"
-        # was declined as a literal in favour of the narrower "... app"
+        # was declined as a literal in favor of the narrower "... app"
         # shape - here even that narrower shape is not safe.
         "buy trade world",
     }

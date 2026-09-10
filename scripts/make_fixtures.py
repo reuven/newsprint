@@ -1,6 +1,6 @@
 """Sample the oldest and newest newsletter per sender into tests/fixtures/.
 
-One message per sender optimises for the wrong variable: what breaks an HTML
+One message per sender optimizes for the wrong variable: what breaks an HTML
 cleaner is *template* variety, and templates come from sending platforms, not
 from senders - a handful of platforms (Substack chief among them) account
 for most of the corpus by message count. Publications also change their HTML
