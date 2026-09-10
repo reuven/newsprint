@@ -14,9 +14,9 @@ would rather read long things on paper than on a phone.
 
 ## Requirements
 
-- Python 3.14 or later
+- Python 3.12 or later
 - [uv](https://docs.astral.sh/uv/)
-- An IMAP account, and a folder you star newsletters into
+- An IMAP account (including Gmail), and a folder you star newsletters into
 - Pango, Cairo and gdk-pixbuf, for [WeasyPrint](https://weasyprint.org/) —
   see [Install](#install)
 - A printer reachable via CUPS (`lp`), if you want newsprint to do the
