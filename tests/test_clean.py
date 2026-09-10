@@ -2982,6 +2982,45 @@ def test_a_chrome_word_that_opens_or_closes_a_shared_line_is_kept() -> None:
     assert "Unsubscribe" in cleaned_html(second_in_the_paragraph)
 
 
+def test_the_scaffolding_around_a_removed_chrome_line_goes_with_it() -> None:
+    """Bulk mail wraps every footer link in its own nest of containers,
+    and taking the links out leaves the containers standing. They are not
+    empty, either: the template's own spaces are still in them, and a
+    space counts as visible text - deliberately, so that a real one is
+    never pruned - so the sweep at the end of the run leaves these behind
+    and they print as a blank gap.
+
+    The innermost wrapper here holds two chrome lines rather than one,
+    which is what it takes to reach this walk at all: a wrapper holding a
+    single chrome line reads as that chrome line itself and is removed
+    whole, ancestors and all. With two, the wrapper's own text is neither
+    line, so only the lines match and the wrapper is left empty rather
+    than matched.
+
+    The walk has to keep going, too, rather than stop one level up - each
+    wrapper in the nest has the template's spaces in it, so each in turn
+    is left looking visible to that end-of-run sweep.
+    """
+    scaffolding = (
+        "<div> <div> <div> <span>Unsubscribe</span><br>"
+        "<span>View in browser</span> </div> </div> </div>"
+    )
+    html = (
+        "<html><body>"
+        f"<div><p>{_PROSE_A}</p>{scaffolding}<p>{_PROSE_B}</p></div>"
+        "<div><p>A second top-level block of prose, long enough to stand "
+        "as an article paragraph on its own.</p></div>"
+        "</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Unsubscribe" not in cleaned.html
+    assert "View in browser" not in cleaned.html
+    # The two that are left are the block this sat in and the one after it.
+    assert cleaned.html.count("<div") == 2
+    assert "surprised almost nobody" in cleaned.html
+    assert "took the news calmly" in cleaned.html
+
+
 def test_a_chrome_line_between_two_paragraphs_owns_its_line() -> None:
     """A bare chrome line sitting between two block siblings rather than
     between two <br> tags. The blocks bound its line without being part of

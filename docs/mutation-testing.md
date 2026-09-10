@@ -128,6 +128,15 @@ the reason rather than re-derive it.
   runs are - "What's" against "Whats" - which no real pair of a Subject
   and its rendered headline does.
 
+- **`_figure_placeholder_text`'s `image.get("alt") or ""`.** Substituting
+  any other filler for the empty string changes nothing: a filler is not a
+  data term, so the alt fails the data-pattern gate a few lines later and
+  the function returns None either way, exactly as the empty string does.
+  The same goes for widening `rstrip(".")` to strip an X as well - no
+  generic alt word ends in one.
+- **`_is_argument_figure`'s `forward=False`** - the helper branches on the
+  flag's truthiness, and None is as false as False.
+
 ## Known survivors that are not equivalent
 
 - **`_iter_text_elements`'s `node.get_text(strip=True)` in the leaf
