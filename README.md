@@ -175,11 +175,12 @@ by Claude from the cleaned text of everything in it:
 - **This Week's Topics** — what actually recurs across the week's reading.
   Not a list of subjects, which the contents page already gives you, but
   what connects them.
-- **A follow-ups page** — only if you ask for one. You describe, in your own
-  words, what you are watching for in your reading; it flags things worth
-  chasing. This was hardcoded to the author's own newsletter until newsprint
-  became something other people install, which is why it is now free text
-  in your config rather than a setting.
+- **A page of your own** — only if you ask for one, by adding a
+  `[summary.personal]` section. You describe in your own words what you are
+  watching for in your reading, and give the page a heading; it flags things
+  worth chasing. This was hardcoded to the author's own newsletter until
+  newsprint became something other people install, which is why it is free
+  text in your config rather than a setting.
 
 **This is off by default, and stays off unless you turn it on.** With no
 API key configured, nothing is sent anywhere and the packet prints exactly
@@ -199,8 +200,14 @@ api_key_file = "~/.env"          # a dotenv-format file
 api_key_var = "ANTHROPIC_API_KEY"
 model = "claude-opus-5"
 
-interest = "..."                 # optional; see config.example.toml
-interest_title = "Follow-ups"
+# Optional. Leave this section out entirely and you get only the topics
+# page; its presence is the switch, so there is no flag to set.
+[summary.personal]
+title = "Bamboo Weekly Candidates"
+looking_for = """
+I write a newsletter of pandas exercises built on real public datasets.
+Flag things with public data plausibly behind them.
+"""
 ```
 
 Only `api_key_var` is read from that file, and the key is never written to

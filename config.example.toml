@@ -55,20 +55,18 @@ api_key_file = "~/.env"          # dotenv-format file holding the key -
 api_key_var = "ANTHROPIC_API_KEY"
 model = "claude-opus-5"
 
-# An optional second page: what in this week's reading is worth following
-# up, judged against what you say you are looking for. Describe it in your
-# own words - this is free text handed to the model, not a setting. Leave
-# it empty (the default) and you get only the topics page.
-#
-# The author's, as an example:
-#   interest = """
-#   I write Bamboo Weekly, a newsletter of pandas exercises built on real
-#   public datasets. Flag things with public data plausibly behind them,
-#   tractable enough to build an exercise on.
-#   """
-#   interest_title = "Bamboo Weekly Candidates"
-interest = ""
-interest_title = "Follow-ups"
 timeout_seconds = 120.0          # if the call is slower than this, or
                                   # fails outright, the packet still prints
                                   # - just without the summary pages
+
+# An optional second summary page: what in this week's reading is worth
+# following up, judged against what you say you are looking for. Leave this
+# whole section out and you get only the topics page - there is no flag to
+# set, the section's presence is the switch.
+#
+# [summary.personal]
+# title = "Follow-ups"
+# looking_for = """
+# I write a newsletter of pandas exercises built on real public datasets.
+# Flag things with public data plausibly behind them.
+# """

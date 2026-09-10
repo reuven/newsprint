@@ -37,15 +37,6 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "api_key_file": "~/.env",
         "api_key_var": "ANTHROPIC_API_KEY",
         "model": "claude-opus-5",
-        # The optional second summary page. `interest` describes, in your
-        # own words, what you are watching for in your reading and what
-        # you would do with it; leave it empty and only the topics page is
-        # produced. This is deliberately free text rather than a setting:
-        # the useful version of this page is specific to one person, and
-        # was hardcoded to the author's own newsletter until it became
-        # something other people would install.
-        "interest": "",
-        "interest_title": "Follow-ups",
         # 40k input tokens is a realistic packet size, and a non-streaming
         # request over that much input can sit idle for a while during
         # the model's own thinking before any bytes come back - measured
@@ -80,11 +71,39 @@ _SECTION_KEYS: dict[str, frozenset[str]] = {
             "api_key_var",
             "model",
             "timeout_seconds",
-            "interest",
-            "interest_title",
+            # The optional [summary.personal] sub-table, validated
+            # separately by _reject_unknown_keys since it is the one place
+            # config.toml nests.
+            "personal",
         }
     ),
 }
+
+
+# [summary.personal] is the only nested table in the file. It is optional,
+# and its presence is what asks for the second summary page - so there is
+# no "enabled" flag inside it and no empty-string sentinel outside it:
+# describe what you want flagged, or leave the whole table out.
+_PERSONAL_KEYS = frozenset({"title", "looking_for"})
+_DEFAULT_PERSONAL_TITLE = "Follow-ups"
+
+
+def _personal(data: dict[str, Any]) -> "PersonalSummary | None":
+    raw = data.get("personal")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigError("[summary.personal] must be a table")
+    looking_for = str(raw.get("looking_for", "")).strip()
+    if not looking_for:
+        raise ConfigError(
+            "[summary.personal] needs looking_for: describe what you want "
+            "flagged in your reading, or remove the whole section"
+        )
+    return PersonalSummary(
+        title=str(raw.get("title", _DEFAULT_PERSONAL_TITLE)),
+        looking_for=looking_for,
+    )
 
 
 def _reject_unknown_keys(data: dict[str, dict[str, Any]]) -> None:
@@ -99,6 +118,13 @@ def _reject_unknown_keys(data: dict[str, dict[str, Any]]) -> None:
         unknown = sorted(set(data.get(section, {})) - allowed)
         if unknown:
             raise ConfigError(f"unknown key(s) in [{section}]: {', '.join(unknown)}")
+    personal = data.get("summary", {}).get("personal")
+    if isinstance(personal, dict):
+        unknown = sorted(set(personal) - _PERSONAL_KEYS)
+        if unknown:
+            raise ConfigError(
+                f"unknown key(s) in [summary.personal]: {', '.join(unknown)}"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +156,20 @@ class PacketConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class PersonalSummary:
+    """The optional second summary page: a heading, and what to look for.
+
+    `looking_for` is free text handed to the model, not a setting - the
+    useful version of this page is specific to one reader, and was
+    hardcoded to the author's own newsletter until newsprint became
+    something other people install.
+    """
+
+    title: str
+    looking_for: str
+
+
+@dataclass(frozen=True, slots=True)
 class SummaryConfig:
     """Where to find the API key, never the key itself.
 
@@ -144,10 +184,9 @@ class SummaryConfig:
     api_key_var: str
     model: str
     timeout_seconds: float
-    # Free text describing what this reader wants flagged in their
-    # reading; empty means the second page is not produced at all.
-    interest: str = ""
-    interest_title: str = "Follow-ups"
+    # None when [summary.personal] is absent, which is the default and
+    # means only the topics page is produced.
+    personal: PersonalSummary | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,8 +266,7 @@ def load_config(
                 api_key_var=data["summary"]["api_key_var"],
                 model=data["summary"]["model"],
                 timeout_seconds=data["summary"]["timeout_seconds"],
-                interest=data["summary"]["interest"].strip(),
-                interest_title=data["summary"]["interest_title"],
+                personal=_personal(data["summary"]),
             ),
             path=path,
         )

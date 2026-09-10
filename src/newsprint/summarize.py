@@ -376,7 +376,9 @@ def _render_pages(
         )
     if content.candidates:
         document = _candidates_document(
-            content.candidates, packet_date, config.summary.interest_title
+            content.candidates,
+            packet_date,
+            config.summary.personal.title if config.summary.personal else "",
         )
         pdf = render_fn(document, config, out_dir=out_dir / "candidates")
         pages.append(
@@ -408,7 +410,8 @@ def build_summary_pages(
     api_key = ""
     try:
         api_key = read_api_key(config.summary.api_key_file, config.summary.api_key_var)
-        interest = config.summary.interest
+        personal = config.summary.personal
+        interest = personal.looking_for if personal else ""
         prompt = _build_prompt(built, interest)
         response = caller(
             api_key,
