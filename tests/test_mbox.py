@@ -341,3 +341,26 @@ def test_real_mbox_parses_completely() -> None:
         pytest.skip("no local Thunderbird mbox")
     parsed = sum(len(message) for message in split_mbox(real_mbox))
     assert parsed == real_mbox.stat().st_size
+
+
+def test_a_separator_on_the_files_last_line_splits_nothing(tmp_path: Path) -> None:
+    """A file that ends mid-separator - no newline after the "From " line,
+    so no headers behind it - has no second message in it. Reading past
+    the end for headers that are not there would split the first message
+    in two and lose the tail of it."""
+    truncated = NORMAL + b"From truncated@example.com Sun Sep  7 12:00:00 2026"
+    messages = list(split_mbox(_write(tmp_path, truncated)))
+    assert len(messages) == 1
+    assert b"truncated@example.com" in messages[0]
+
+
+def test_the_header_check_starts_at_the_line_after_the_separator(
+    tmp_path: Path,
+) -> None:
+    """The headers begin at the very next byte after the separator's own
+    newline. Starting one byte later reads "rom:" instead of "From:",
+    which matches nothing - and then a perfectly ordinary mailbox looks
+    like one message with everything else buried inside it."""
+    messages = list(split_mbox(_write(tmp_path, NORMAL, SECOND)))
+    assert len(messages) == 2
+    assert messages[1].startswith(b"From other@example.com")

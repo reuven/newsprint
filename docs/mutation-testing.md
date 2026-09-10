@@ -283,6 +283,22 @@ the reason rather than re-derive it.
   and is tested - it is what makes the variable's bare name report "does
   not define" rather than "is empty".)
 
+### setup.py, mbox.py, pdfutil.py
+
+- **The wording of every wizard prompt.** Most of `setup.py`'s survivors
+  are the exact text of "  IMAP host", "  Email address" and the rest.
+  Pinning those would freeze copy that should be free to change; what the
+  prompts *do* is tested instead - the password is hidden, the host
+  carries Gmail's server as its default, and the replace question is only
+  asked when there is a file to replace.
+- **`_followed_by_header`'s `end_of_line + 1` and its `== -1` check.**
+  Both are real, and both need pathological input to show: the header
+  pattern is `[A-Za-z-]+:`, which matches "rom:" as readily as "From:",
+  so skipping a byte only matters for a single-character header name.
+  Left uncovered rather than given a fixture no mailbox would contain.
+- **`_separator_positions`' `zip(..., strict=True)`** - the two sequences
+  are built from each other and cannot differ in length.
+
 ## Known survivors that are not equivalent
 
 - **`_iter_text_elements`'s `node.get_text(strip=True)` in the leaf
