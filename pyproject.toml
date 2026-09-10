@@ -7,13 +7,12 @@ license = "MIT"
 authors = [
     { name = "Reuven Lerner", email = "reuven@lerner.co.il" }
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 keywords = ["email", "imap", "newsletter", "pdf", "printing", "imposition"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
@@ -66,10 +65,10 @@ filterwarnings = [
 # 1.18 cannot parse it and bails on the first file it hits - which left
 # type checking silently covering nothing at all. Pinning the formatter one
 # version back keeps the parentheses until mypy catches up.
-target-version = "py313"
+target-version = "py312"
 
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.12"
 strict = true
 # pymupdf ships types but leaves Document() itself untyped, so every
 # pymupdf.open() reads as an untyped call. The results are converted
