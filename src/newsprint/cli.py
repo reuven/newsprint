@@ -37,6 +37,7 @@ from .picker import DISPLAY_LIMIT, build_picklist, window_since
 from .pickerui import questionary_prompt
 from .pipeline import Built, Failure, TeaserSkippedError, build_one
 from .printer import PrintError, spool
+from .setup import run_setup
 from .stamp import format_packet_date, stamp_packet
 from .summarize import build_summary_pages
 
@@ -518,6 +519,15 @@ def about() -> str:
     ),
 )
 @click.option(
+    "--setup",
+    "setup_mode",
+    is_flag=True,
+    help=(
+        "Ask what is needed and write a config file, checking the "
+        "credentials and listing your folders as it goes."
+    ),
+)
+@click.option(
     "--unretire",
     is_flag=True,
     help=(
@@ -551,12 +561,16 @@ def main(
     no_retire: bool,
     output: Path | None,
     no_print: bool,
+    setup_mode: bool,
     unretire: bool,
     no_preview: bool,
     no_pick: bool,
     summary: bool | None,
 ) -> None:
     """Print this week's starred newsletters, four to a side, duplex."""
+    if setup_mode:
+        run_setup(config_path)
+        return
     click.echo(f"Reading config: {config_path}")
     if unretire:
         try:

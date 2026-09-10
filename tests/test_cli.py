@@ -3112,3 +3112,20 @@ def test_unretire_turns_a_mail_error_into_a_clean_message(
     assert result.exit_code != 0
     assert "not selectable" in result.output
     assert "Traceback" not in result.output
+
+
+def test_setup_flag_runs_the_wizard_and_builds_nothing(
+    monkeypatch, tmp_path: Path
+) -> None:
+    called: list[Path] = []
+    monkeypatch.setattr("newsprint.cli.run_setup", lambda path: called.append(path))
+    monkeypatch.setattr(
+        "newsprint.cli.fetch_queue",
+        lambda config, no_pick: (_ for _ in ()).throw(
+            AssertionError("--setup must not fetch mail")
+        ),
+    )
+    target = tmp_path / "config.toml"
+    result = CliRunner().invoke(main, ["--setup", "--config", str(target)])
+    assert result.exit_code == 0
+    assert called == [target]
