@@ -441,10 +441,18 @@ def test_trash_folder_raises_when_absent() -> None:
 
 
 def test_password_for_reads_the_keychain(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "newsprint.mail.keyring.get_password", lambda host, user: "from-keychain"
-    )
+    """And asks for the entry the README tells the reader to create -
+    `keyring set <host> <user>`. Asking under any other name finds
+    nothing, and the run stops before it has read a single message."""
+    asked: list[tuple[str, str]] = []
+
+    def _get_password(host: str, user: str) -> str:
+        asked.append((host, user))
+        return "from-keychain"
+
+    monkeypatch.setattr("newsprint.mail.keyring.get_password", _get_password)
     assert password_for("imap.example.com", "someone@example.com") == "from-keychain"
+    assert asked == [("imap.example.com", "someone@example.com")]
 
 
 def test_password_for_explains_how_to_store_it(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1306,12 +1314,15 @@ def test_folders_lists_only_what_can_be_opened() -> None:
     Gmail's "[Gmail]" is the common one - and offering it would hand the
     user a name that cannot be selected."""
     fake = FakeIMAP("h")
+    # Each thing that must be skipped has a real folder behind it: a line
+    # the listing cannot use is a reason to look at the next one, never to
+    # stop and hand back a short list as though it were the whole mailbox.
     fake.list_response = [
-        b'(\\HasChildren) "." INBOX',
-        b'(\\HasNoChildren) "." "INBOX.Beverly and Ed"',
-        b'(\\Noselect \\HasChildren) "/" "[Gmail]"',
         (b"unexpected", b"tuple"),
+        b'(\\HasChildren) "." INBOX',
         b"not a list line at all",
+        b'(\\Noselect \\HasChildren) "/" "[Gmail]"',
+        b'(\\HasNoChildren) "." "INBOX.Beverly and Ed"',
     ]
     with mailbox(fake) as box:
         assert box.folders() == ["INBOX", "INBOX.Beverly and Ed"]
@@ -1358,3 +1369,70 @@ def test_unretire_treats_an_empty_search_answer_as_missing() -> None:
         assert result.restored == ()
         assert server.flagged == [], "nothing may be starred on a failed search"
         assert server.moved == []
+
+
+def test_the_connection_is_opened_against_the_configured_host() -> None:
+    """The host is the one thing a Mailbox cannot work out for itself,
+    and connecting to the wrong one - or to nothing - fails in a way that
+    looks like every other network problem."""
+    asked: list[str] = []
+    fake = FakeIMAP("imap.example.com")
+
+    def _factory(host: str) -> FakeIMAP:
+        asked.append(host)
+        return fake
+
+    box = Mailbox(
+        host="imap.example.com",
+        user="someone@example.com",
+        password="secret",
+        folder="INBOX/toprint",
+        imap_factory=_factory,
+    )
+    with box:
+        pass
+    assert asked == ["imap.example.com"]
+
+
+def test_a_new_mailbox_has_counted_nothing_yet() -> None:
+    """message_count is filled in by opening the folder. Before that it
+    has to read as none rather than as one, or a caller checking it would
+    act on a message that does not exist."""
+    box = Mailbox(
+        host="h",
+        user="u",
+        password="p",
+        folder="INBOX/toprint",
+        imap_factory=lambda host: FakeIMAP(host),
+    )
+    assert box.message_count == 0
+
+
+def test_the_uidvalidity_read_at_open_is_the_folders_own() -> None:
+    """A reconnect compares this against what the folder says afterwards,
+    so reading the wrong response code - or none - would leave every
+    reconnect either always refusing or never noticing a renumbering."""
+    fake = FakeIMAP("imap.example.com")
+    fake.uidvalidity = b"4242"
+    with mailbox(fake) as box:
+        assert box._uidvalidity == b"4242"
+    assert ("response", "UIDVALIDITY") in fake.calls
+
+
+def test_a_fetch_response_entry_without_a_payload_is_skipped() -> None:
+    """A UID FETCH response is a mixture: an (info, payload) pair per
+    message, and bare lines - the closing b")" after each, and whatever
+    untagged chatter the server adds. Only a pair carries a message, and
+    only a pair of two: a one-element tuple has no payload to take, and
+    reading it as though it had would raise mid-run."""
+    from newsprint.mail import _parse_fetch_response
+
+    parsed = _parse_fetch_response(
+        [
+            b")",
+            (b"1 (UID 7 RFC822 {3}",),  # a pair-shaped entry with nothing in it
+            None,
+            (b"2 (UID 8 RFC822 {3}", b"raw"),
+        ]
+    )
+    assert parsed == {8: b"raw"}
