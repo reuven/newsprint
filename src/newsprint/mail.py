@@ -181,6 +181,74 @@ class RetireResult:
     unrecoverable: tuple[int, ...] = ()
 
 
+# The hierarchy delimiter a server reports in its LIST response - the
+# character between "INBOX" and a folder under it. There is no standard
+# one: Dovecot and Rackspace commonly use ".", Gmail and Exchange "/", and
+# a config written for one is simply wrong on the other ("could not open
+# folder 'INBOX/toprint': NO", which says nothing about why).
+_LIST_DELIMITER = re.compile(rb'^\([^)]*\)\s+"?([^"\s])"?\s')
+
+
+def _server_delimiter(imap: imaplib.IMAP4) -> str | None:
+    status, lines = imap.list()
+    if status != "OK":
+        return None
+    for line in lines:
+        if not isinstance(line, bytes):
+            continue
+        match = _LIST_DELIMITER.match(line)
+        if match:
+            return match.group(1).decode()
+    return None
+
+
+def _with_server_delimiter(imap: imaplib.IMAP4, folder: str) -> str | None:
+    """`folder` rewritten with the delimiter this server actually uses, or
+    None if that would not change anything.
+
+    Only ever consulted after a SELECT has already failed, so rewriting a
+    folder whose name legitimately contains a dot can do no harm: the
+    retry fails too and the original error is what gets reported.
+    """
+    delimiter = _server_delimiter(imap)
+    if delimiter is None:
+        return None
+    translated = re.sub(r"[/.]", delimiter, folder)
+    return translated if translated != folder else None
+
+
+def _retire_one(connection: imaplib.IMAP4, identifier: str, trash_folder: str) -> str:
+    """Move one message to `trash_folder`, by whatever the server supports.
+
+    UID MOVE is RFC 6851, an extension - Gmail, Dovecot and Rackspace all
+    have it, but it is not part of IMAP4rev1 and a server without it would
+    fail every retirement, after printing had already succeeded. The
+    fallback is the pre-6851 sequence: COPY, mark \\Deleted, expunge.
+
+    Expunging is where care is needed. A bare EXPUNGE removes *every*
+    message in the folder already flagged \\Deleted, not just this one -
+    including any a different client flagged and has not yet expunged. So
+    it is only issued as UID EXPUNGE (RFC 4315), which names the single
+    uid. Without UIDPLUS the message is left copied and flagged \\Deleted
+    but not expunged: every client hides such a message, and the user can
+    empty the folder themselves. Silently destroying someone else's
+    pending deletions is not a trade this makes to save them that step.
+    """
+    if "MOVE" in connection.capabilities:
+        status, _ = connection.uid("MOVE", identifier, _quote_mailbox(trash_folder))
+        return str(status)
+    status, _ = connection.uid("COPY", identifier, _quote_mailbox(trash_folder))
+    if status != "OK":
+        return str(status)
+    status, _ = connection.uid("STORE", identifier, "+FLAGS", "(\\Deleted)")
+    if status != "OK":
+        return str(status)
+    if "UIDPLUS" in connection.capabilities:
+        status, _ = connection.uid("EXPUNGE", identifier)
+        return str(status)
+    return "OK"
+
+
 class Mailbox:
     def __init__(
         self,
@@ -229,7 +297,20 @@ class Mailbox:
             raise MailError(f"login failed for {self._user} at {self._host}: {status}")
         status, data = imap.select(self._folder, readonly=True)
         if status != "OK":
-            raise MailError(f"could not open folder {self._folder!r}: {status}")
+            # Very likely the wrong hierarchy delimiter rather than a
+            # missing folder, so try the one this server reports before
+            # giving up - and say so, since "NO" alone sends people
+            # hunting for a folder that is right there.
+            alternative = _with_server_delimiter(imap, self._folder)
+            if alternative is not None:
+                status, data = imap.select(alternative, readonly=True)
+                if status == "OK":
+                    self._folder = alternative
+            if status != "OK":
+                hint = f" (also tried {alternative!r})" if alternative else ""
+                raise MailError(
+                    f"could not open folder {self._folder!r}: {status}{hint}"
+                )
         self.message_count = _message_count(data)
         self._uidvalidity = imap.response("UIDVALIDITY")[1][0]
         return imap
@@ -462,7 +543,7 @@ class Mailbox:
             identifier = str(uid)
             connection.uid("STORE", identifier, "+FLAGS", "(\\Seen)")
             connection.uid("STORE", identifier, "-FLAGS", "(\\Flagged)")
-            status, _ = connection.uid("MOVE", identifier, _quote_mailbox(trash_folder))
+            status = _retire_one(connection, identifier, trash_folder)
             if status != "OK":
                 failed.append(uid)
                 restore_status, _ = connection.uid(
