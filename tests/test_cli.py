@@ -1036,15 +1036,29 @@ def test_fetch_queue_extracts_the_flagged_messages(monkeypatch, mail_config) -> 
     picker path is exercised separately below."""
     _FakeBox.instances.clear()
     monkeypatch.setattr("newsprint.cli.Mailbox", _FakeBox)
-    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+    asked: list[tuple[str, str]] = []
+
+    def recording_password_for(host: str, user: str) -> str:
+        asked.append((host, user))
+        return "secret"
+
+    monkeypatch.setattr("newsprint.cli.password_for", recording_password_for)
 
     documents, trash = fetch_queue(mail_config, no_pick=True)
 
     assert len(documents) == 2
     assert all(document.title == "This Week" for document in documents)
     assert trash == "INBOX/Trash"
-    assert _FakeBox.instances[0].kwargs["host"] == "imap.example.com"
-    assert _FakeBox.instances[0].kwargs["password"] == "secret"
+    kwargs = _FakeBox.instances[0].kwargs
+    assert kwargs["host"] == "imap.example.com"
+    assert kwargs["user"] == mail_config.mail.user
+    assert kwargs["folder"] == mail_config.mail.folder
+    assert kwargs["password"] == "secret"
+    assert asked == [(mail_config.mail.host, mail_config.mail.user)]
+    # The whole message, not just its headers: this is the fetch whose
+    # results get printed, and a header-only one would render every
+    # newsletter as an empty cell.
+    assert _FakeBox.instances[0].fetch_many_calls[0][1] == "(UID RFC822)"
     # Exactly one connection - the whole point of sharing it between the
     # starred fetch and the unstarred scan.
     assert len(_FakeBox.instances) == 1
@@ -1060,6 +1074,7 @@ def test_fetch_queue_reuses_one_connection_for_starred_and_unstarred(
     class _BothBox(_FakeBox):
         def search_unflagged_since(self, since) -> list[int]:
             self.since_arg = since
+            self.scanned = True
             return [5, 6]
 
     _FakeBox.instances.clear()
@@ -1073,11 +1088,17 @@ def test_fetch_queue_reuses_one_connection_for_starred_and_unstarred(
     # whether this test process happens to have a real tty on stdin.
     monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: False)
 
-    documents, trash = fetch_queue(mail_config, no_pick=False)
+    # No no_pick argument: the default is to offer the picker, and this
+    # is where that default is exercised. Passing it explicitly here, as
+    # every other test does, would leave it free to be flipped.
+    documents, trash = fetch_queue(mail_config)
 
     assert len(_FakeBox.instances) == 1
     assert len(documents) == 2  # the starred pair only - nothing was picked
     assert trash == "INBOX/Trash"
+    # And the scan actually happened: "nothing was picked" reads the same
+    # whether the picker found nothing or was never offered at all.
+    assert getattr(_FakeBox.instances[0], "scanned", False)
 
 
 def test_fetch_queue_skips_trash_lookup_when_nothing_is_flagged(
@@ -1100,7 +1121,7 @@ def test_fetch_queue_skips_trash_lookup_when_nothing_is_flagged(
     assert trash is None
 
 
-def test_fetch_queue_honours_a_configured_literal_trash_folder(
+def test_fetch_queue_honors_a_configured_literal_trash_folder(
     monkeypatch, tmp_path: Path
 ) -> None:
     """config.mail.trash was declared, advertised in config.example.toml,
@@ -1182,7 +1203,7 @@ def test_fetch_queue_uses_the_configured_trash_folder_without_discovering(
     assert "Using configured Trash folder: Configured-Trash" in output
 
 
-def test_fetch_queue_progress_bar_leaves_no_artefacts_when_not_a_tty(
+def test_fetch_queue_progress_bar_leaves_no_artifacts_when_not_a_tty(
     monkeypatch, mail_config, capsys
 ) -> None:
     """click.progressbar over a chunked fetch must hide itself the same
@@ -1191,7 +1212,7 @@ def test_fetch_queue_progress_bar_leaves_no_artefacts_when_not_a_tty(
     Mailbox.FETCH_CHUNK_SIZE uids - every ordinary run - there is no bar
     at all (see cli._fetch_documents), so this asserts the more general
     property: whatever fetch_queue prints, it never contains bar
-    artefacts."""
+    artifacts."""
     _FakeBox.instances.clear()
     monkeypatch.setattr("newsprint.cli.Mailbox", _FakeBox)
     monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
@@ -1369,12 +1390,26 @@ def test_retire_printed_moves_messages_with_no_failures(
 ) -> None:
     _FakeBox.instances.clear()
     monkeypatch.setattr("newsprint.cli.Mailbox", _FakeBox)
-    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+    asked: list[tuple[str, str]] = []
+
+    def recording_password_for(host: str, user: str) -> str:
+        asked.append((host, user))
+        return "secret"
+
+    monkeypatch.setattr("newsprint.cli.password_for", recording_password_for)
 
     result = retire_printed(mail_config, [4], "INBOX/Trash")
 
     assert _FakeBox.instances[0].retire_calls == [((4,), "INBOX/Trash")]
     assert result == RetireResult(retired=(), failed=())
+    # This is the one call that moves mail, so it has to move it out of
+    # the account and the folder the run actually read from.
+    kwargs = _FakeBox.instances[0].kwargs
+    assert kwargs["host"] == mail_config.mail.host
+    assert kwargs["user"] == mail_config.mail.user
+    assert kwargs["folder"] == mail_config.mail.folder
+    assert kwargs["password"] == "secret"
+    assert asked == [(mail_config.mail.host, mail_config.mail.user)]
 
 
 def test_retire_printed_reports_a_partial_failure(
@@ -1511,7 +1546,7 @@ def test_preview_falls_back_to_xdg_open_when_open_is_missing(
     assert attempted[1][0] == "xdg-open"
 
 
-def test_the_progress_bar_leaves_no_artefacts_in_captured_output(
+def test_the_progress_bar_leaves_no_artifacts_in_captured_output(
     monkeypatch, tmp_path: Path
 ) -> None:
     """click.progressbar hides its bar rendering when the output is not a
@@ -2983,12 +3018,17 @@ def test_unretire_restores_the_last_retirement(monkeypatch, tmp_path: Path) -> N
     directory = _retirement_log(tmp_path)
     monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", directory)
     monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "r")
-    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
-
     seen: dict[str, object] = {}
+
+    def recording_password_for(host: str, user: str) -> str:
+        seen["credentials"] = (host, user)
+        return "secret"
+
+    monkeypatch.setattr("newsprint.cli.password_for", recording_password_for)
 
     class FakeBox:
         def __init__(self, **kwargs):
+            seen["mailbox_kwargs"] = kwargs
             seen["folder"] = kwargs["folder"]
 
         def __enter__(self):
@@ -3015,6 +3055,16 @@ def test_unretire_restores_the_last_retirement(monkeypatch, tmp_path: Path) -> N
     assert seen["folder"] == "INBOX/toprint"
     assert "Restored 2 message(s)" in result.output
     assert "still marked read" in result.output
+    # The mailbox is opened with the account from the config and the
+    # folder the retirement came out of - not the configured folder, if
+    # the run happened against a different one - and the keychain is
+    # asked under that same account.
+    config = load_config(tmp_path / "absent.toml")
+    assert seen["credentials"] == (config.mail.host, config.mail.user)
+    kwargs = seen["mailbox_kwargs"]
+    assert kwargs["host"] == config.mail.host
+    assert kwargs["user"] == config.mail.user
+    assert kwargs["password"] == "secret"
 
 
 def test_unretire_declined_changes_nothing(monkeypatch, tmp_path: Path) -> None:
@@ -3129,3 +3179,174 @@ def test_setup_flag_runs_the_wizard_and_builds_nothing(
     result = CliRunner().invoke(main, ["--setup", "--config", str(target)])
     assert result.exit_code == 0
     assert called == [target]
+
+
+def test_unretire_needs_a_yes_and_not_just_an_enter(monkeypatch, tmp_path) -> None:
+    """Moving mail back is the mirror of retiring it, and both are hard to
+    undo - so the question is asked with "no" as its default. Someone
+    running --unretire to see what it would do, and pressing return out of
+    habit, must not move anything."""
+    directory = _retirement_log(tmp_path)
+    monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", directory)
+
+    def explode(**kwargs):
+        raise AssertionError("no mailbox may be opened on a bare return")
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", explode)
+
+    result = CliRunner().invoke(
+        main, ["--unretire", "--config", str(tmp_path / "absent.toml")], input="\n"
+    )
+    assert result.exit_code == 0
+    assert "Nothing changed" in result.output
+
+
+def test_unretire_falls_back_to_the_configured_folder(monkeypatch, tmp_path) -> None:
+    """A retirement logged before the folder was recorded still knows
+    where its messages went; where they come back to is whatever the
+    config says now."""
+    from newsprint.mail import UnretireResult
+
+    directory = _retirement_log(tmp_path, folder="")
+    monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", directory)
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "r")
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    seen: dict[str, object] = {}
+
+    class FakeBox:
+        def __init__(self, **kwargs):
+            seen["folder"] = kwargs["folder"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def unretire(self, message_ids, trash):
+            return UnretireResult(restored=tuple(message_ids))
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", FakeBox)
+    result = CliRunner().invoke(
+        main,
+        ["--unretire", "--config", str(tmp_path / "absent.toml")],
+        input="y\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert seen["folder"] == load_config(tmp_path / "absent.toml").mail.folder
+
+
+def test_unretire_records_what_it_restored(monkeypatch, tmp_path) -> None:
+    """The undo is itself logged, so a reader can see what came back and
+    what did not - and so a second --unretire finds an "unretired" entry
+    rather than the retirement it has already undone."""
+    from newsprint.mail import UnretireResult
+
+    directory = _retirement_log(tmp_path)
+    monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", directory)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    recorded: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "newsprint.runlog.record",
+        lambda entry, **kw: (recorded.append(entry), tmp_path / "r")[1],
+    )
+
+    class FakeBox:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def unretire(self, message_ids, trash):
+            return UnretireResult(restored=("<a@x>",), missing=("<b@x>",))
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", FakeBox)
+    CliRunner().invoke(
+        main,
+        ["--unretire", "--config", str(tmp_path / "absent.toml")],
+        input="y\n",
+    )
+    assert recorded == [
+        {
+            "outcome": "unretired",
+            "folder": "INBOX/toprint",
+            "trash": "INBOX/Trash",
+            "restored": ["<a@x>"],
+            "missing": ["<b@x>"],
+            "failed": [],
+        }
+    ]
+
+
+def test_about_reads_every_line_from_the_installed_metadata() -> None:
+    """--version builds its message at import time, so the function
+    itself needs exercising directly. All three lines come from the
+    package metadata rather than the source, which is what keeps them
+    from drifting from pyproject.toml."""
+    from importlib.metadata import metadata
+    from importlib.metadata import version as installed_version
+
+    from newsprint.cli import about
+
+    lines = about().splitlines()
+    assert lines == [
+        f"newsprint {installed_version('newsprint')}",
+        "https://pypi.org/project/newsprint/",
+        str(metadata("newsprint")["Author-email"]),
+    ]
+    assert "@" in lines[2], "the author line must carry a real address"
+
+
+def test_a_fetch_reports_the_time_it_took_not_the_time_of_day(
+    monkeypatch, mail_config
+) -> None:
+    """The fetch prints how long it took, and a clock read straight out
+    of time.monotonic() is a plausible-looking positive number - it is
+    the machine's uptime, which on a laptop left running reads as days."""
+    import re
+
+    _FakeBox.instances.clear()
+    monkeypatch.setattr("newsprint.cli.Mailbox", _FakeBox)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    runner = CliRunner()
+    with runner.isolation() as (out, _err, _):
+        fetch_queue(mail_config, no_pick=True)
+        printed = out.getvalue().decode()
+
+    seconds = [float(match) for match in re.findall(r"in (\d+\.\d\d)s\.", printed)]
+    assert seconds, f"no timing line in {printed!r}"
+    assert all(value < 60.0 for value in seconds), printed
+
+
+def test_a_fetch_applies_the_readers_own_publication_names(
+    monkeypatch, mail_config
+) -> None:
+    """publications.toml is how a reader renames a newsletter whose own
+    idea of its name is unhelpful, and the overrides have to reach the
+    extractor to have any effect. Dropped on the way, every rename in
+    that file silently does nothing."""
+    from newsprint.config import PublicationNames
+
+    _FakeBox.instances.clear()
+    monkeypatch.setattr("newsprint.cli.Mailbox", _FakeBox)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+    monkeypatch.setattr(
+        "newsprint.cli.load_publication_names",
+        lambda: PublicationNames(
+            by_address={"news@example.com": "The Renamed Weekly"}, by_list_id={}
+        ),
+    )
+
+    documents, _trash = fetch_queue(mail_config, no_pick=True)
+
+    assert [document.publication for document in documents] == [
+        "The Renamed Weekly",
+        "The Renamed Weekly",
+    ]

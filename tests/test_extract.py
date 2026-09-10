@@ -569,7 +569,7 @@ def test_an_unknown_charset_falls_back_without_choking_on_the_bytes() -> None:
 
 
 def test_the_declared_charset_is_honored_even_when_the_sender_was_wrong() -> None:
-    """A part labelled us-ascii carrying UTF-8 bytes. What the label says
+    """A part labeled us-ascii carrying UTF-8 bytes. What the label says
     is what it is read as, marks and all - the alternative is guessing at
     a second encoding behind the sender's back, and a guess that happens
     to work here is no evidence it works on the next one."""
