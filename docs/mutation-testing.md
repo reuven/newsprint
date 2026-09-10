@@ -156,6 +156,18 @@ the reason rather than re-derive it.
 - **`strip('"')` widened to strip an X as well, and `rstrip(">")` the
   same** - no List-Id label or host ends in one.
 
+### stamp.py
+
+- **`fontname=FONT` anywhere.** `FONT` is `"helv"`, which is also
+  PyMuPDF's default, so dropping the argument changes nothing. Six of
+  this module's survivors are that one fact. (`fontsize` is a different
+  matter - the default is 11pt against this module's 6pt, and dropping it
+  moves every right-aligned segment.)
+- **`_shares_most_words`'s `len(words_a) <= len(words_b)`.** The tie
+  decides which set is called the shorter one, and on a tie it does not
+  matter: the intersection is the same either way and so is the
+  denominator. Checked over 20,000 random word-set pairs, not argued.
+
 ## Known survivors that are not equivalent
 
 - **`_iter_text_elements`'s `node.get_text(strip=True)` in the leaf
