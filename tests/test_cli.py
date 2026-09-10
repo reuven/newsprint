@@ -1036,15 +1036,29 @@ def test_fetch_queue_extracts_the_flagged_messages(monkeypatch, mail_config) -> 
     picker path is exercised separately below."""
     _FakeBox.instances.clear()
     monkeypatch.setattr("newsprint.cli.Mailbox", _FakeBox)
-    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+    asked: list[tuple[str, str]] = []
+
+    def recording_password_for(host: str, user: str) -> str:
+        asked.append((host, user))
+        return "secret"
+
+    monkeypatch.setattr("newsprint.cli.password_for", recording_password_for)
 
     documents, trash = fetch_queue(mail_config, no_pick=True)
 
     assert len(documents) == 2
     assert all(document.title == "This Week" for document in documents)
     assert trash == "INBOX/Trash"
-    assert _FakeBox.instances[0].kwargs["host"] == "imap.example.com"
-    assert _FakeBox.instances[0].kwargs["password"] == "secret"
+    kwargs = _FakeBox.instances[0].kwargs
+    assert kwargs["host"] == "imap.example.com"
+    assert kwargs["user"] == mail_config.mail.user
+    assert kwargs["folder"] == mail_config.mail.folder
+    assert kwargs["password"] == "secret"
+    assert asked == [(mail_config.mail.host, mail_config.mail.user)]
+    # The whole message, not just its headers: this is the fetch whose
+    # results get printed, and a header-only one would render every
+    # newsletter as an empty cell.
+    assert _FakeBox.instances[0].fetch_many_calls[0][1] == "(UID RFC822)"
     # Exactly one connection - the whole point of sharing it between the
     # starred fetch and the unstarred scan.
     assert len(_FakeBox.instances) == 1
@@ -1060,6 +1074,7 @@ def test_fetch_queue_reuses_one_connection_for_starred_and_unstarred(
     class _BothBox(_FakeBox):
         def search_unflagged_since(self, since) -> list[int]:
             self.since_arg = since
+            self.scanned = True
             return [5, 6]
 
     _FakeBox.instances.clear()
@@ -1073,11 +1088,17 @@ def test_fetch_queue_reuses_one_connection_for_starred_and_unstarred(
     # whether this test process happens to have a real tty on stdin.
     monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: False)
 
-    documents, trash = fetch_queue(mail_config, no_pick=False)
+    # No no_pick argument: the default is to offer the picker, and this
+    # is where that default is exercised. Passing it explicitly here, as
+    # every other test does, would leave it free to be flipped.
+    documents, trash = fetch_queue(mail_config)
 
     assert len(_FakeBox.instances) == 1
     assert len(documents) == 2  # the starred pair only - nothing was picked
     assert trash == "INBOX/Trash"
+    # And the scan actually happened: "nothing was picked" reads the same
+    # whether the picker found nothing or was never offered at all.
+    assert getattr(_FakeBox.instances[0], "scanned", False)
 
 
 def test_fetch_queue_skips_trash_lookup_when_nothing_is_flagged(
