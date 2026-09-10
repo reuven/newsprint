@@ -219,6 +219,45 @@ week that is roughly 40k input tokens and a few hundred out. That text goes
 to Anthropic. If that is not something you want for your mail, leave the
 feature off; everything else works without it.
 
+## Images
+
+Most images in a newsletter are decoration — a masthead, a social icon, a
+tracking pixel — and on a quarter-sheet page they cost space the article
+needs. So newsprint drops images by default, and keeps only the ones the
+author treated as part of their argument.
+
+An image is kept when it is at least 300px wide **and** the surrounding
+text says it matters:
+
+- the line before it ends in a colon, or reads like "here's the chart";
+- the line after it opens a caption — `Source:`, `Chart:`, `Figure`,
+  `Credit:`, `Data:`;
+- the block after it is nothing but a parenthesised link, which is how
+  Platformer cites the screenshots in "Those good posts".
+
+A kept image is fetched at print time, converted to grayscale, and resized
+down to the cell's text column — 87mm at 200dpi, so 685px. Nothing else is
+ever fetched: a dropped image's URL is recorded for the run report and
+never requested, which is also why tracking pixels never phone home.
+
+Among the images that are *not* kept, one carrying substantial `alt` text
+can leave a text placeholder in the flow instead, so the sentence around it
+still makes sense:
+
+```
+[figure: US-China trade balances as a percent of GDP, 2010-2026]
+```
+
+In practice that is rare — most newsletter images ship with `alt=""`.
+
+If an image cannot be fetched — a dead URL, a login wall, a timeout — the
+run says so and prints the packet without it.
+
+Measured across a 268-newsletter archive: **0.97 images kept per
+newsletter**, about 16 dropped, and one text placeholder in the entire
+corpus. Roughly one figure per newsletter is about what a reader would
+point at and call a chart, and the 16 are mastheads, icons and spacers.
+
 ## Filtering
 
 `clean.py` removes only what it can confidently identify as chrome (an
