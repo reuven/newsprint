@@ -37,6 +37,15 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "api_key_file": "~/.env",
         "api_key_var": "ANTHROPIC_API_KEY",
         "model": "claude-opus-5",
+        # The optional second summary page. `interest` describes, in your
+        # own words, what you are watching for in your reading and what
+        # you would do with it; leave it empty and only the topics page is
+        # produced. This is deliberately free text rather than a setting:
+        # the useful version of this page is specific to one person, and
+        # was hardcoded to the author's own newsletter until it became
+        # something other people would install.
+        "interest": "",
+        "interest_title": "Follow-ups",
         # 40k input tokens is a realistic packet size, and a non-streaming
         # request over that much input can sit idle for a while during
         # the model's own thinking before any bytes come back - measured
@@ -65,7 +74,15 @@ _SECTION_KEYS: dict[str, frozenset[str]] = {
     "window": frozenset({"fallback_days"}),
     "packet": frozenset({"title", "min_words"}),
     "summary": frozenset(
-        {"enabled", "api_key_file", "api_key_var", "model", "timeout_seconds"}
+        {
+            "enabled",
+            "api_key_file",
+            "api_key_var",
+            "model",
+            "timeout_seconds",
+            "interest",
+            "interest_title",
+        }
     ),
 }
 
@@ -127,6 +144,10 @@ class SummaryConfig:
     api_key_var: str
     model: str
     timeout_seconds: float
+    # Free text describing what this reader wants flagged in their
+    # reading; empty means the second page is not produced at all.
+    interest: str = ""
+    interest_title: str = "Follow-ups"
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +227,8 @@ def load_config(
                 api_key_var=data["summary"]["api_key_var"],
                 model=data["summary"]["model"],
                 timeout_seconds=data["summary"]["timeout_seconds"],
+                interest=data["summary"]["interest"].strip(),
+                interest_title=data["summary"]["interest_title"],
             ),
             path=path,
         )

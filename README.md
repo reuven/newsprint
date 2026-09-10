@@ -94,9 +94,16 @@ bit that this reads back. Star from anywhere; run this from your desktop.
 
 Two things select a message: the **folder** narrows, the **star** picks. The
 tool selects one mailbox (`mail.folder`) and searches for flagged messages
-inside it. A mail rule that files newsletters into that folder as they
-arrive, and a star on the ones you actually want this week, is the intended
-shape.
+inside it.
+
+How messages get into that folder, and how you decide what to star, is
+entirely up to you — the tool only reads the result. The author's setup, as
+one example: mail rules file every newsletter subscription into a `toprint`
+folder as it arrives, and then during the week he stars the subset he
+actually wants to read on paper. Everything unstarred stays in the folder
+and is offered at run time. You could equally star straight from your phone
+as things arrive, or star nothing during the week and pick entirely from the
+checklist.
 
 Anything in that folder you did *not* star is offered to you at run time, in
 a checklist, so a newsletter you forgot to star is one keypress away rather
@@ -159,6 +166,51 @@ Preview for a look, and asks before printing. Useful flags:
 - `--config PATH` — use a config file other than the default.
 
 Run `newsprint --help` for the full list.
+
+## Summary pages (optional)
+
+newsprint can put one or two extra pages at the front of the packet, written
+by Claude from the cleaned text of everything in it:
+
+- **This Week's Topics** — what actually recurs across the week's reading.
+  Not a list of subjects, which the contents page already gives you, but
+  what connects them.
+- **A follow-ups page** — only if you ask for one. You describe, in your own
+  words, what you are watching for in your reading; it flags things worth
+  chasing. This was hardcoded to the author's own newsletter until newsprint
+  became something other people install, which is why it is now free text
+  in your config rather than a setting.
+
+**This is off by default, and stays off unless you turn it on.** With no
+API key configured, nothing is sent anywhere and the packet prints exactly
+as it otherwise would, with one line saying the summary was skipped and
+why. There is no degraded mode and no silent failure: a missing key, no
+network, an API error, or a timeout all end the same way — the packet
+still prints, just without these pages.
+
+To turn it on you need an [Anthropic API key](https://console.anthropic.com/).
+The key never goes in `config.toml`. Point the config at a file that holds
+it instead:
+
+```toml
+[summary]
+enabled = true
+api_key_file = "~/.env"          # a dotenv-format file
+api_key_var = "ANTHROPIC_API_KEY"
+model = "claude-opus-5"
+
+interest = "..."                 # optional; see config.example.toml
+interest_title = "Follow-ups"
+```
+
+Only `api_key_var` is read from that file, and the key is never written to
+the run log or echoed on failure.
+
+**What it costs, and what leaves your machine.** One API call per run,
+carrying the cleaned text of every newsletter in the packet — on a typical
+week that is roughly 40k input tokens and a few hundred out. That text goes
+to Anthropic. If that is not something you want for your mail, leave the
+feature off; everything else works without it.
 
 ## Filtering
 

@@ -62,9 +62,9 @@ _SCHEMA: dict[str, Any] = {
                 "properties": {
                     "topic": {"type": "string"},
                     "why": {"type": "string"},
-                    "dataset": {"type": "string"},
+                    "source": {"type": "string"},
                 },
-                "required": ["topic", "why", "dataset"],
+                "required": ["topic", "why", "source"],
                 "additionalProperties": False,
             },
         },
@@ -73,18 +73,29 @@ _SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-_PROMPT_HEADER = """\
-You are helping a Python trainer prepare their weekly reading packet.
-They write Bamboo Weekly, a newsletter of pandas exercises built on real
-public datasets. Below is the cleaned text of every newsletter in this
-week's packet, each preceded by its publication and subject line.
+_TOPICS_ONLY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"topics": _SCHEMA["properties"]["topics"]},
+    "required": ["topics"],
+    "additionalProperties": False,
+}
 
-Produce exactly two things, as JSON matching the given schema. This is a
-quick reading aid printed on quarter-sheet pages, not a report - each
-section must fit on about one small printed page, so be ruthless about
-length: at most 3 items per list, and each item at most one short
-sentence per field. Cut the weakest items rather than shorten every
-sentence to fit - a list of 2 strong items beats 3 mediocre ones.
+
+def _schema_for(interest: str) -> dict[str, Any]:
+    return _SCHEMA if interest else _TOPICS_ONLY_SCHEMA
+
+
+_PROMPT_INTRO = """\
+You are helping someone prepare their weekly reading packet. Below is the
+cleaned text of every newsletter in this week's packet, each preceded by
+its publication and subject line.
+
+Produce JSON matching the given schema. This is a quick reading aid
+printed on quarter-sheet pages, not a report - each section must fit on
+about one small printed page, so be ruthless about length: at most 3
+items per list, and each item at most one short sentence per field. Cut
+the weakest items rather than shorten every sentence to fit - a list of 2
+strong items beats 3 mediocre ones.
 
 1. "topics": the themes that actually recur across this week's
    newsletters - not a list of subjects (a contents page already lists
@@ -92,23 +103,40 @@ sentence to fit - a list of 2 strong items beats 3 mediocre ones.
    plus one sentence ("detail") saying what the connection actually is.
    If nothing genuinely recurs, return an empty list rather than
    inventing a connection.
+"""
 
-2. "candidates": Bamboo Weekly topic candidates - things mentioned in the
-   newsletters that are interesting *and* have one or more public
-   datasets plausibly behind them, tractable enough that a reader could
-   actually download the data and build a pandas exercise on it. For
-   each, one sentence each: the topic, why it is interesting ("why"), and
-   which dataset or source might back it ("dataset") - name a specific
-   series, agency, or public repository, not "government data" in the
-   abstract.
+_PROMPT_INTEREST = """\
+2. "candidates": things in this week's newsletters worth following up,
+   judged against what this reader says they are looking for:
 
-Be honest rather than exhaustive: if you have nothing good to offer for
-either list, return an empty list for it rather than padding it with weak
-ideas. A short, honest list beats five weak ones - and a list that fits
-the page beats one that doesn't.
+{interest}
+
+   For each, one sentence each: the thing itself ("topic"), why it is
+   worth their time ("why"), and where they would go next ("source") -
+   name something specific, not a category in the abstract.
+"""
+
+_PROMPT_CLOSE = """\
+Be honest rather than exhaustive: if you have nothing good to offer for a
+list, return an empty list rather than padding it with weak ideas. A
+short, honest list beats five weak ones - and a list that fits the page
+beats one that doesn't.
 
 --- NEWSLETTERS ---
 """
+
+
+def _prompt_header(interest: str) -> str:
+    if not interest:
+        return _PROMPT_INTRO + "\n" + _PROMPT_CLOSE
+    indented = "\n".join(f"   {line}" for line in interest.splitlines())
+    return (
+        _PROMPT_INTRO
+        + "\n"
+        + _PROMPT_INTEREST.format(interest=indented)
+        + "\n"
+        + _PROMPT_CLOSE
+    )
 
 
 class SummaryError(Exception):
@@ -127,7 +155,7 @@ class Topic:
 class Candidate:
     topic: str
     why: str
-    dataset: str
+    source: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,7 +175,7 @@ class ApiResponse:
     output_tokens: int | None
 
 
-Caller = Callable[[str, str, str, float], ApiResponse]
+Caller = Callable[[str, str, str, float, dict[str, Any]], ApiResponse]
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,16 +235,16 @@ def _document_text(document: Document) -> str:
     return BeautifulSoup(document.html, "lxml").get_text("\n", strip=True)
 
 
-def _build_prompt(built: Sequence[Built]) -> str:
+def _build_prompt(built: Sequence[Built], interest: str) -> str:
     sections = [
         f"## {item.document.publication} — {item.document.title}\n\n"
         f"{_document_text(item.document)}"
         for item in built
     ]
-    return _PROMPT_HEADER + "\n\n".join(sections)
+    return _prompt_header(interest) + "\n\n".join(sections)
 
 
-def _parse_content(text: str) -> SummaryContent:
+def _parse_content(text: str, interest: str) -> SummaryContent:
     try:
         data = json.loads(text)
     except json.JSONDecodeError as error:
@@ -228,13 +256,20 @@ def _parse_content(text: str) -> SummaryContent:
             Topic(title=str(item["title"]), detail=str(item["detail"]))
             for item in data["topics"]
         )
-        candidates = tuple(
-            Candidate(
-                topic=str(item["topic"]),
-                why=str(item["why"]),
-                dataset=str(item["dataset"]),
+        # Only asked for when the reader described an interest, so only
+        # required back then - a model answering the topics-only schema
+        # has no "candidates" key to read.
+        candidates = (
+            tuple(
+                Candidate(
+                    topic=str(item["topic"]),
+                    why=str(item["why"]),
+                    source=str(item["source"]),
+                )
+                for item in data["candidates"]
             )
-            for item in data["candidates"]
+            if interest
+            else ()
         )
     except (KeyError, TypeError) as error:
         raise SummaryError(f"malformed response: {error}") from error
@@ -242,7 +277,11 @@ def _parse_content(text: str) -> SummaryContent:
 
 
 def _default_caller(
-    api_key: str, model: str, prompt: str, timeout: float
+    api_key: str,
+    model: str,
+    prompt: str,
+    timeout: float,
+    schema: dict[str, Any],
 ) -> ApiResponse:
     """Call the live API, streamed.
 
@@ -265,7 +304,7 @@ def _default_caller(
         max_tokens=_MAX_OUTPUT_TOKENS,
         messages=[{"role": "user", "content": prompt}],
         output_config={
-            "format": {"type": "json_schema", "schema": _SCHEMA},
+            "format": {"type": "json_schema", "schema": schema},
             "effort": "medium",
         },
     ) as stream:
@@ -303,17 +342,17 @@ def _topics_document(topics: Sequence[Topic], packet_date: date) -> Document:
 
 
 def _candidates_document(
-    candidates: Sequence[Candidate], packet_date: date
+    candidates: Sequence[Candidate], packet_date: date, title: str
 ) -> Document:
     rows = "".join(
         f"<li><strong>{escape(candidate.topic)}</strong> — "
-        f"{escape(candidate.why)} <em>Dataset: {escape(candidate.dataset)}</em></li>"
+        f"{escape(candidate.why)} <em>Source: {escape(candidate.source)}</em></li>"
         for candidate in candidates
     )
     return Document(
         origin=Origin(kind="url", identifier="summary-candidates"),
         publication="Summary",
-        title="Bamboo Weekly Candidates",
+        title=title,
         date=datetime.combine(packet_date, dt_time.min, tzinfo=UTC),
         html=f"<ul>{rows}</ul>",
     )
@@ -336,7 +375,9 @@ def _render_pages(
             )
         )
     if content.candidates:
-        document = _candidates_document(content.candidates, packet_date)
+        document = _candidates_document(
+            content.candidates, packet_date, config.summary.interest_title
+        )
         pdf = render_fn(document, config, out_dir=out_dir / "candidates")
         pages.append(
             Built(
@@ -367,11 +408,16 @@ def build_summary_pages(
     api_key = ""
     try:
         api_key = read_api_key(config.summary.api_key_file, config.summary.api_key_var)
-        prompt = _build_prompt(built)
+        interest = config.summary.interest
+        prompt = _build_prompt(built, interest)
         response = caller(
-            api_key, config.summary.model, prompt, config.summary.timeout_seconds
+            api_key,
+            config.summary.model,
+            prompt,
+            config.summary.timeout_seconds,
+            _schema_for(interest),
         )
-        content = _parse_content(response.text)
+        content = _parse_content(response.text, interest)
         pages = _render_pages(content, config, packet_date, out_dir, render_fn)
         return SummaryOutcome(
             pages=tuple(pages),
