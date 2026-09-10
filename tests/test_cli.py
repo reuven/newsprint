@@ -3282,3 +3282,71 @@ def test_unretire_records_what_it_restored(monkeypatch, tmp_path) -> None:
             "failed": [],
         }
     ]
+
+
+def test_about_reads_every_line_from_the_installed_metadata() -> None:
+    """--version builds its message at import time, so the function
+    itself needs exercising directly. All three lines come from the
+    package metadata rather than the source, which is what keeps them
+    from drifting from pyproject.toml."""
+    from importlib.metadata import metadata
+    from importlib.metadata import version as installed_version
+
+    from newsprint.cli import about
+
+    lines = about().splitlines()
+    assert lines == [
+        f"newsprint {installed_version('newsprint')}",
+        "https://pypi.org/project/newsprint/",
+        str(metadata("newsprint")["Author-email"]),
+    ]
+    assert "@" in lines[2], "the author line must carry a real address"
+
+
+def test_a_fetch_reports_the_time_it_took_not_the_time_of_day(
+    monkeypatch, mail_config
+) -> None:
+    """The fetch prints how long it took, and a clock read straight out
+    of time.monotonic() is a plausible-looking positive number - it is
+    the machine's uptime, which on a laptop left running reads as days."""
+    import re
+
+    _FakeBox.instances.clear()
+    monkeypatch.setattr("newsprint.cli.Mailbox", _FakeBox)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    runner = CliRunner()
+    with runner.isolation() as (out, _err, _):
+        fetch_queue(mail_config, no_pick=True)
+        printed = out.getvalue().decode()
+
+    seconds = [float(match) for match in re.findall(r"in (\d+\.\d\d)s\.", printed)]
+    assert seconds, f"no timing line in {printed!r}"
+    assert all(value < 60.0 for value in seconds), printed
+
+
+def test_a_fetch_applies_the_readers_own_publication_names(
+    monkeypatch, mail_config
+) -> None:
+    """publications.toml is how a reader renames a newsletter whose own
+    idea of its name is unhelpful, and the overrides have to reach the
+    extractor to have any effect. Dropped on the way, every rename in
+    that file silently does nothing."""
+    from newsprint.config import PublicationNames
+
+    _FakeBox.instances.clear()
+    monkeypatch.setattr("newsprint.cli.Mailbox", _FakeBox)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+    monkeypatch.setattr(
+        "newsprint.cli.load_publication_names",
+        lambda: PublicationNames(
+            by_address={"news@example.com": "The Renamed Weekly"}, by_list_id={}
+        ),
+    )
+
+    documents, _trash = fetch_queue(mail_config, no_pick=True)
+
+    assert [document.publication for document in documents] == [
+        "The Renamed Weekly",
+        "The Renamed Weekly",
+    ]
