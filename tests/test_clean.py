@@ -1211,6 +1211,62 @@ def test_duplicated_title_block_in_leading_region_is_removed() -> None:
     assert "Crude economics doesn't explain" in cleaned.html
 
 
+def test_a_duplicate_title_broken_up_by_inline_tags_is_still_matched() -> None:
+    """Substack sets part of a headline in italics and part of a dateline
+    in its own span, so neither line is one text node. Read back without a
+    separator between the fragments they become "NeoNazis and the
+    ImpotenceofTrumponomics" and "Sep7", and neither the title comparison
+    nor the date test recognizes what it is looking at.
+
+    The date sits directly under the title here, which is the ordinary
+    shape - title, then dateline - and the one a lookahead starting a leaf
+    too late would step straight over.
+    """
+    title = "Neo-Nazis and the Impotence of Trumponomics"
+    html = (
+        "<html><body><div>"
+        "<h2>\n  Neo-Nazis and the <em>Impotence</em> of Trumponomics\n</h2>"
+        "<p>\n  <span>Sep</span> 7\n</p>"
+        "<p>Crude economics doesn't explain what just happened, and here is "
+        "a real paragraph of genuine article prose about the subject.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html, title=title))
+    assert "Neo-Nazis" not in cleaned.html
+    assert "Crude economics doesn't explain" in cleaned.html
+    # The report names the lines as they read, not as the template wrapped
+    # them: this removal is the one the reader is told is not data loss,
+    # so it has to be legible.
+    assert [(b.text, b.kind) for b in cleaned.blocks_dropped] == [
+        (title, "duplicate_title"),
+        ("Sep 7", "duplicate_title"),
+    ]
+
+
+def test_a_masthead_above_a_duplicate_title_does_not_hide_it() -> None:
+    """The duplicated header is rarely the very first thing in the body:
+    a publication name and a dateline usually sit above it. Neither is the
+    title, and neither is a reason to stop looking - and the dateline
+    above must not be mistaken for the one that closes the block, which
+    would leave the block bounded backwards and nothing removed."""
+    title = "Neo-Nazis and the Impotence of Trumponomics"
+    html = (
+        "<html><body><div>"
+        "<p>THE ARGUMENT</p>"
+        "<p>Sep 7</p>"
+        f"<h2>{title}</h2>"
+        "<p>Paul Krugman</p>"
+        "<p>Sep 7</p>"
+        "<p>Crude economics doesn't explain what just happened, and here is "
+        "a real paragraph of genuine article prose about the subject.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html, title=title))
+    assert "Neo-Nazis" not in cleaned.html
+    assert "Paul Krugman" not in cleaned.html
+    assert "Crude economics doesn't explain" in cleaned.html
+
+
 def test_duplicate_title_match_is_a_prefix_or_truncation_in_either_direction() -> None:
     """Publications truncate: the body's own copy may be shorter (an
     ellipsis-truncated rendering) or the Subject may be shorter (a

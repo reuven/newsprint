@@ -79,3 +79,32 @@ segfaults had been hiding. Any score taken without it is worthless.
 - String-literal mutations (`"PNG"` -> `"png"`, `"Content-Type"` ->
   `"CONTENT-TYPE"`) that survive are usually noise: the value is passed
   to a library that does not care.
+
+## Equivalent mutants
+
+Some survivors cannot be killed, because the edit does not change what the
+code does. Chasing one wastes an afternoon, so they are written down here
+as they are confirmed - each with the reason, so a later run can re-check
+the reason rather than re-derive it.
+
+- **`get_text(" ", strip=True)` where the caller normalizes anyway.**
+  `strip=True`/`False`/`None` and the omitted keyword all agree wherever
+  the result is passed to something that strips or rewrites it:
+  `_is_short_date_line` calls `.strip()` itself, `_normalize_title_text`
+  removes every non-word character, and `" ".join(text.split())` erases
+  the difference outright. The **separator** is a different matter: drop
+  it and text split across inline tags runs together ("Sep7", "2.Warsh"),
+  which those same callers then fail to recognize. Separator mutants are
+  real; strip mutants at those call sites are not.
+- **`find_all(True)` vs `find_all(None)`** - bs4 treats both as "every
+  tag".
+- **`_sponsor_anchor`'s `"html"` stop** - `clean_document` parses with
+  lxml, which synthesizes a `<body>` for every input including a bare
+  fragment, so the climb meets `body` first every time.
+- **`_strip_chrome_blocks`'s `block.find("img")`** - widening it to any
+  descendant is invisible, because `_prune_invisible_elements` removes the
+  same textless blocks at the end of the run and spares the same `<img>`.
+- **`_strip_duplicate_title_block`'s `match_idx is None or end_idx is
+  None`, and the initial value of `end_idx`** - the two indices are only
+  ever assigned together, so `or` and `and` agree and the initial value is
+  never the one that is read.
