@@ -2983,12 +2983,17 @@ def test_unretire_restores_the_last_retirement(monkeypatch, tmp_path: Path) -> N
     directory = _retirement_log(tmp_path)
     monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", directory)
     monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "r")
-    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
-
     seen: dict[str, object] = {}
+
+    def recording_password_for(host: str, user: str) -> str:
+        seen["credentials"] = (host, user)
+        return "secret"
+
+    monkeypatch.setattr("newsprint.cli.password_for", recording_password_for)
 
     class FakeBox:
         def __init__(self, **kwargs):
+            seen["mailbox_kwargs"] = kwargs
             seen["folder"] = kwargs["folder"]
 
         def __enter__(self):
@@ -3015,6 +3020,16 @@ def test_unretire_restores_the_last_retirement(monkeypatch, tmp_path: Path) -> N
     assert seen["folder"] == "INBOX/toprint"
     assert "Restored 2 message(s)" in result.output
     assert "still marked read" in result.output
+    # The mailbox is opened with the account from the config and the
+    # folder the retirement came out of - not the configured folder, if
+    # the run happened against a different one - and the keychain is
+    # asked under that same account.
+    config = load_config(tmp_path / "absent.toml")
+    assert seen["credentials"] == (config.mail.host, config.mail.user)
+    kwargs = seen["mailbox_kwargs"]
+    assert kwargs["host"] == config.mail.host
+    assert kwargs["user"] == config.mail.user
+    assert kwargs["password"] == "secret"
 
 
 def test_unretire_declined_changes_nothing(monkeypatch, tmp_path: Path) -> None:
@@ -3129,3 +3144,106 @@ def test_setup_flag_runs_the_wizard_and_builds_nothing(
     result = CliRunner().invoke(main, ["--setup", "--config", str(target)])
     assert result.exit_code == 0
     assert called == [target]
+
+
+def test_unretire_needs_a_yes_and_not_just_an_enter(monkeypatch, tmp_path) -> None:
+    """Moving mail back is the mirror of retiring it, and both are hard to
+    undo - so the question is asked with "no" as its default. Someone
+    running --unretire to see what it would do, and pressing return out of
+    habit, must not move anything."""
+    directory = _retirement_log(tmp_path)
+    monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", directory)
+
+    def explode(**kwargs):
+        raise AssertionError("no mailbox may be opened on a bare return")
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", explode)
+
+    result = CliRunner().invoke(
+        main, ["--unretire", "--config", str(tmp_path / "absent.toml")], input="\n"
+    )
+    assert result.exit_code == 0
+    assert "Nothing changed" in result.output
+
+
+def test_unretire_falls_back_to_the_configured_folder(monkeypatch, tmp_path) -> None:
+    """A retirement logged before the folder was recorded still knows
+    where its messages went; where they come back to is whatever the
+    config says now."""
+    from newsprint.mail import UnretireResult
+
+    directory = _retirement_log(tmp_path, folder="")
+    monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", directory)
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "r")
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    seen: dict[str, object] = {}
+
+    class FakeBox:
+        def __init__(self, **kwargs):
+            seen["folder"] = kwargs["folder"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def unretire(self, message_ids, trash):
+            return UnretireResult(restored=tuple(message_ids))
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", FakeBox)
+    result = CliRunner().invoke(
+        main,
+        ["--unretire", "--config", str(tmp_path / "absent.toml")],
+        input="y\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert seen["folder"] == load_config(tmp_path / "absent.toml").mail.folder
+
+
+def test_unretire_records_what_it_restored(monkeypatch, tmp_path) -> None:
+    """The undo is itself logged, so a reader can see what came back and
+    what did not - and so a second --unretire finds an "unretired" entry
+    rather than the retirement it has already undone."""
+    from newsprint.mail import UnretireResult
+
+    directory = _retirement_log(tmp_path)
+    monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", directory)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    recorded: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "newsprint.runlog.record",
+        lambda entry, **kw: (recorded.append(entry), tmp_path / "r")[1],
+    )
+
+    class FakeBox:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def unretire(self, message_ids, trash):
+            return UnretireResult(restored=("<a@x>",), missing=("<b@x>",))
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", FakeBox)
+    CliRunner().invoke(
+        main,
+        ["--unretire", "--config", str(tmp_path / "absent.toml")],
+        input="y\n",
+    )
+    assert recorded == [
+        {
+            "outcome": "unretired",
+            "folder": "INBOX/toprint",
+            "trash": "INBOX/Trash",
+            "restored": ["<a@x>"],
+            "missing": ["<b@x>"],
+            "failed": [],
+        }
+    ]
