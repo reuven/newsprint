@@ -18,10 +18,14 @@ jobs:
     # macOS-specific paths in _libpath.py really are no-ops elsewhere.
     # Windows is deliberately absent: printing goes through `lp` (CUPS),
     # which it does not have.
+    # 3.12 is the floor the package declares; 3.14 is what it is developed
+    # on. Both are tested, because "supports 3.12" is a claim on the PyPI
+    # page that nothing else would check.
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        python-version: ["3.12", "3.14"]
 
     runs-on: ${{ matrix.os }}
 
@@ -50,7 +54,7 @@ jobs:
       # uv installs the interpreter itself, so this does not depend on
       # whichever Python the runner image happens to ship.
       - name: Sync the environment
-        run: uv sync --locked
+        run: uv sync --locked --python ${{ matrix.python-version }}
 
       - name: Format
         run: uv run ruff format --check src tests scripts
