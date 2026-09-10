@@ -198,11 +198,11 @@ PHRASES: tuple[str, ...] = (
 # comma-separated role and place, ending in a social handle - "Andrew Ross
 # Sorkin, Founder/Editor-at-Large, New York @andrewrsorkin". DealBook signs
 # off with seven of them. The colon form is _MASTHEAD_CREDIT above; this one
-# has no colon at all, and is recognised by the trailing handle plus the
+# has no colon at all, and is recognized by the trailing handle plus the
 # comma-separated title-case run before it.
-# Only the first word must be capitalised: "Michael J. de la Merced" has
+# Only the first word must be capitalized: "Michael J. de la Merced" has
 # lower-case particles in the middle, and requiring every word to be
-# capitalised silently skipped him while catching his six colleagues. The
+# capitalized silently skipped him while catching his six colleagues. The
 # trailing handle plus the comma-separated segments carry the signal.
 _HANDLE_CREDIT = re.compile(
     r"^[A-Z][\w.'\u2019-]*(?:\s+[\w.'\u2019/-]+)*"

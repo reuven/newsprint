@@ -928,7 +928,7 @@ def test_reported_trailing_lines_score_as_chrome(line: str) -> None:
         "Brian O'Keefe, Managing Editor, New York @brianbokeefe",
         "Lauren Hirsch, Reporter, New York @LaurenSHirsch",
         # Lower-case particles in the middle of a name. Requiring every word
-        # to be capitalised skipped exactly this one while catching his six
+        # to be capitalized skipped exactly this one while catching his six
         # colleagues, which left the whole masthead standing.
         "Michael J. de la Merced, Reporter, London @m_delamerced",
     ],

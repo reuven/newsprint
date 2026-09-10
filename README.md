@@ -62,7 +62,7 @@ newsprint --setup
 It checks the credentials before writing anything, and lists your server's
 own folder names to choose from — worth doing even if you would rather hand-
 write the file, because the folder is the one setting nobody can guess from
-outside. The hierarchy separator is not standardised (`.` on some servers,
+outside. The hierarchy separator is not standardized (`.` on some servers,
 `/` on others), and on Gmail a "folder" is a label.
 
 To write the file by hand instead, copy the example config and fill in your mail account and printer:
