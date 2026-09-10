@@ -1,6 +1,6 @@
 [project]
 name = "newsprint"
-version = "0.1.0"
+version = "0.2.0"
 description = "Fetch starred newsletters over IMAP, reduce them to article content, and print them quarter-sheet, four to a side, duplex."
 readme = "README.md"
 license = "MIT"
