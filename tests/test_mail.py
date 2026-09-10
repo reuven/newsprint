@@ -36,6 +36,10 @@ class FakeIMAP:
         # UIDVALIDITY is what a reconnect compares to decide whether the
         # uids it is still holding mean anything on the new connection.
         self.uidvalidity = b"1"
+        # What the server advertises. MOVE (RFC 6851) and UIDPLUS (RFC
+        # 4315) are both extensions; retirement falls back when either is
+        # missing, so a test can drop them from here to exercise that.
+        self.capabilities = ("IMAP4REV1", "MOVE", "UIDPLUS")
         self.logout_error: BaseException | None = None
         self.shutdown_error: BaseException | None = None
         self.list_response = [
@@ -944,3 +948,221 @@ def test_nothing_is_reported_when_the_connection_holds() -> None:
     with box:
         box.fetch_many([7])
     assert said == []
+
+
+class NoMoveIMAP(FakeIMAP):
+    """A server without RFC 6851's MOVE - which is most of IMAP history,
+    and still some servers now."""
+
+    def __init__(self, host: str) -> None:
+        super().__init__(host)
+        self.capabilities = ("IMAP4REV1", "UIDPLUS")
+
+
+class NoMoveNoUidplusIMAP(FakeIMAP):
+    """Neither MOVE nor UIDPLUS: nothing can be expunged by uid, so
+    nothing is expunged at all."""
+
+    def __init__(self, host: str) -> None:
+        super().__init__(host)
+        self.capabilities = ("IMAP4REV1",)
+
+
+def _uid_commands(fake: FakeIMAP) -> list[str]:
+    return [call[1] for call in fake.calls if call[0] == "uid"]
+
+
+def test_a_server_without_move_copies_marks_deleted_and_expunges() -> None:
+    fake = NoMoveIMAP("h")
+    with mailbox(fake) as box:
+        result = box.retire([7], "INBOX/Trash")
+    assert result.retired == (7,)
+    assert _uid_commands(fake) == ["STORE", "STORE", "COPY", "STORE", "EXPUNGE"]
+
+
+def test_without_uidplus_the_message_is_flagged_but_never_expunged() -> None:
+    """A bare EXPUNGE would remove every message in the folder already
+    flagged \\Deleted, including ones another client flagged and has not
+    expunged yet. Leaving this one flagged is the honest trade."""
+    fake = NoMoveNoUidplusIMAP("h")
+    with mailbox(fake) as box:
+        result = box.retire([7], "INBOX/Trash")
+    assert result.retired == (7,)
+    commands = _uid_commands(fake)
+    assert commands == ["STORE", "STORE", "COPY", "STORE"]
+    assert "EXPUNGE" not in commands
+
+
+def test_a_server_with_move_still_uses_it() -> None:
+    fake = FakeIMAP("h")
+    with mailbox(fake) as box:
+        box.retire([7], "INBOX/Trash")
+    assert "MOVE" in _uid_commands(fake)
+    assert "COPY" not in _uid_commands(fake)
+
+
+class DottedServerIMAP(FakeIMAP):
+    """A server whose hierarchy delimiter is "." - Dovecot's default, and
+    what the author's own host uses. A config written "INBOX/toprint" is
+    simply the wrong name here."""
+
+    def __init__(self, host: str) -> None:
+        super().__init__(host)
+        self.list_response = [
+            b'(\\HasChildren) "." INBOX',
+            b'(\\HasNoChildren) "." INBOX.toprint',
+            b'(\\HasNoChildren \\Trash) "." INBOX.Trash',
+        ]
+
+    def select(self, folder: str, readonly: bool = False):
+        self.calls.append(("select", folder, readonly))
+        if "/" in folder:
+            return ("NO", [b"Mailbox does not exist"])
+        self.selected = (folder, readonly)
+        return ("OK", [b"2226"])
+
+
+def test_a_slash_config_opens_on_a_dot_delimited_server() -> None:
+    """The delimiter is not standardised, so a config written for one
+    server is wrong on the other - and "NO" alone sends people hunting for
+    a folder that is right there."""
+    fake = DottedServerIMAP("h")
+    with mailbox(fake) as box:
+        assert box._folder == "INBOX.toprint"
+    assert fake.selected == ("INBOX.toprint", True)
+
+
+def test_a_folder_that_really_is_missing_still_reports_both_attempts() -> None:
+    """Rewriting is a guess; when it fails too, say what was tried rather
+    than reporting only the name the user did not write."""
+
+    class MissingIMAP(DottedServerIMAP):
+        def select(self, folder: str, readonly: bool = False):
+            self.calls.append(("select", folder, readonly))
+            return ("NO", [b"Mailbox does not exist"])
+
+    with pytest.raises(MailError, match="also tried"), mailbox(MissingIMAP("h")):
+        pass
+
+
+def test_a_correct_folder_never_triggers_a_list() -> None:
+    """The rewrite costs a LIST round trip, so it only happens after a
+    SELECT has already failed."""
+    fake = FakeIMAP("h")
+    with mailbox(fake):
+        pass
+    assert not any(call[0] == "list" for call in fake.calls)
+
+
+def test_a_failed_list_gives_up_on_rewriting_the_folder() -> None:
+    """No delimiter to be had means no better guess to offer, so the
+    original SELECT failure is what the user sees."""
+
+    class ListFailsIMAP(FakeIMAP):
+        def select(self, folder: str, readonly: bool = False):
+            self.calls.append(("select", folder, readonly))
+            return ("NO", [b"nope"])
+
+        def list(self):
+            self.calls.append(("list",))
+            return ("NO", [b"failure"])
+
+    with (
+        pytest.raises(MailError, match="could not open folder"),
+        mailbox(ListFailsIMAP("h")),
+    ):
+        pass
+
+
+def test_list_lines_that_are_not_bytes_are_skipped() -> None:
+    """imaplib widens a response element to cover FETCH's (info, payload)
+    tuples; LIST never produces one, but the type says it might."""
+
+    class OddListIMAP(FakeIMAP):
+        def __init__(self, host: str) -> None:
+            super().__init__(host)
+            self.list_response = [
+                (b"unexpected", b"tuple"),
+                b"no delimiter here at all",
+                b'(\\HasNoChildren) "." INBOX.toprint',
+            ]
+
+        def select(self, folder: str, readonly: bool = False):
+            self.calls.append(("select", folder, readonly))
+            if "/" in folder:
+                return ("NO", [b"nope"])
+            self.selected = (folder, readonly)
+            return ("OK", [b"1"])
+
+    with mailbox(OddListIMAP("h")) as box:
+        assert box._folder == "INBOX.toprint"
+
+
+def test_a_delimiter_that_changes_nothing_is_not_retried() -> None:
+    """A folder with no separator in it cannot be rewritten, so there is
+    no second attempt to report."""
+
+    class FlatIMAP(DottedServerIMAP):
+        def select(self, folder: str, readonly: bool = False):
+            self.calls.append(("select", folder, readonly))
+            return ("NO", [b"nope"])
+
+    box = Mailbox(
+        host="h",
+        user="u",
+        password="p",
+        folder="toprint",
+        imap_factory=lambda host: FlatIMAP(host),
+    )
+    with pytest.raises(MailError) as caught, box:
+        pass
+    assert "also tried" not in str(caught.value)
+
+
+@pytest.mark.parametrize("failing", ["COPY", "STORE_DELETED"])
+def test_a_failure_mid_fallback_is_reported_and_the_star_restored(
+    failing: str,
+) -> None:
+    """Each step of the pre-MOVE sequence can fail on its own, and the
+    message must be re-starred either way rather than vanishing from a
+    star-based queue."""
+
+    class FailingIMAP(NoMoveIMAP):
+        def uid(self, command: str, *args):
+            if command == "COPY" and failing == "COPY":
+                return ("NO", [b"refused"])
+            if (
+                command == "STORE"
+                and failing == "STORE_DELETED"
+                and args
+                and "Deleted" in str(args[-1])
+            ):
+                return ("NO", [b"refused"])
+            return super().uid(command, *args)
+
+    fake = FailingIMAP("h")
+    with mailbox(fake) as box:
+        result = box.retire([7], "INBOX/Trash")
+    assert result.retired == ()
+    assert result.failed == (7,)
+    assert result.unrecoverable == ()
+
+
+def test_a_list_with_no_delimiter_anywhere_gives_up() -> None:
+    """A LIST whose every line is unparseable yields no delimiter, and the
+    loop has to fall off the end rather than guess one."""
+
+    class NoDelimiterIMAP(FakeIMAP):
+        def __init__(self, host: str) -> None:
+            super().__init__(host)
+            self.list_response = [b"garbage", b"more garbage"]
+
+        def select(self, folder: str, readonly: bool = False):
+            self.calls.append(("select", folder, readonly))
+            return ("NO", [b"nope"])
+
+    with (
+        pytest.raises(MailError, match="could not open folder"),
+        mailbox(NoDelimiterIMAP("h")),
+    ):
+        pass

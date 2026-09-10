@@ -14,9 +14,13 @@
 [mail]
 host   = "imap.gmail.com"        # e.g. imap.gmail.com, imap.fastmail.com
 user   = "you@example.com"
-folder = "INBOX/toprint"         # the folder you star things into - for
-                                  # Gmail this is just the label name, e.g.
-                                  # "toprint" (see the Gmail note above)
+folder = "INBOX/toprint"         # the folder you star things into. The
+                                  # separator between INBOX and the folder
+                                  # differs by server ("/" or "."); if the
+                                  # one here is wrong, newsprint tries the
+                                  # one your server reports. For Gmail this
+                                  # is just the label name, e.g. "toprint"
+                                  # (see the Gmail note above)
 trash  = "auto"                  # "auto" discovers the \Trash folder;
                                   # or set a literal folder name for a
                                   # server without SPECIAL-USE support
