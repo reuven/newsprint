@@ -7,9 +7,11 @@ import pytest
 
 from newsprint.config import load_config
 from newsprint.contents import build_contents
+from newsprint.geometry import MM_PER_INCH, POINTS_PER_INCH
 from newsprint.models import Document, Origin, Verdict
 from newsprint.pdfutil import page_count, page_text
 from newsprint.pipeline import Built
+from newsprint.stamp import byline
 
 PACKET_DATE = date(2026, 9, 5)
 
@@ -521,3 +523,137 @@ def test_a_starts_and_built_length_mismatch_is_an_error_not_a_silent_drop(
     monkeypatch.setattr(contents_module, "_starting_cells", lambda *args, **kwargs: [1])
     with pytest.raises(ValueError):
         build_contents([_built(0), _built(1)], config, PACKET_DATE, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# The width a row's text is given, worked out from the constants rather
+# than taken on trust. Every slip in it shows up the same way - a subject
+# cut shorter or longer than the page can actually hold - and only a
+# fixture sitting on the boundary can tell the difference.
+# ---------------------------------------------------------------------------
+
+
+def _expected_remaining_width(config, starts) -> float:
+    from newsprint.contents import (
+        _NUMBER_GAP_PT,
+        _SUBJECT_FIT_SAFETY,
+        _text_width_pt,
+    )
+
+    scale = POINTS_PER_INCH / MM_PER_INCH
+    cell = config.printing.paper.cell
+    usable = (cell.width_mm - 2 * config.layout.margin_mm) * scale
+    number_column = (
+        _text_width_pt(str(max(starts, default=0)), config.layout.font_size_pt)
+        + _NUMBER_GAP_PT
+    )
+    return max(0.0, usable - number_column) * _SUBJECT_FIT_SAFETY
+
+
+def test_a_row_is_given_the_page_less_its_number_column(config, tmp_path) -> None:
+    """The row's text gets what is left of the cell after the margins and
+    the column the largest starting number needs, less a gap so the two
+    never touch - and then three quarters of that, since the font this is
+    measured in is not the font the page is set in.
+
+    The fixture is built against that width rather than compared to it: a
+    subject grown until one more character would not fit comes through
+    whole, and that same subject with one more character is cut. Any slip
+    in the arithmetic moves the boundary and one of the two flips.
+    """
+    from dataclasses import replace
+
+    from newsprint.contents import _contents_document, _row_text
+
+    starts = [2]
+    remaining = _expected_remaining_width(config, starts)
+    font_size = config.layout.font_size_pt
+
+    def row_for(subject: str) -> str:
+        item = replace(_built(1), document=replace(_built(1).document, title=subject))
+        return _contents_document([item], starts, PACKET_DATE, 5, config).html
+
+    # Grow the subject to the last width that still fits whole.
+    subject = "Wide"
+    while "…" not in _row_text(
+        replace(_built(1), document=replace(_built(1).document, title=subject + "W")),
+        remaining_width_pt=remaining,
+        font_size_pt=font_size,
+    ):
+        subject += "W"
+
+    assert subject in row_for(subject), "the last subject that fits must survive whole"
+    assert subject + "W" not in row_for(subject + "W"), "one more must be cut"
+    assert "…" in row_for(subject + "W")
+
+
+def test_the_contents_page_is_identified_as_the_contents(config) -> None:
+    """render() names its file from the identifier, and the contents page
+    is not mail - it has no Message-ID to fall back on, so it carries one
+    of its own."""
+    from newsprint.contents import _contents_document
+
+    document = _contents_document([_built(1)], [2], PACKET_DATE, 4, config)
+    assert document.origin.kind == "url"
+    assert document.origin.identifier == "contents"
+
+
+def test_starting_cells_count_the_contents_and_the_summary_ahead_of_it() -> None:
+    """The number beside each newsletter is the cell it starts on, and
+    everything printed before it pushes it along: the contents page itself
+    first, then the summary if there is one."""
+    from newsprint.contents import _starting_cells
+
+    built = [_built(1, cells=3), _built(2, cells=2), _built(3, cells=4)]
+    assert _starting_cells(built, contents_cells=1) == [2, 5, 7]
+    assert _starting_cells(built, contents_cells=1, summary_cells=2) == [4, 7, 9]
+
+
+def test_a_row_that_exactly_fills_its_width_keeps_its_subject() -> None:
+    """Exactly the width available is a fit, not an overflow - the row
+    that just reaches the edge is printed whole rather than clipped for
+    the sake of a fraction of a point."""
+    from newsprint.contents import _row_text, _text_width_pt
+
+    item = _built(1)
+    full = _row_text(item, remaining_width_pt=10_000.0, font_size_pt=9.0)
+    exact = _text_width_pt(full, 9.0)
+    assert _row_text(item, remaining_width_pt=exact, font_size_pt=9.0) == full
+    assert _row_text(item, remaining_width_pt=exact - 1.0, font_size_pt=9.0) != full
+
+
+def test_a_subject_budget_of_nothing_at_all_drops_the_subject() -> None:
+    """When the byline alone fills the row there is no budget left, and
+    zero is not a budget: asking to fit a subject into it would spend the
+    work only to be told nothing fits."""
+    from dataclasses import replace
+
+    from newsprint.contents import _SUBJECT_SEPARATOR, _row_text, _text_width_pt
+
+    item = _built(1)
+    name_and_separator = _text_width_pt(
+        f"{byline(item.document.publication, item.document.author)}"
+        f"{_SUBJECT_SEPARATOR}",
+        9.0,
+    )
+    long_titled = replace(
+        item, document=replace(item.document, title="A subject with real words in it")
+    )
+    at_zero = _row_text(
+        long_titled, remaining_width_pt=name_and_separator, font_size_pt=9.0
+    )
+    assert _SUBJECT_SEPARATOR not in at_zero, "no separator with nothing after it"
+
+
+def test_a_truncation_candidate_that_exactly_fits_is_taken() -> None:
+    """The binary search keeps the widest candidate that fits, and a
+    candidate landing exactly on the width fits - rejecting it would throw
+    away a whole character on every row that happened to line up."""
+    from newsprint.contents import _text_width_pt, _truncate_to_width
+
+    # A single word, so the snap back to a word boundary never fires and
+    # what the search chose is what comes out.
+    text = "Alphabetical"
+    exact = _text_width_pt("Al…", 9.0)
+    assert _truncate_to_width(text, exact, 9.0) == "Al…"
+    assert _truncate_to_width(text, exact - 0.5, 9.0) == "A…"
