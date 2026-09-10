@@ -2867,3 +2867,58 @@ def test_no_print_with_no_retire_never_asks(monkeypatch, tmp_path: Path) -> None
     assert result.exit_code == 0
     assert events == []
     assert "Printed" not in result.output or "?" not in result.output
+
+
+def test_dry_run_is_exactly_no_print_plus_no_retire(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """--dry-run is documented as equivalent to --no-print --no-retire, and
+    they are separate code paths, so the equivalence is asserted rather
+    than trusted: two branches that must agree will otherwise drift.
+    """
+
+    def observe(flags: list[str], where: Path) -> tuple[int, dict, bool]:
+        events: dict[str, object] = {"spool": 0, "retire": 0, "runlog": []}
+        monkeypatch.setattr(
+            "newsprint.cli.fetch_queue",
+            lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        )
+        monkeypatch.setattr(
+            "newsprint.cli.spool",
+            lambda pdf, config: (
+                events.__setitem__("spool", events["spool"] + 1) or "J-1"
+            ),
+        )
+        monkeypatch.setattr(
+            "newsprint.cli.retire_printed",
+            lambda config, uids, trash: events.__setitem__(
+                "retire", events["retire"] + 1
+            ),
+        )
+        monkeypatch.setattr(
+            "newsprint.runlog.record",
+            lambda entry, **kw: (
+                events["runlog"].append(entry.get("outcome"))  # type: ignore[union-attr]
+                or where / "r"
+            ),
+        )
+        pdf = where / "packet.pdf"
+        result = CliRunner().invoke(
+            main,
+            [
+                *flags,
+                "--no-preview",
+                "--output",
+                str(pdf),
+                "--config",
+                str(where / "absent.toml"),
+            ],
+        )
+        return result.exit_code, events, pdf.is_file()
+
+    dry = observe(["--dry-run"], tmp_path / "dry")
+    both = observe(["--no-print", "--no-retire"], tmp_path / "both")
+
+    assert dry == both, f"--dry-run {dry} diverged from --no-print --no-retire {both}"
+    assert dry[1] == {"spool": 0, "retire": 0, "runlog": []}
+    assert dry[2], "both must still build the PDF"

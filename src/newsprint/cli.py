@@ -395,7 +395,12 @@ def retire_printed(config: Config, uids: list[int], trash: str) -> RetireResult:
     help="Path to config.toml.",
 )
 @click.option(
-    "--dry-run", is_flag=True, help="Build the PDF but do not print or retire."
+    "--dry-run",
+    is_flag=True,
+    help=(
+        "Build and preview the PDF, but print nothing and touch no mail. "
+        "Equivalent to --no-print --no-retire together."
+    ),
 )
 @click.option(
     "--no-retire",
