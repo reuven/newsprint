@@ -193,6 +193,14 @@ the reason rather than re-derive it.
   load-bearing, and that is tested. The text reaches WeasyPrint's log and
   nothing else.
 
+- **`_cap_width_px`'s `max(1, ...)` on the pixel count.** The millimetre
+  floor above it already guarantees at least 1mm of column, and 1mm at
+  200dpi is eight pixels - so the pixel floor can never be the one that
+  decides. (The millimetre floor itself is real, and tested against a
+  config whose margin is wider than its cell.)
+- **`format="PNG"` against `format="png"`** - Pillow's format lookup is
+  case-insensitive, and the bytes come out identical.
+
 ## Known survivors that are not equivalent
 
 - **`_iter_text_elements`'s `node.get_text(strip=True)` in the leaf

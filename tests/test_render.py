@@ -669,3 +669,44 @@ def test_the_default_image_fetcher_is_given_a_timeout(config, tmp_path) -> None:
         render_module.URLFetcher = original  # type: ignore[misc]
     assert built == [_IMAGE_FETCH_TIMEOUT_S]
     assert _IMAGE_FETCH_TIMEOUT_S > 0
+
+
+def test_the_masthead_carries_the_issue_date_in_full(config, tmp_path) -> None:
+    """Every cell's masthead is dated, and the packet is read days after
+    it is printed - so the year is part of it, the month is spelled out
+    rather than abbreviated, and the day carries no leading zero."""
+    from newsprint.render import _build_html
+
+    assert "5 September 2026" in _build_html(document(PROSE), config)
+    # The masthead is set in small caps, so the printed page shouts it.
+    printed = page_text(render(document(PROSE), config, out_dir=tmp_path), 0)
+    assert "5 SEPTEMBER 2026" in printed
+
+
+def test_render_puts_no_packet_title_on_an_ordinary_newsletter(
+    config, tmp_path
+) -> None:
+    """The packet title belongs on the contents page and nowhere else -
+    contents.py is the only caller that passes one. Every other cell is
+    rendered through this same default."""
+    text = page_text(render(document(PROSE), config, out_dir=tmp_path), 0)
+    assert text.lstrip().startswith("MONEY STUFF"), (
+        f"the masthead must be the first thing on the page, not {text[:40]!r}"
+    )
+
+
+def test_a_margin_wider_than_the_cell_still_gives_a_usable_image_cap(config) -> None:
+    """The cap is the cell's text column in pixels, and both steps of
+    working it out are floored. config.toml is hand-edited, so a margin
+    that leaves no column at all is a typo away - and the answer has to be
+    a width an image can be resized to rather than zero or a negative."""
+    from dataclasses import replace
+
+    from newsprint.render import _cap_width_px
+
+    absurd = replace(
+        config,
+        layout=replace(config.layout, margin_mm=config.printing.paper.cell.width_mm),
+    )
+    # One millimetre of column, which at 200dpi is eight pixels.
+    assert _cap_width_px(absurd) == 8
