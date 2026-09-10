@@ -594,6 +594,131 @@ def test_dropped_blocks_are_reported() -> None:
     assert any("unsubscribe" in block.text.lower() for block in cleaned.blocks_dropped)
 
 
+# ---------------------------------------------------------------------------
+# _strip_chrome_blocks sweeps root's own children. Reaching it and nothing
+# else means putting the block mid-document: the leading and trailing runs
+# walk in from the ends and stop at the first real content, and the line
+# pass only takes lines that match a chrome phrase outright.
+# ---------------------------------------------------------------------------
+
+_BLOCK_A = (
+    "<div><p>The Fed declined to move rates this month, which surprised "
+    "almost nobody who had been watching the minutes closely.</p></div>"
+)
+_BLOCK_B = (
+    "<div><p>Markets took the news calmly, which is not at all what anyone "
+    "had forecast at the start of a week like this one.</p></div>"
+)
+# Chrome by its ratio of chrome lines to real ones, not by any single line
+# being a known phrase - so the line pass cannot touch it and this pass has
+# to be the one that does.
+_CHROME_BLOCK = (
+    "<div>"
+    "<p>You are receiving this because you signed up at acme.com.</p>"
+    "<p>Acme Inc, 12 Main Street, Springfield, IL 62704</p>"
+    "<p>Update your email preferences at any time</p>"
+    "</div>"
+)
+
+
+def test_the_report_of_a_removed_chrome_block_names_all_of_its_lines() -> None:
+    """This pass takes a whole block on a score rather than a phrase, so
+    the report of what it took is the only place a wrong removal shows.
+    The block's lines are reported as they rendered, one per line."""
+    cleaned = clean_document(
+        document(f"<html><body>{_BLOCK_A}{_CHROME_BLOCK}{_BLOCK_B}</body></html>")
+    )
+    assert [block.text for block in cleaned.blocks_dropped] == [
+        (
+            "You are receiving this because you signed up at acme.com.\n"
+            "Acme Inc, 12 Main Street, Springfield, IL 62704\n"
+            "Update your email preferences at any time"
+        )
+    ]
+
+
+def test_text_between_blocks_does_not_end_the_block_sweep() -> None:
+    """Root's children are not all elements: a stray text node between two
+    of them is common, and skipping one is not a reason to stop looking at
+    the blocks behind it."""
+    html = f"<html><body>{_BLOCK_A}  stray  {_CHROME_BLOCK}{_BLOCK_B}</body></html>"
+    cleaned = clean_document(document(html))
+    assert "Update your email preferences" not in cleaned.html
+    assert "took the news calmly" in cleaned.html
+
+
+def test_a_textless_block_is_removed_unless_it_holds_an_image() -> None:
+    """A block with no text is layout scaffolding and goes. Since phase 8
+    that is qualified: a kept chart has no text of its own either, so the
+    exemption is for an <img>, not for having any descendant at all - a
+    spacer's <br> is a descendant too."""
+    lead_in = (
+        "<div><p>Real prose sets up the argument, and in the best model "
+        "scores between the two countries:</p></div>"
+    )
+    html = (
+        "<html><body>"
+        f"{lead_in}"
+        '<div><img src="https://example.com/chart.png" width="600"></div>'
+        "<div><br></div>"
+        f"{_CHROME_BLOCK}{_BLOCK_B}</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "<img" in cleaned.html, "the chart's own block is spared"
+    assert "<br" not in cleaned.html, "the spacer's is not"
+    # Sparing the chart is a reason to move to the next block, not to stop.
+    assert "Update your email preferences" not in cleaned.html
+    assert "took the news calmly" in cleaned.html
+
+
+def test_a_protected_heading_does_not_end_the_block_sweep() -> None:
+    """A heading and a sign-off are both spared, and sparing one is not a
+    reason to stop looking at what comes after it."""
+    html = (
+        "<html><body>"
+        f"{_BLOCK_A}"
+        "<div><h2>What we are watching</h2></div>"
+        f"{_CHROME_BLOCK}"
+        f"{_BLOCK_B}"
+        "</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "What we are watching" in cleaned.html
+    assert "Update your email preferences" not in cleaned.html
+
+
+def test_a_block_exactly_at_the_chrome_ratio_is_kept() -> None:
+    """0.15 is the highest share of real content a block may have and
+    still count as all chrome, not the lowest share that saves it. A
+    footer landing exactly on the line keeps its sentence.
+
+    None of these lines is a chrome phrase in its own right, so the line
+    pass leaves them all standing and the block still reads as it was
+    written when its ratio is taken.
+    """
+    chrome = [
+        "Manage your preferences",
+        "Copyright 2026 Acme Inc",
+        "You received this because you signed up",
+        "Update your email preferences",
+        "Sent to you by Acme",
+        "Add us to your address book",
+        "Acme Inc, 12 Main Street, Springfield",
+        "Was this forwarded to you?",
+        "You can update your details here",
+    ]
+    content = "Rates held steady, and the chair said little."
+    # 45 characters of content against 255 of chrome: 0.15 on the nose.
+    assert len(content) / (len(content) + sum(len(line) for line in chrome)) == 0.15
+    block = (
+        "<div>" + "".join(f"<p>{line}</p>" for line in [content, *chrome]) + "</div>"
+    )
+    cleaned = clean_document(
+        document(f"<html><body>{_BLOCK_A}{block}{_BLOCK_B}</body></html>")
+    )
+    assert "Rates held steady" in cleaned.html
+
+
 def test_trailing_chrome_nested_inside_a_protected_container_is_removed() -> None:
     """G1: the reported failure. A block-level heading guard spares the
     *whole* container that holds an h1, so chrome paragraphs sharing that
@@ -1083,6 +1208,62 @@ def test_duplicated_title_block_in_leading_region_is_removed() -> None:
     assert "The subtitle line" not in cleaned.html
     assert "Paul Krugman" not in cleaned.html
     assert "Sep 7" not in cleaned.html
+    assert "Crude economics doesn't explain" in cleaned.html
+
+
+def test_a_duplicate_title_broken_up_by_inline_tags_is_still_matched() -> None:
+    """Substack sets part of a headline in italics and part of a dateline
+    in its own span, so neither line is one text node. Read back without a
+    separator between the fragments they become "NeoNazis and the
+    ImpotenceofTrumponomics" and "Sep7", and neither the title comparison
+    nor the date test recognizes what it is looking at.
+
+    The date sits directly under the title here, which is the ordinary
+    shape - title, then dateline - and the one a lookahead starting a leaf
+    too late would step straight over.
+    """
+    title = "Neo-Nazis and the Impotence of Trumponomics"
+    html = (
+        "<html><body><div>"
+        "<h2>\n  Neo-Nazis and the <em>Impotence</em> of Trumponomics\n</h2>"
+        "<p>\n  <span>Sep</span> 7\n</p>"
+        "<p>Crude economics doesn't explain what just happened, and here is "
+        "a real paragraph of genuine article prose about the subject.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html, title=title))
+    assert "Neo-Nazis" not in cleaned.html
+    assert "Crude economics doesn't explain" in cleaned.html
+    # The report names the lines as they read, not as the template wrapped
+    # them: this removal is the one the reader is told is not data loss,
+    # so it has to be legible.
+    assert [(b.text, b.kind) for b in cleaned.blocks_dropped] == [
+        (title, "duplicate_title"),
+        ("Sep 7", "duplicate_title"),
+    ]
+
+
+def test_a_masthead_above_a_duplicate_title_does_not_hide_it() -> None:
+    """The duplicated header is rarely the very first thing in the body:
+    a publication name and a dateline usually sit above it. Neither is the
+    title, and neither is a reason to stop looking - and the dateline
+    above must not be mistaken for the one that closes the block, which
+    would leave the block bounded backwards and nothing removed."""
+    title = "Neo-Nazis and the Impotence of Trumponomics"
+    html = (
+        "<html><body><div>"
+        "<p>THE ARGUMENT</p>"
+        "<p>Sep 7</p>"
+        f"<h2>{title}</h2>"
+        "<p>Paul Krugman</p>"
+        "<p>Sep 7</p>"
+        "<p>Crude economics doesn't explain what just happened, and here is "
+        "a real paragraph of genuine article prose about the subject.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html, title=title))
+    assert "Neo-Nazis" not in cleaned.html
+    assert "Paul Krugman" not in cleaned.html
     assert "Crude economics doesn't explain" in cleaned.html
 
 
@@ -1857,7 +2038,8 @@ def _sponsor_html(after: str) -> str:
         "<tr><td><p>The Fed declined to move rates this month, which surprised "
         "almost nobody watching the minutes.</p></td></tr>"
         "<tr><td><p>A MESSAGE FROM AXIOS</p></td></tr>"
-        "<tr><td><p>Media is shifting fast. Our reporters see it first.</p></td></tr>"
+        "<tr><td><p>Media is shifting fast. <em>Our reporters</em> see it "
+        "first.</p></td></tr>"
         "<tr><td><p>Sara Fischer and Kerry Flynn go deeper than the headlines, "
         "tracking the deals and disruptions that matter.</p></td></tr>"
         f"<tr><td><p>{after}</p></td></tr>"
@@ -1878,6 +2060,18 @@ def test_a_sponsor_block_is_removed_with_its_body() -> None:
     assert "Sara Fischer" not in cleaned.html
     assert "surprised almost nobody" in cleaned.html, "the article must survive"
     assert "Warsh" in cleaned.html, "the next section heading must survive"
+    # An ad is removed silently otherwise, and this pass takes whole blocks
+    # of prose rather than a named phrase - so the report of what it took
+    # is the only way a wrong removal becomes visible. It is printed for
+    # the reader, one line per block, in the order they were taken.
+    assert [block.text for block in cleaned.blocks_dropped] == [
+        "A MESSAGE FROM AXIOS",
+        "Media is shifting fast. Our reporters see it first.",
+        (
+            "Sara Fischer and Kerry Flynn go deeper than the headlines, "
+            "tracking the deals and disruptions that matter."
+        ),
+    ]
 
 
 def test_a_numbered_section_heading_stops_the_sponsor_removal() -> None:
@@ -1885,6 +2079,27 @@ def test_a_numbered_section_heading_stops_the_sponsor_removal() -> None:
     before one. That is the hard stop that keeps this pass from running
     out of an ad and into the article behind it."""
     cleaned = clean_document(document(_sponsor_html("2. Americans' job market views")))
+    assert "Americans" in cleaned.html
+
+
+def test_a_section_number_set_in_bold_still_stops_the_removal() -> None:
+    """Axios sets the number in its own tag, so the heading's text has to
+    be read back with a separator between the fragments: run together,
+    "2." and the title read as "2.Americans", and the pattern - a number,
+    a period, then a space - no longer matches.
+
+    The ad here is one block long, not two, so the heading is the second
+    thing the loop looks at and the block cap is not what stops it.
+    """
+    html = (
+        "<html><body><table>"
+        "<tr><td><p>A MESSAGE FROM AXIOS</p></td></tr>"
+        "<tr><td><p>Media is shifting fast. Our reporters see it first.</p></td></tr>"
+        "<tr><td><p><strong>2.</strong> Americans' job market views</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Media is shifting fast" not in cleaned.html
     assert "Americans" in cleaned.html
 
 
@@ -1917,6 +2132,131 @@ def test_at_most_two_blocks_follow_a_sponsor_header_into_the_bin() -> None:
     cleaned = clean_document(document(html))
     assert "finest anvils" not in cleaned.html
     assert "Buy one today" not in cleaned.html
+    assert "Fed said nothing" in cleaned.html
+
+
+def test_a_spacer_row_inside_an_ad_does_not_count_against_the_block_cap() -> None:
+    """The cap counts blocks of ad copy, not table rows. A spacer row is
+    swept up with the rest but spends none of the two, or a template that
+    puts one in the middle of its ad would leave the second half of the ad
+    standing."""
+    html = (
+        "<html><body><table>"
+        "<tr><td><p>A MESSAGE FROM ACME</p></td></tr>"
+        "<tr><td>\n\t\t</td></tr>"
+        "<tr><td><p>Acme makes the finest anvils in the west.</p></td></tr>"
+        "<tr><td><p>Buy one today and save a bundle.</p></td></tr>"
+        "<tr><td><p>Meanwhile the Fed said nothing at all this month.</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "finest anvils" not in cleaned.html
+    assert "Buy one today" not in cleaned.html
+    assert "Fed said nothing" in cleaned.html
+
+
+def test_an_ad_body_exactly_at_the_character_cap_is_still_taken() -> None:
+    """600 is the longest an ad body may be, not the first length that is
+    too long: the measured ads run to 394 and the article blocks behind
+    them start at 831, so the boundary itself belongs to the ad side."""
+    head = "Acme anvils, forged in the west. " * 18
+    tail = "Buy it"
+    # The line renders as head, one separator space, then tail - 600 on
+    # the nose, the longest _SPONSOR_MAX_CHARS allows.
+    assert len(head.strip()) + 1 + len(tail) == 600
+    html = (
+        "<html><body><table>"
+        "<tr><td><p>A MESSAGE FROM ACME</p></td></tr>"
+        f"<tr><td><p>{head}<em>{tail}</em></p></td></tr>"
+        "<tr><td><p>2. The Fed said nothing at all this month.</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "forged in the west" not in cleaned.html
+    assert "Fed said nothing" in cleaned.html
+
+
+def test_the_anchor_climb_stops_at_the_body() -> None:
+    """Bulk mail often trails junk after </body>, which the parser leaves
+    as a sibling of body rather than tidying away. Without the stop, a
+    header with no ad under it would climb all the way out, anchor on the
+    body itself, and take the entire newsletter as its ad copy."""
+    html = (
+        "<html><body>"
+        "<div><p>The Fed declined to move rates this month, which surprised "
+        "almost nobody watching the minutes.</p></div>"
+        "<div><p>A MESSAGE FROM OUR SPONSOR</p></div>"
+        "</body><div>Sent by Acme, 12 Main St.</div></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "surprised almost nobody" in cleaned.html
+
+
+def test_a_header_that_cannot_be_anchored_does_not_end_the_search() -> None:
+    """Sitting loose in the body as a bare text node, a header has no
+    ancestor at all between it and the stop, so there is nothing to anchor
+    an ad on. That is a reason to move to the next header, not to stop
+    looking at them - the real block is further down."""
+    html = (
+        "<html><body>"
+        "<div><p>The Fed declined to move rates this month, which surprised "
+        "almost nobody watching the minutes.</p></div>"
+        "A MESSAGE FROM NOWHERE"
+        "<table>"
+        "<tr><td><p>A MESSAGE FROM ACME</p></td></tr>"
+        "<tr><td><p>Acme makes the finest anvils in the west.</p></td></tr>"
+        "<tr><td><p>2. The Fed said nothing at all this month.</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "finest anvils" not in cleaned.html
+    assert "Fed said nothing" in cleaned.html
+
+
+def test_a_header_that_is_one_line_among_paragraphs_takes_no_neighbors() -> None:
+    """ "A message from" also opens ordinary sentences. When the header
+    shares its container with nothing - the test is that the block it sits
+    in is the very thing the climb anchored on - there is no ad under it,
+    and taking the two paragraphs that follow would eat the article. The
+    inline wrapper matters: it is the enclosing block that has to be
+    compared against the anchor, not the <strong> around the words."""
+    html = (
+        "<html><body>"
+        "<div>"
+        "<p>The Fed declined to move rates this month, which surprised "
+        "almost nobody watching the minutes.</p>"
+        "<p><strong>A message from our friends at the desk</strong></p>"
+        "<p>The chair took questions for an hour and gave nothing away, "
+        "which is how these things usually go.</p>"
+        "</div>"
+        "<table>"
+        "<tr><td><p>A MESSAGE FROM ACME</p></td></tr>"
+        "<tr><td><p>Acme makes the finest anvils in the west.</p></td></tr>"
+        "<tr><td><p>2. Warsh's labor market calculus.</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "took questions for an hour" in cleaned.html
+    assert "finest anvils" not in cleaned.html, "the real ad still goes"
+
+
+def test_a_detached_header_does_not_end_the_search() -> None:
+    """One sponsor block can carry a later header away with it. Reaching
+    that header's detached node is a reason to step over it, not to stop
+    looking - there may be a third block behind it, as there is here."""
+    html = (
+        "<html><body><table>"
+        "<tr><td><p>A MESSAGE FROM ONE</p></td></tr>"
+        "<tr><td><p>Acme makes the finest anvils in the west.</p></td></tr>"
+        "<tr><td><p>A MESSAGE FROM TWO</p></td></tr>"
+        "<tr><td><p>A MESSAGE FROM THREE</p></td></tr>"
+        "<tr><td><p>Acme also makes the loudest whistles going.</p></td></tr>"
+        "<tr><td><p>2. The Fed said nothing at all this month.</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "finest anvils" not in cleaned.html
+    assert "loudest whistles" not in cleaned.html
     assert "Fed said nothing" in cleaned.html
 
 
@@ -2087,6 +2427,28 @@ def test_alt_text_with_no_data_word_gets_no_placeholder() -> None:
     assert "<img" not in cleaned.html
 
 
+def test_a_trailing_spacer_row_does_not_end_the_anchor_climb() -> None:
+    """Puck nests the ad's own header in an inner table, and closes that
+    table with a spacer row - so the header's row has a sibling, but not
+    one that says anything. Stopping there would anchor the block on the
+    inner table and leave the ad copy, which sits a level further out,
+    standing."""
+    html = (
+        "<html><body><table>"
+        "<tr><td><table>"
+        "<tr><td><p>A MESSAGE FROM ACME</p></td></tr>"
+        "<tr><td>\n\t\t</td></tr>"
+        "</table></td></tr>"
+        "<tr><td><p>Acme makes the finest anvils in the west.</p></td></tr>"
+        "<tr><td><p>2. The Fed said nothing at all this month.</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "A MESSAGE FROM" not in cleaned.html
+    assert "finest anvils" not in cleaned.html
+    assert "Fed said nothing" in cleaned.html
+
+
 def test_a_sponsor_anchor_looks_past_empty_siblings() -> None:
     """Bulk-mail HTML is full of spacer rows with no text in them; the
     anchor is the first ancestor with a sibling that actually says
@@ -2094,7 +2456,9 @@ def test_a_sponsor_anchor_looks_past_empty_siblings() -> None:
     html = (
         "<html><body><table>"
         "<tr><td><p>A MESSAGE FROM ACME</p></td></tr>"
-        "<tr><td></td></tr>"
+        # Indented rather than truly empty: the spacer rows bulk mail
+        # emits carry the template's own newlines and tabs.
+        "<tr><td>\n\t\t</td></tr>"
         "<tr><td><p>Acme makes the finest anvils in the west.</p></td></tr>"
         # Longer than _SPONSOR_MAX_CHARS, which is what stops the block
         # from running out of the ad and into the article.
@@ -2228,3 +2592,81 @@ def test_the_run_extends_one_sibling_at_a_time() -> None:
     assert _standalone(
         "<p><span></span>Unsubscribe<span></span><br>tail</p>", "Unsubscribe"
     )
+
+
+# ---------------------------------------------------------------------------
+# _strip_line_chrome's sweep. To reach this pass and only this pass, the
+# chrome has to sit on its own line *inside* a block whose other lines are
+# real prose: the block-level pass scores that block as content and leaves
+# it whole, so anything these fixtures lose, the line sweep took.
+# ---------------------------------------------------------------------------
+
+_PROSE_A = (
+    "The Federal Reserve declined to move rates this month, which "
+    "surprised almost nobody who had been watching the minutes closely."
+)
+_PROSE_B = (
+    "Markets took the news calmly, which is not at all what anyone had "
+    "forecast at the start of a week like this one."
+)
+
+
+def _around(middle: str) -> str:
+    """A paragraph with real prose on both sides of middle."""
+    return f"<html><body><div><p>{_PROSE_A}<br>{middle}<br>{_PROSE_B}</p></div></body></html>"
+
+
+def test_a_bare_chrome_text_node_between_prose_lines_is_removed() -> None:
+    """A chrome line is often a bare string between two <br> tags, with no
+    element of its own - invisible to any walk over tags alone."""
+    cleaned = clean_document(document(_around("\n  Unsubscribe\n  ")))
+    assert "Unsubscribe" not in cleaned.html
+    assert "surprised almost nobody" in cleaned.html
+    assert "took the news calmly" in cleaned.html
+    # Every removal is reported, and that report is printed for the reader
+    # to check: it records the line, not the newlines and indentation the
+    # mail template happened to wrap it in.
+    assert "Unsubscribe" in [block.text for block in cleaned.blocks_dropped]
+
+
+def test_inline_chrome_alone_on_its_line_is_removed() -> None:
+    """The standalone check is what separates an inline node that owns its
+    line from one sharing it with prose. Skipping every inline node instead
+    would leave the <span>- and <a>-wrapped chrome most newsletters use.
+
+    Splitting the phrase across two spans is how mail templates that style
+    part of a link actually look, and it means no single text node reads as
+    chrome: only the enclosing <a>, joined back together, does."""
+    middle = "<a href='#'>\n  <span>View</span> <span>in browser</span>\n</a>"
+    cleaned = clean_document(document(_around(middle)))
+    assert "in browser" not in cleaned.html
+    assert "took the news calmly" in cleaned.html
+    assert "View in browser" in [block.text for block in cleaned.blocks_dropped]
+
+
+def test_a_chrome_word_inside_a_sentence_survives_the_sweep() -> None:
+    """The other half of that guard: an inline node sharing its line with
+    prose is left alone, however chrome-shaped its own text."""
+    middle = "Look for the <a href='#'>Unsubscribe</a> link at the bottom of this page."
+    cleaned = clean_document(document(_around(middle)))
+    assert "Unsubscribe" in cleaned.html
+
+
+def test_chrome_late_in_the_sweep_is_still_removed() -> None:
+    """The sweep visits every candidate, and it skips a great many on the
+    way: whitespace between tags, prose that shares its line with a link,
+    and the text nodes inside a chrome element an earlier match already
+    decomposed. Abandoning the loop at any of those - rather than stepping
+    over it - would leave every candidate after it in place, so this puts
+    one of each ahead of a plain chrome line and checks the line still
+    goes."""
+    middle = (
+        "Look for the <a href='#'>tiny link</a> at the bottom of this page."
+        "<br>\n  <a href='#'><span>View</span> <span>in browser</span></a>\n  "
+        "<br>Unsubscribe"
+    )
+    cleaned = clean_document(document(_around(middle)))
+    assert "in browser" not in cleaned.html
+    assert "Unsubscribe" not in cleaned.html
+    assert "tiny link" in cleaned.html
+    assert "took the news calmly" in cleaned.html

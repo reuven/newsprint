@@ -455,7 +455,9 @@ def load_config(
     path: Path = DEFAULT_CONFIG_PATH, paper_override: str | None = None
 ) -> Config:
     data = _merged(path)
-    paper_name = paper_override if paper_override is not None else data["print"]["paper"]
+    paper_name = (
+        paper_override if paper_override is not None else data["print"]["paper"]
+    )
     return Config(
         mail=MailConfig(**data["mail"]),
         printing=PrintConfig(
@@ -606,7 +608,7 @@ def test_splits_a_bare_thunderbird_separator(tmp_path: Path) -> None:
 
 
 def test_a_body_line_beginning_with_From_does_not_split(tmp_path: Path) -> None:
-    """"From " mid-body is not a separator: no blank line before it, and the
+    """ "From " mid-body is not a separator: no blank line before it, and the
     next line is not a header."""
     body = (
         b"From sender@example.com Fri Sep  5 10:00:00 2026\r\n"
@@ -1114,7 +1116,9 @@ def _body_html(message: Message) -> str:
     if html_parts:
         return max(html_parts, key=len)
     if text_parts:
-        return f"<html><body><pre>{escape(max(text_parts, key=len))}</pre></body></html>"
+        return (
+            f"<html><body><pre>{escape(max(text_parts, key=len))}</pre></body></html>"
+        )
     return "<html><body></body></html>"
 
 
@@ -1197,9 +1201,7 @@ def test_publication_names_are_lowercased(tmp_path: Path) -> None:
 
     path = tmp_path / "publications.toml"
     path.write_text('[names]\n"NoReply@News.Bloomberg.com" = "Money Stuff"\n')
-    assert load_publication_names(path) == {
-        "noreply@news.bloomberg.com": "Money Stuff"
-    }
+    assert load_publication_names(path) == {"noreply@news.bloomberg.com": "Money Stuff"}
 ```
 
 - [ ] **Step 6: Run the tests to verify they fail**
@@ -1212,9 +1214,7 @@ Expected: FAIL — `ImportError: cannot import name 'load_publication_names'`
 Append to `src/newsprint/config.py`:
 
 ```python
-DEFAULT_PUBLICATIONS_PATH = (
-    Path.home() / ".config" / "newsprint" / "publications.toml"
-)
+DEFAULT_PUBLICATIONS_PATH = Path.home() / ".config" / "newsprint" / "publications.toml"
 
 
 def load_publication_names(
@@ -1228,9 +1228,7 @@ def load_publication_names(
     if not path.exists():
         return {}
     data = tomllib.loads(path.read_text())
-    return {
-        address.lower(): name for address, name in data.get("names", {}).items()
-    }
+    return {address.lower(): name for address, name in data.get("names", {}).items()}
 ```
 
 - [ ] **Step 8: Run the tests to verify they pass**
@@ -1544,8 +1542,8 @@ def test_style_and_script_are_removed() -> None:
 
 def test_images_are_dropped_and_recorded() -> None:
     html = (
-        '<html><body><div><p>Real prose that continues for a good while '
-        'here.</p>'
+        "<html><body><div><p>Real prose that continues for a good while "
+        "here.</p>"
         '<img src="https://example.com/pixel.gif" width="1" height="1">'
         '<img src="https://example.com/chart.png" width="600">'
         "</div></body></html>"
@@ -1655,9 +1653,7 @@ def _content_root(soup: BeautifulSoup) -> Tag:
 def _strip_images(root: Tag) -> tuple[int, tuple[DroppedImage, ...]]:
     dropped = []
     for image in root.find_all("img"):
-        dropped.append(
-            DroppedImage(src=image.get("src", ""), reason=_IMAGES_DEFERRED)
-        )
+        dropped.append(DroppedImage(src=image.get("src", ""), reason=_IMAGES_DEFERRED))
         image.decompose()
     return 0, tuple(dropped)
 
@@ -1834,7 +1830,11 @@ def test_text_extent_of_a_full_page_is_large(config, tmp_path: Path) -> None:
 def test_dollar_signs_in_content_survive(config, tmp_path: Path) -> None:
     """The template substitutes with string.Template; $ in the content must
     not be treated as a placeholder."""
-    pdf = render(document("<p>It cost $500 and $unexpected trouble.</p>"), config, out_dir=tmp_path)
+    pdf = render(
+        document("<p>It cost $500 and $unexpected trouble.</p>"),
+        config,
+        out_dir=tmp_path,
+    )
     assert "$500" in page_text(pdf, 0)
 ```
 
@@ -2493,7 +2493,9 @@ def test_spool_returns_the_job_id(config, tmp_path: Path) -> None:
 
 def test_spool_raises_on_failure(config, tmp_path: Path) -> None:
     def runner(command, **kwargs):
-        return subprocess.CompletedProcess(command, 1, stdout="", stderr="lp: no such printer")
+        return subprocess.CompletedProcess(
+            command, 1, stdout="", stderr="lp: no such printer"
+        )
 
     with pytest.raises(PrintError, match="no such printer"):
         spool(tmp_path / "sheets.pdf", config, runner=runner)
@@ -2501,8 +2503,11 @@ def test_spool_raises_on_failure(config, tmp_path: Path) -> None:
 
 def test_spool_raises_when_the_job_id_is_missing(config, tmp_path: Path) -> None:
     """A zero exit with unparseable output must not be reported as success."""
+
     def runner(command, **kwargs):
-        return subprocess.CompletedProcess(command, 0, stdout="something else\n", stderr="")
+        return subprocess.CompletedProcess(
+            command, 0, stdout="something else\n", stderr=""
+        )
 
     with pytest.raises(PrintError, match="job id"):
         spool(tmp_path / "sheets.pdf", config, runner=runner)
@@ -2566,7 +2571,9 @@ def spool(pdf: Path, config: Config, runner: Runner = subprocess.run) -> str:
         raise PrintError(result.stderr.strip() or f"lp exited {result.returncode}")
     match = _JOB_ID.search(result.stdout)
     if match is None:
-        raise PrintError(f"lp reported no job id; output was: {result.stdout.strip()!r}")
+        raise PrintError(
+            f"lp reported no job id; output was: {result.stdout.strip()!r}"
+        )
     return match.group(1)
 ```
 
@@ -3195,7 +3202,9 @@ def _explode(*args, **kwargs):
     raise RuntimeError("boom")
 
 
-def test_an_empty_document_is_a_failure_not_a_blank_page(config, tmp_path: Path) -> None:
+def test_an_empty_document_is_a_failure_not_a_blank_page(
+    config, tmp_path: Path
+) -> None:
     """A newsletter that cleans down to nothing must not print an empty cell."""
     built, failed = build([document("")], config, tmp_path)
     assert built == []
@@ -3341,9 +3350,7 @@ def test_dry_run_never_prints_and_never_retires(monkeypatch, tmp_path: Path) -> 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
     )
-    monkeypatch.setattr(
-        "newsprint.cli.spool", lambda pdf, config: spooled.append(pdf)
-    )
+    monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: spooled.append(pdf))
     monkeypatch.setattr(
         "newsprint.cli.retire_printed",
         lambda config, uids, trash: retired.append(uids),
@@ -3378,9 +3385,7 @@ def test_declining_the_prompt_prints_nothing(monkeypatch, tmp_path: Path) -> Non
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue", lambda config: ([document], "INBOX/Trash")
     )
-    monkeypatch.setattr(
-        "newsprint.cli.spool", lambda pdf, config: spooled.append(pdf)
-    )
+    monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: spooled.append(pdf))
     monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "x")
 
     result = CliRunner().invoke(
@@ -3479,11 +3484,11 @@ def retire_printed(config: Config, uids: list[int], trash: str) -> None:
     default=DEFAULT_CONFIG_PATH,
     help="Path to config.toml.",
 )
-@click.option("--dry-run", is_flag=True, help="Build the PDF but do not print or retire.")
+@click.option(
+    "--dry-run", is_flag=True, help="Build the PDF but do not print or retire."
+)
 @click.option("--no-preview", is_flag=True, help="Skip opening the PDF in Preview.")
-def main(
-    paper: str | None, config_path: Path, dry_run: bool, no_preview: bool
-) -> None:
+def main(paper: str | None, config_path: Path, dry_run: bool, no_preview: bool) -> None:
     """Print this week's starred newsletters, four to a side, duplex."""
     config = load_config(config_path, paper_override=paper)
 
@@ -3508,7 +3513,9 @@ def main(
         }[item.verdict]
         click.echo(f"  {item.document.publication}: {item.cells} cells{note}")
     for failure in failed:
-        click.echo(f"  SKIPPED {failure.document.publication}: {failure.error}", err=True)
+        click.echo(
+            f"  SKIPPED {failure.document.publication}: {failure.error}", err=True
+        )
 
     if not built:
         click.echo("Nothing could be built.", err=True)
@@ -3517,7 +3524,9 @@ def main(
     sheets_pdf = work_dir / "sheets.pdf"
     sides = impose([item.pdf for item in built], config.printing.paper, sheets_pdf)
     cells = sum(item.cells for item in built)
-    click.echo(f"\n  {cells} cells - {sides} sheet sides on {config.printing.paper.name}")
+    click.echo(
+        f"\n  {cells} cells - {sides} sheet sides on {config.printing.paper.name}"
+    )
     click.echo(f"  {sheets_pdf}")
 
     if not no_preview:
@@ -3546,7 +3555,9 @@ def main(
         job = spool(sheets_pdf, config)
     except PrintError as error:
         runlog.record({"outcome": "print-failed", "error": str(error)})
-        raise click.ClickException(f"{error}\nMail untouched; PDF kept at {sheets_pdf}") from error
+        raise click.ClickException(
+            f"{error}\nMail untouched; PDF kept at {sheets_pdf}"
+        ) from error
 
     click.echo(f"Spooled as {job}.")
     runlog.record(
@@ -3585,7 +3596,9 @@ def _queued(identifier: str = "<d@example.com>", uid: int = 4):
     )
 
 
-def test_accepting_prints_then_retires_in_that_order(monkeypatch, tmp_path: Path) -> None:
+def test_accepting_prints_then_retires_in_that_order(
+    monkeypatch, tmp_path: Path
+) -> None:
     """The invariant: mail is modified only after a job reaches the queue."""
     events: list[str] = []
     monkeypatch.setattr(
@@ -3641,11 +3654,11 @@ def test_an_unconfigured_account_says_what_to_set(monkeypatch, tmp_path: Path) -
     assert "mail.host and mail.user" in result.output
 
 
-def test_a_document_that_cannot_be_built_is_reported(monkeypatch, tmp_path: Path) -> None:
+def test_a_document_that_cannot_be_built_is_reported(
+    monkeypatch, tmp_path: Path
+) -> None:
     """A newsletter that cleans down to nothing is named, not silently lost."""
-    monkeypatch.setattr(
-        "newsprint.cli.fetch_queue", lambda config: ([_empty()], None)
-    )
+    monkeypatch.setattr("newsprint.cli.fetch_queue", lambda config: ([_empty()], None))
     result = CliRunner().invoke(
         main, ["--no-preview", "--config", str(tmp_path / "absent.toml")]
     )

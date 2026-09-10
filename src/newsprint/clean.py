@@ -597,6 +597,14 @@ def _strip_chrome_blocks(root: Tag) -> tuple[DroppedBlock, ...]:
     would otherwise silently undo a keep decision this module just made.
     Found the same way as the other two: by reading this pass's own logic
     against the new keep-path, not by a failing test surfacing it first.
+
+    Widening that check to any descendant at all is not observable from
+    outside, and a mutation of it survives the suite: a textless block
+    this branch declined to remove is removed by
+    _prune_invisible_elements at the end of the run anyway, which spares
+    the same <img> (and <br>/<hr> besides). The check earns its keep by
+    saying what this pass means rather than by being the only thing
+    standing between a chart and the bin.
     """
     dropped: list[DroppedBlock] = []
     for block in list(root.children):
@@ -905,6 +913,14 @@ def _sponsor_anchor(node: NavigableString) -> Tag | None:
     The header itself is usually a <p> with no siblings at all - the ad's
     body sits in sibling <tr>s (Axios) or <table>s (Puck) of an ancestor
     several levels up, because bulk-mail HTML nests everything in tables.
+
+    The climb stops at body or html so that a header with no ad under it
+    can never anchor on the whole document and take the newsletter with
+    it. Only the body half of that is reachable as things stand: lxml
+    synthesizes a <body> for every input, including a bare fragment, so
+    the climb meets it first every time. The html half is kept against a
+    tree that arrives from somewhere else - a mutation of it survives the
+    suite for that reason, and deliberately.
     """
     current = node.parent
     while current is not None and current.name not in ("body", "html"):
