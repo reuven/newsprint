@@ -597,6 +597,14 @@ def _strip_chrome_blocks(root: Tag) -> tuple[DroppedBlock, ...]:
     would otherwise silently undo a keep decision this module just made.
     Found the same way as the other two: by reading this pass's own logic
     against the new keep-path, not by a failing test surfacing it first.
+
+    Widening that check to any descendant at all is not observable from
+    outside, and a mutation of it survives the suite: a textless block
+    this branch declined to remove is removed by
+    _prune_invisible_elements at the end of the run anyway, which spares
+    the same <img> (and <br>/<hr> besides). The check earns its keep by
+    saying what this pass means rather than by being the only thing
+    standing between a chart and the bin.
     """
     dropped: list[DroppedBlock] = []
     for block in list(root.children):

@@ -594,6 +594,131 @@ def test_dropped_blocks_are_reported() -> None:
     assert any("unsubscribe" in block.text.lower() for block in cleaned.blocks_dropped)
 
 
+# ---------------------------------------------------------------------------
+# _strip_chrome_blocks sweeps root's own children. Reaching it and nothing
+# else means putting the block mid-document: the leading and trailing runs
+# walk in from the ends and stop at the first real content, and the line
+# pass only takes lines that match a chrome phrase outright.
+# ---------------------------------------------------------------------------
+
+_BLOCK_A = (
+    "<div><p>The Fed declined to move rates this month, which surprised "
+    "almost nobody who had been watching the minutes closely.</p></div>"
+)
+_BLOCK_B = (
+    "<div><p>Markets took the news calmly, which is not at all what anyone "
+    "had forecast at the start of a week like this one.</p></div>"
+)
+# Chrome by its ratio of chrome lines to real ones, not by any single line
+# being a known phrase - so the line pass cannot touch it and this pass has
+# to be the one that does.
+_CHROME_BLOCK = (
+    "<div>"
+    "<p>You are receiving this because you signed up at acme.com.</p>"
+    "<p>Acme Inc, 12 Main Street, Springfield, IL 62704</p>"
+    "<p>Update your email preferences at any time</p>"
+    "</div>"
+)
+
+
+def test_the_report_of_a_removed_chrome_block_names_all_of_its_lines() -> None:
+    """This pass takes a whole block on a score rather than a phrase, so
+    the report of what it took is the only place a wrong removal shows.
+    The block's lines are reported as they rendered, one per line."""
+    cleaned = clean_document(
+        document(f"<html><body>{_BLOCK_A}{_CHROME_BLOCK}{_BLOCK_B}</body></html>")
+    )
+    assert [block.text for block in cleaned.blocks_dropped] == [
+        (
+            "You are receiving this because you signed up at acme.com.\n"
+            "Acme Inc, 12 Main Street, Springfield, IL 62704\n"
+            "Update your email preferences at any time"
+        )
+    ]
+
+
+def test_text_between_blocks_does_not_end_the_block_sweep() -> None:
+    """Root's children are not all elements: a stray text node between two
+    of them is common, and skipping one is not a reason to stop looking at
+    the blocks behind it."""
+    html = f"<html><body>{_BLOCK_A}  stray  {_CHROME_BLOCK}{_BLOCK_B}</body></html>"
+    cleaned = clean_document(document(html))
+    assert "Update your email preferences" not in cleaned.html
+    assert "took the news calmly" in cleaned.html
+
+
+def test_a_textless_block_is_removed_unless_it_holds_an_image() -> None:
+    """A block with no text is layout scaffolding and goes. Since phase 8
+    that is qualified: a kept chart has no text of its own either, so the
+    exemption is for an <img>, not for having any descendant at all - a
+    spacer's <br> is a descendant too."""
+    lead_in = (
+        "<div><p>Real prose sets up the argument, and in the best model "
+        "scores between the two countries:</p></div>"
+    )
+    html = (
+        "<html><body>"
+        f"{lead_in}"
+        '<div><img src="https://example.com/chart.png" width="600"></div>'
+        "<div><br></div>"
+        f"{_CHROME_BLOCK}{_BLOCK_B}</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "<img" in cleaned.html, "the chart's own block is spared"
+    assert "<br" not in cleaned.html, "the spacer's is not"
+    # Sparing the chart is a reason to move to the next block, not to stop.
+    assert "Update your email preferences" not in cleaned.html
+    assert "took the news calmly" in cleaned.html
+
+
+def test_a_protected_heading_does_not_end_the_block_sweep() -> None:
+    """A heading and a sign-off are both spared, and sparing one is not a
+    reason to stop looking at what comes after it."""
+    html = (
+        "<html><body>"
+        f"{_BLOCK_A}"
+        "<div><h2>What we are watching</h2></div>"
+        f"{_CHROME_BLOCK}"
+        f"{_BLOCK_B}"
+        "</body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "What we are watching" in cleaned.html
+    assert "Update your email preferences" not in cleaned.html
+
+
+def test_a_block_exactly_at_the_chrome_ratio_is_kept() -> None:
+    """0.15 is the highest share of real content a block may have and
+    still count as all chrome, not the lowest share that saves it. A
+    footer landing exactly on the line keeps its sentence.
+
+    None of these lines is a chrome phrase in its own right, so the line
+    pass leaves them all standing and the block still reads as it was
+    written when its ratio is taken.
+    """
+    chrome = [
+        "Manage your preferences",
+        "Copyright 2026 Acme Inc",
+        "You received this because you signed up",
+        "Update your email preferences",
+        "Sent to you by Acme",
+        "Add us to your address book",
+        "Acme Inc, 12 Main Street, Springfield",
+        "Was this forwarded to you?",
+        "You can update your details here",
+    ]
+    content = "Rates held steady, and the chair said little."
+    # 45 characters of content against 255 of chrome: 0.15 on the nose.
+    assert len(content) / (len(content) + sum(len(line) for line in chrome)) == 0.15
+    block = (
+        "<div>" + "".join(f"<p>{line}</p>" for line in [content, *chrome]) + "</div>"
+    )
+    cleaned = clean_document(
+        document(f"<html><body>{_BLOCK_A}{block}{_BLOCK_B}</body></html>")
+    )
+    assert "Rates held steady" in cleaned.html
+
+
 def test_trailing_chrome_nested_inside_a_protected_container_is_removed() -> None:
     """G1: the reported failure. A block-level heading guard spares the
     *whole* container that holds an h1, so chrome paragraphs sharing that
@@ -1898,6 +2023,27 @@ def test_a_numbered_section_heading_stops_the_sponsor_removal() -> None:
     before one. That is the hard stop that keeps this pass from running
     out of an ad and into the article behind it."""
     cleaned = clean_document(document(_sponsor_html("2. Americans' job market views")))
+    assert "Americans" in cleaned.html
+
+
+def test_a_section_number_set_in_bold_still_stops_the_removal() -> None:
+    """Axios sets the number in its own tag, so the heading's text has to
+    be read back with a separator between the fragments: run together,
+    "2." and the title read as "2.Americans", and the pattern - a number,
+    a period, then a space - no longer matches.
+
+    The ad here is one block long, not two, so the heading is the second
+    thing the loop looks at and the block cap is not what stops it.
+    """
+    html = (
+        "<html><body><table>"
+        "<tr><td><p>A MESSAGE FROM AXIOS</p></td></tr>"
+        "<tr><td><p>Media is shifting fast. Our reporters see it first.</p></td></tr>"
+        "<tr><td><p><strong>2.</strong> Americans' job market views</p></td></tr>"
+        "</table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Media is shifting fast" not in cleaned.html
     assert "Americans" in cleaned.html
 
 
