@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from newsprint.config import load_config
+from newsprint.config import ConfigError, load_config
 from newsprint.geometry import A4, LETTER
 
 SAMPLE = """
@@ -263,3 +263,66 @@ def test_publication_names_reads_list_id_table(tmp_path: Path) -> None:
         "jamelle bouie": "Jamelle Bouie",
         "the veggie": "The Veggie",
     }
+
+
+# ---------------------------------------------------------------------------
+# [summary.personal] - the one nested table in the file. Its presence is
+# what asks for the second summary page, so there is no flag inside it and
+# no empty-string sentinel outside it.
+# ---------------------------------------------------------------------------
+
+
+def _summary_config(tmp_path: Path, body: str) -> Path:
+    path = tmp_path / "config.toml"
+    path.write_text(f"[summary]\nenabled = true\n{body}")
+    return path
+
+
+def test_no_personal_section_means_no_second_page(tmp_path: Path) -> None:
+    config = load_config(_summary_config(tmp_path, ""))
+    assert config.summary.personal is None
+
+
+def test_a_personal_section_is_read(tmp_path: Path) -> None:
+    config = load_config(
+        _summary_config(
+            tmp_path,
+            '[summary.personal]\ntitle = "Bamboo Weekly Candidates"\n'
+            'looking_for = "Things with public data behind them."\n',
+        )
+    )
+    assert config.summary.personal is not None
+    assert config.summary.personal.title == "Bamboo Weekly Candidates"
+    assert config.summary.personal.looking_for == "Things with public data behind them."
+
+
+def test_a_personal_section_may_omit_its_title(tmp_path: Path) -> None:
+    config = load_config(
+        _summary_config(
+            tmp_path, '[summary.personal]\nlooking_for = "Anything on trade."\n'
+        )
+    )
+    assert config.summary.personal is not None
+    assert config.summary.personal.title == "Follow-ups"
+
+
+def test_a_personal_section_without_looking_for_is_an_error(tmp_path: Path) -> None:
+    """Present but empty is the sentinel this shape exists to avoid: if you
+    asked for the page, say what it should look for."""
+    with pytest.raises(ConfigError, match="looking_for"):
+        load_config(_summary_config(tmp_path, '[summary.personal]\ntitle = "X"\n'))
+
+
+def test_a_personal_section_that_is_not_a_table_is_an_error(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="must be a table"):
+        load_config(_summary_config(tmp_path, 'personal = "just a string"\n'))
+
+
+def test_an_unknown_key_in_the_personal_section_is_an_error(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match=r"\[summary.personal\]"):
+        load_config(
+            _summary_config(
+                tmp_path,
+                '[summary.personal]\nlooking_for = "x"\ninterest_title = "old name"\n',
+            )
+        )

@@ -28,7 +28,9 @@ PACKET_DATE = date(2026, 9, 5)
 
 
 INTEREST_TEXT = "Ideas with a public dataset behind them, for pandas exercises."
-INTEREST = 'interest = "Ideas with a public dataset behind them, for pandas exercises."'
+INTEREST = (
+    f'[summary.personal]\ntitle = "Follow-ups"\nlooking_for = "{INTEREST_TEXT}"\n'
+)
 
 
 @pytest.fixture

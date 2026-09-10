@@ -469,7 +469,9 @@ def test_the_image_cap_is_the_cells_exact_text_column() -> None:
     from newsprint.config import load_config
     from newsprint.render import _cap_width_px
 
-    config = load_config()
+    # A deliberately absent path, so this reads the packaged defaults and
+    # not whatever config the person running the tests happens to have.
+    config = load_config(Path("/nonexistent/newsprint/config.toml"))
     assert config.printing.paper.cell.width_mm == 105.0
     assert config.layout.margin_mm == 9.0
     assert _cap_width_px(config) == 685
