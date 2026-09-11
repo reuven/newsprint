@@ -153,6 +153,15 @@ the reason rather than re-derive it.
 - **`cast(...)`** - `typing.cast` does nothing at runtime, so every
   mutation of its first argument survives by construction. All eight of
   `_rendered_lines`' survivors are this.
+- **`_matching_choices`'s `heading_matched = False`** - the flag is only
+  ever read in a boolean context (`heading_matched or ...`, and the
+  branch in `flush`), so `None` behaves identically.
+- **`_clear_the_filter`'s `pointed_at = 0`** - starting the walk at 1
+  instead lands on the same row, because `layout_picklist` always emits a
+  blank separator then a heading before a group's first row, so neither
+  index 0 nor index 1 is ever selectable. Only a picklist whose very
+  first line was a row could tell them apart, and there is no such
+  picklist.
 - **`is_layout_table`'s `recursive=False`** - bs4 tests the flag for
   truthiness, so `recursive=None` makes the same call. Note that the two
   sibling mutants here, which drop the `["td", "th"]` name filter, are

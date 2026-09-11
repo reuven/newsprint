@@ -21,6 +21,7 @@ from collections.abc import Callable, Sequence
 from typing import Protocol, cast
 
 import questionary
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout.containers import ScrollOffsets, Window
 from questionary.prompts.common import InquirerControl
 
@@ -55,11 +56,11 @@ TerminalSizeFactory = Callable[[], os.terminal_size]
 # but only while nothing is selected; the moment something is, it is
 # replaced by "(N selections)". That is exactly when a reader starts
 # wondering how to get back to the whole list, so the way out has to be
-# here, in the message, which stays on screen throughout. Backspacing
-# past the first character is that way out: Escape is not bound at all
-# (see the note below on ctrl-c), and there is no other clear key.
+# here, in the message, which stays on screen throughout. Escape is that
+# way out - bound by this module, not by questionary, which binds no
+# Escape at all (see the note below on ctrl-c).
 _MESSAGE = (
-    "Add any to the packet? (type to filter, backspace to clear; "
+    "Add any to the packet? (type to filter, esc to clear; "
     "space to toggle, enter to confirm, ctrl-c to cancel)"
 )
 
@@ -85,6 +86,79 @@ def _choices(
     return choices
 
 
+def _matching_choices(
+    choices: Sequence[questionary.Separator | questionary.Choice], needle: str
+) -> list[questionary.Separator | questionary.Choice]:
+    """The choices a filter of `needle` should leave on screen, by group.
+
+    questionary matches each line's own text, which is the wrong unit
+    here: a row's text is the article's subject, and the publication it
+    belongs to is named once, in the heading above it. Filtering on
+    "axios" that way keeps the AXIOS MACRO and AXIOS MARKETS headings -
+    their own text matches - and drops every row beneath them, because
+    those publications do not repeat their name in every subject. The
+    result is a heading with nothing under it, which reads as a
+    newsletter you cannot reach.
+
+    So the group is the unit. A group whose heading matches keeps all of
+    its rows; otherwise it keeps the rows that match themselves, and its
+    heading comes with them for context. A group with nothing left is
+    dropped entirely, heading and all.
+    """
+    kept: list[questionary.Separator | questionary.Choice] = []
+    separators: list[questionary.Separator | questionary.Choice] = []
+    rows: list[questionary.Separator | questionary.Choice] = []
+    heading_matched = False
+
+    def flush() -> None:
+        nonlocal heading_matched
+        wanted = (
+            list(rows)
+            if heading_matched
+            else [row for row in rows if needle in str(row.title).lower()]
+        )
+        if wanted:
+            kept.extend(separators)
+            kept.extend(wanted)
+        separators.clear()
+        rows.clear()
+        heading_matched = False
+
+    for choice in choices:
+        if isinstance(choice, questionary.Separator):
+            if rows:
+                flush()
+            separators.append(choice)
+            heading_matched = heading_matched or needle in str(choice.title).lower()
+        else:
+            rows.append(choice)
+    flush()
+    return kept
+
+
+class _GroupAwareControl(InquirerControl):
+    """questionary's own control, with filtering done by group.
+
+    The class of a live control is swapped to this one after the prompt
+    is built - questionary exposes no hook for the filtering rule, and
+    the attributes are the base class's own, untouched. The same reach
+    through the layout that _keep_group_heading_visible already makes.
+    """
+
+    @property
+    def filtered_choices(
+        self,
+    ) -> Sequence[questionary.Separator | questionary.Choice]:
+        if not self.search_filter:
+            return cast("Sequence[questionary.Choice]", self.choices)
+        kept = _matching_choices(self.choices, self.search_filter.lower())
+        self.found_in_search = bool(kept)
+        # questionary's own fallback, kept: a filter matching nothing
+        # shows the whole list rather than an empty one, so a typo is
+        # never a dead end.
+        return kept or cast("Sequence[questionary.Choice]", self.choices)
+
+
 # How many lines of context to keep above the cursor. layout_picklist
 # emits a blank spacer then a ruled heading before each group's rows, so
 # two is what it takes for the publication name to still be on screen
@@ -92,7 +166,71 @@ def _choices(
 _LINES_ABOVE_CURSOR = 2
 
 
-def _keep_group_heading_visible(question: object) -> None:
+def _clear_the_filter(control: InquirerControl) -> None:
+    """Empty the search filter and put the cursor somewhere navigable.
+
+    pointed_at is an index into the *filtered* list, so a cursor deep in
+    a short filtered view would land somewhere arbitrary once the whole
+    list came back. Sending it to the top is the only answer that is
+    right regardless of what was filtered - and the top of the list is a
+    blank separator, so it has to walk on to the first real row.
+    """
+    control.search_filter = None
+    control.pointed_at = 0
+    # Each group opens with two separators, a blank and a ruled heading,
+    # and neither is selectable - so this steps until it lands on a row
+    # rather than once. Bounded by the choice count, because a list that
+    # is all separators has nothing to land on and must still terminate.
+    for _ in range(control.choice_count):
+        if control.is_selection_valid():
+            return
+        control.select_next()
+
+
+def _configure_prompt(question: object) -> None:
+    """Apply the tweaks questionary exposes no options for.
+
+    Silently does nothing for anything that is not a real questionary
+    Question, which is what lets the injected fake checkbox factories in
+    the tests stay simple stubs.
+    """
+    application = getattr(question, "application", None)
+    _keep_group_heading_visible(application)
+    _bind_escape_to_clear_the_filter(application)
+
+
+def _bind_escape_to_clear_the_filter(application: object) -> None:
+    """Escape empties the filter outright.
+
+    questionary binds no Escape at all, so backspacing is otherwise the
+    only way out and a long filter costs a keystroke a character. The
+    binding is deliberately not eager: Escape is the first byte of every
+    arrow-key sequence, and an eager binding would swallow them.
+    """
+    bindings = getattr(application, "key_bindings", None)
+    layout = getattr(application, "layout", None)
+    if bindings is None or layout is None:
+        return
+    controls = [
+        container.content
+        for container in layout.walk()
+        if isinstance(container, Window)
+        and isinstance(container.content, InquirerControl)
+    ]
+    if not controls:
+        return
+    control = controls[0]
+
+    def clear(_event: object) -> None:
+        _clear_the_filter(control)
+
+    # Applied as a call rather than as decorator syntax: questionary's
+    # own bindings object is untyped upstream, and mypy --strict rejects
+    # an untyped decorator sitting on a typed function.
+    bindings.add(Keys.Escape)(clear)
+
+
+def _keep_group_heading_visible(application: object) -> None:
     """Stop a group's heading scrolling off when the cursor reaches it.
 
     prompt_toolkit's Window only guarantees the *cursor* line is visible.
@@ -113,7 +251,6 @@ def _keep_group_heading_visible(question: object) -> None:
     Question, which is what lets the injected fake checkbox factories in
     the tests stay simple stubs.
     """
-    application = getattr(question, "application", None)
     layout = getattr(application, "layout", None)
     if layout is None:
         return
@@ -122,6 +259,10 @@ def _keep_group_heading_visible(question: object) -> None:
             container.content, InquirerControl
         ):
             container.scroll_offsets = ScrollOffsets(top=_LINES_ABOVE_CURSOR)
+            # Filtering by group, which questionary offers no hook for -
+            # see _GroupAwareControl. The attributes are the base
+            # class's own, so nothing else about the control changes.
+            container.content.__class__ = _GroupAwareControl
 
 
 def questionary_prompt(
@@ -153,7 +294,7 @@ def questionary_prompt(
         use_search_filter=True,
         use_jk_keys=False,
     )
-    _keep_group_heading_visible(question)
+    _configure_prompt(question)
     # .ask() is untyped upstream; the cast states the contract this
     # module's own signature already promises.
     return cast("list[Document] | None", question.ask())
