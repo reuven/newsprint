@@ -19,10 +19,11 @@ would rather read long things on paper than on a phone.
 - An IMAP account (including Gmail), and a folder you star newsletters into
 - Pango, Cairo and gdk-pixbuf, for [WeasyPrint](https://weasyprint.org/) —
   see [Install](#install)
+- macOS or Linux. Both are tested in CI on Python 3.12 and 3.14. Windows
+  is not — see [Windows](#windows) for what stands in the way.
 - A printer reachable via CUPS (`lp`), if you want newsprint to do the
-  printing. With `--no-print` it just hands you a PDF, so macOS and Linux
-  both work without one — and so does anything else that can run Python and
-  open a PDF.
+  printing. With `--no-print` it hands you a PDF instead, which is a
+  complete workflow on a machine with no printer configured at all.
 
 ## Install
 
@@ -50,6 +51,34 @@ rather than Python packages — install them first:
 brew install pango                      # macOS
 sudo apt install libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b   # Debian/Ubuntu
 ```
+
+### Windows
+
+newsprint is developed and tested on macOS and Linux, and CI runs both. It
+is **not tested on Windows**, and two things stand between it and a
+working run there:
+
+- **There is no `lp`.** Printing goes through CUPS, which Windows does not
+  have, so `--no-print` is not optional — it is how you would always run
+  it. `newsprint --no-print --output C:\Users\you\Reading` builds the
+  packet and leaves you a PDF to print from whatever you normally print
+  with. The imposition is already done, so print it at 100% ("Actual
+  size", not "Fit to page") or the four cells land in the wrong places.
+- **WeasyPrint's system libraries.** Pango, Cairo and gdk-pixbuf are not
+  Python packages, and on Windows they come from the GTK3 runtime rather
+  than from `pip` or `uv`. WeasyPrint's own [first steps
+  guide](https://doc.courtbouillon.org/weasyprint/stable/first_steps.html)
+  covers the Windows installation.
+
+Nothing else is known to be in the way. The IMAP client is standard
+library, the password lookup uses the Windows Credential Locker through
+`keyring`, and the preview step does nothing rather than failing when
+neither `open` nor `xdg-open` exists — the PDF's path is printed either
+way.
+
+That is a description of the obstacles, not a promise: nobody has run it
+there. If you try it, an issue saying how far you got would be useful
+whichever way it goes.
 
 ## Setup
 
