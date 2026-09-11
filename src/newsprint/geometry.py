@@ -28,6 +28,10 @@ class Size:
         return (self.width_mm * scale, self.height_mm * scale)
 
 
+# Always two cells across a sheet; the layouts differ in how many rows.
+CELLS_ACROSS = 2
+
+
 @dataclass(frozen=True, slots=True)
 class Paper:
     """A sheet, and the cell derived from it.
@@ -40,8 +44,23 @@ class Paper:
     """
 
     name: str
-    sheet: Size
+    stock: Size
     cells_per_side: int = 4
+
+    @property
+    def sheet(self) -> Size:
+        """The sheet as printed, which is not always the paper as sold.
+
+        Four a side prints portrait: two cells across, two down. Two a
+        side prints landscape, two cells across and one down, so that
+        each cell is portrait - the shape a page is - and the fold down
+        the middle of the sheet gives an A5 booklet. Two a side on a
+        portrait sheet would instead make each cell wide and short, which
+        is an awkward thing to read however large the type.
+        """
+        if self.cells_per_side == 2:
+            return Size(self.stock.height_mm, self.stock.width_mm)
+        return self.stock
 
     @property
     def cell(self) -> Size:
@@ -59,10 +78,12 @@ class Paper:
         layout.font_size_pt is what spends it, and around 18pt brings the
         measure back to 61.
         """
-        if self.cells_per_side == 4:
-            return Size(self.sheet.width_mm / 2, self.sheet.height_mm / 2)
-        if self.cells_per_side == 2:
-            return Size(self.sheet.width_mm, self.sheet.height_mm / 2)
+        if self.cells_per_side in (2, 4):
+            sheet = self.sheet
+            return Size(
+                sheet.width_mm / CELLS_ACROSS,
+                sheet.height_mm / (self.cells_per_side // 2),
+            )
         raise ValueError(
             f"{self.cells_per_side} cells per side is not a layout this "
             "imposes; use 2 or 4"
