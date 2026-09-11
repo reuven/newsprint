@@ -16,7 +16,7 @@ SAMPLE_CONFIG = """
 [mail]
 host = "imap.example.com"
 user = "someone@example.com"
-folder = "INBOX/toprint"
+folders = "INBOX/toprint"
 """
 
 # Long enough to clear the default packet.min_words threshold (250) after
@@ -3922,3 +3922,103 @@ def test_a_document_with_no_uid_is_not_retired(mail_config) -> None:
         html="<p>x</p>",
     )
     assert retire_printed_by_folder(mail_config, [page], "INBOX/Trash") == {}
+
+
+def test_a_deprecated_folder_key_is_offered_a_rename(monkeypatch, tmp_path) -> None:
+    """Warning about it every run and leaving the reader to edit a file
+    by hand is most of a chore and none of a fix. Offer, and do it."""
+    _no_mail(monkeypatch, tmp_path)
+    monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: True)
+    config = tmp_path / "config.toml"
+    config.write_text('[mail]\nfolder = "INBOX/reading"\ntrash = "auto"\n')
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(config)], input="y\n"
+    )
+
+    assert result.exit_code == 0, result.output
+    assert 'folders = "INBOX/reading"' in config.read_text()
+    assert "folder" not in config.read_text().replace("folders", "")
+    assert "Renamed" in result.output
+
+
+def test_declining_the_rename_leaves_the_config_alone(monkeypatch, tmp_path) -> None:
+    """It is their file. A no is a no, and the run carries on regardless -
+    the old spelling still works, which is the point of grandfathering
+    it."""
+    _no_mail(monkeypatch, tmp_path)
+    monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: True)
+    config = tmp_path / "config.toml"
+    original = '[mail]\nfolder = "INBOX/reading"\ntrash = "auto"\n'
+    config.write_text(original)
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(config)], input="n\n"
+    )
+
+    assert result.exit_code == 0, result.output
+    assert config.read_text() == original
+
+
+def test_the_rename_is_never_offered_without_a_terminal(monkeypatch, tmp_path) -> None:
+    """A scheduled run has nobody to ask, and must not sit waiting on an
+    answer that is not coming - nor quietly edit a file on its own."""
+    _no_mail(monkeypatch, tmp_path)
+    monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: False)
+    config = tmp_path / "config.toml"
+    original = '[mail]\nfolder = "INBOX/reading"\ntrash = "auto"\n'
+    config.write_text(original)
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(config)]
+    )
+    assert result.exit_code == 0, result.output
+    assert config.read_text() == original
+
+
+def test_no_rename_is_offered_when_neither_spelling_is_used(
+    monkeypatch, tmp_path
+) -> None:
+    """A config that leaves the folder to its default has nothing to
+    rename, and is not asked about."""
+    _no_mail(monkeypatch, tmp_path)
+    monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: True)
+    config = tmp_path / "config.toml"
+    config.write_text('[mail]\ntrash = "auto"\n')
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(config)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "Rename" not in result.output
+
+
+def test_an_unparseable_config_is_not_offered_a_rename(monkeypatch, tmp_path) -> None:
+    """Saying what is wrong with a broken config is load_config's job,
+    and it does it a moment later with the file name and the parse error.
+    Asking about a key first would bury that behind a question."""
+    _no_mail(monkeypatch, tmp_path)
+    monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: True)
+    config = tmp_path / "config.toml"
+    config.write_text("[mail\nfolder = broken")
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(config)]
+    )
+    assert "Rename" not in result.output
+    assert result.exit_code != 0
+
+
+def test_a_rename_that_finds_no_line_says_nothing(monkeypatch, tmp_path) -> None:
+    """The key is in the parsed table but not on a line of its own - a
+    table written inline, say. Nothing is claimed that did not happen."""
+    _no_mail(monkeypatch, tmp_path)
+    monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: True)
+    config = tmp_path / "config.toml"
+    config.write_text('mail = { folder = "INBOX/reading", trash = "auto" }\n')
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(config)], input="y\n"
+    )
+    assert "Renamed" not in result.output
+    assert config.read_text() == 'mail = { folder = "INBOX/reading", trash = "auto" }\n'

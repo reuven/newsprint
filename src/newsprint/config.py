@@ -4,6 +4,8 @@ The password is deliberately absent: it is read from the macOS Keychain at run
 time, so it never appears in a config file or in the repository.
 """
 
+import re
+import sys
 import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -252,35 +254,108 @@ class Config:
             )
 
 
-def _folders(mail: dict[str, Any], path: Path) -> list[str]:
-    """The folders to read, however they were spelled.
+def _folders(mail: dict[str, Any], written: dict[str, Any], path: Path) -> list[str]:
+    """The folders to read.
 
-    `folders` wins over `folder` when both are given: naming both is a
-    config half-edited, and the plural is the more deliberate of the two.
+    `folders` is the setting, and takes either a name or a list of them -
+    most people read from one, and making them wrap it in brackets to say
+    so is a tax on the common case.
+
+    `folder` is what every config written before this says, including the
+    one --setup used to write. It means the same thing and keeps working.
+    Naming both is a config half-edited, and the plural wins.
+    But it is said out loud, because the likely way to end up here is
+    adding `folders` to a working config meaning "also read this one" -
+    and then the folder the tool has been reading all along disappears
+    from the packet with nothing to explain it.
     """
     named = mail.get("folders")
     if named is None:
+        if "folder" in written:
+            print(
+                f"{path}: [mail] folder is deprecated; rename it to folders, "
+                "which takes one name as readily as a list.",
+                file=sys.stderr,
+            )
         return [mail["folder"]]
+    if isinstance(named, str):
+        named = [named]
     if not isinstance(named, list) or not all(isinstance(x, str) for x in named):
-        raise ConfigError(f"{path}: mail.folders must be a list of folder names")
+        raise ConfigError(
+            f"{path}: mail.folders must be a folder name or a list of them"
+        )
+    if "folder" in written:
+        print(
+            f"{path}: [mail] names both folder and folders; folder is "
+            "deprecated and is being ignored. Reading "
+            f"{', '.join(named) if isinstance(named, list) else named} and "
+            f"ignoring folder = {written['folder']!r}. "
+            "Put it in the folders list to read it too.",
+            file=sys.stderr,
+        )
     if not named:
         raise ConfigError(f"{path}: mail.folders needs at least one folder")
     return list(named)
 
 
-def _merged(path: Path) -> dict[str, dict[str, Any]]:
+# `folder = ...` as the first thing on a line, allowing for the leading
+# whitespace TOML permits, and with whatever spacing the writer used
+# before the `=`. Anchored so a commented-out line, or the word inside a
+# value or a comment, is never touched.
+_FOLDER_ASSIGNMENT = re.compile(r"^([ \t]*)(folder)([ \t]*)(=.*)$")
+
+
+def rename_folder_key(path: Path) -> bool:
+    """Rename a `folder = ...` line to `folders = ...` in place.
+
+    A line edit rather than a parse and re-serialize: a config file is
+    hand-written and full of comments, and tomllib cannot write at all -
+    anything that round-tripped through a TOML writer would hand the
+    reader back a file stripped of everything they had explained to
+    themselves in it.
+
+    The key gets one character longer and nothing else on the line moves,
+    so a column-aligned file ends up one character out on that line. That
+    is deliberate: silently eating a space to preserve the columns is a
+    second change nobody asked for, and the alternative is more
+    surprising than a nudged `=`.
+
+    Returns whether anything changed.
+    """
+    try:
+        original = path.read_text()
+    except OSError:
+        return False
+    lines = original.split("\n")
+    for index, line in enumerate(lines):
+        match = _FOLDER_ASSIGNMENT.match(line)
+        if match is None:
+            continue
+        indent, _key, spacing, rest = match.groups()
+        lines[index] = indent + "folders" + spacing + rest
+        path.write_text("\n".join(lines))
+        return True
+    return False
+
+
+def _merged(path: Path) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     """Overlay the file's tables onto the defaults, key by key.
 
     Merging per key rather than per table matters: a config that sets only
     `font_size_pt` must not discard the default margin and line height.
+
+    Returns what the file actually said alongside the merge, because a
+    merged value cannot be told from a default one - and `folder` has a
+    default, so "did they write this down?" is a question only the raw
+    file can answer.
     """
     merged = {section: dict(values) for section, values in DEFAULTS.items()}
     if not path.exists():
-        return merged
+        return merged, {}
     loaded = tomllib.loads(path.read_text())
     for section, values in loaded.items():
         merged.setdefault(section, {}).update(values)
-    return merged
+    return merged, loaded
 
 
 def load_config(
@@ -300,7 +375,7 @@ def load_config(
     special case to avoid an unhandled traceback.
     """
     try:
-        data = _merged(path)
+        data, written = _merged(path)
         _reject_unknown_keys(data)
         paper_name = (
             paper_override if paper_override is not None else data["print"]["paper"]
@@ -311,7 +386,7 @@ def load_config(
                 user=data["mail"]["user"],
                 folder=data["mail"]["folder"],
                 trash=data["mail"]["trash"],
-                folders=_folders(data["mail"], path),
+                folders=_folders(data["mail"], written.get("mail", {}), path),
             ),
             printing=PrintConfig(
                 printer=data["print"]["printer"],

@@ -13,6 +13,7 @@ import sys
 import tempfile
 import textwrap
 import time
+import tomllib
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from importlib.metadata import metadata, version
@@ -28,6 +29,7 @@ from .config import (
     PublicationNames,
     load_config,
     load_publication_names,
+    rename_folder_key,
 )
 from .contents import build_contents
 from .extract import extract
@@ -419,6 +421,33 @@ def save_output(
     return destination
 
 
+def _offer_folder_rename(config_path: Path) -> None:
+    """Offer to rename a deprecated `folder` key to `folders`.
+
+    load_config warns about it every run, which on its own is a chore
+    rather than a fix: it tells the reader to go and edit a file, every
+    week, until they do. Doing it for them takes one keystroke.
+
+    Only ever with a terminal to ask at. A scheduled run has nobody to
+    answer, and must neither sit waiting for one nor quietly edit a file
+    on its own.
+    """
+    if not _stdin_is_tty() or not config_path.exists():
+        return
+    try:
+        mail = tomllib.loads(config_path.read_text()).get("mail", {})
+    except (OSError, tomllib.TOMLDecodeError):
+        # A config that cannot be read or parsed is load_config's problem
+        # to report properly, a moment from now. Not this function's.
+        return
+    if "folders" in mail or "folder" not in mail:
+        return
+    if not click.confirm("  Rename it to folders now?", default=True):
+        return
+    if rename_folder_key(config_path):
+        click.echo("  Renamed. Nothing else in the file was touched.")
+
+
 def _open_preview(pdf: Path) -> None:
     """Best-effort: open the PDF for a look before printing.
 
@@ -718,6 +747,7 @@ def main(
         run_setup(config_path)
         return
     click.echo(f"Reading config: {config_path}")
+    _offer_folder_rename(config_path)
     if unretire:
         try:
             config = load_config(

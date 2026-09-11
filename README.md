@@ -251,21 +251,29 @@ reading, which is the trade.
 
 ## Reading from more than one folder
 
-`folder` names one, and is what every config says today:
+`folders` takes either one folder or a list of them:
 
 ```toml
 [mail]
-folder = "INBOX/toprint"
+folders = "INBOX/toprint"
 ```
-
-`folders` names several, and wins if you give both:
 
 ```toml
 [mail]
 folders = ["INBOX/toprint", "INBOX/work-reading"]
 ```
 
-Each is opened in turn on its own connection, and every message
+`folder`, the older singular name, is **deprecated**. It still works —
+it is what every config written before this says, and nothing is going
+to stop reading it — but a run that finds it says so, and offers to
+rename the key for you. Accepting changes that one key and nothing else
+in the file: not the value, not your comments, not a single other line.
+
+Setting both is a config half-edited. `folders` wins, and newsprint says
+which one it ignored rather than leaving you to notice a missing folder
+in the packet.
+
+Each folder is opened in turn on its own connection, and every message
 remembers which one it came from — a uid is issued by a folder and means
 nothing outside it, so two folders can both hold a uid 4 and they are
 different messages. Retirement sends each back to its own folder, and so
