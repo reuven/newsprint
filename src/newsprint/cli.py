@@ -6,6 +6,7 @@ content actually reached it.
 """
 
 import imaplib
+import re
 import shutil
 import subprocess
 import sys
@@ -45,6 +46,8 @@ from .summarize import build_summary_pages
 # both are about to be printed. UID is asked for explicitly (RFC 3501
 # already guarantees it for a UID FETCH response, but naming it removes
 # any doubt about what Mailbox.fetch_many()'s parser is reading).
+_PACKAGE = "newsprint"
+
 _FULL_ITEMS = "(UID RFC822)"
 
 # Headers only, for the unstarred picker's listing - it only needs
@@ -310,7 +313,38 @@ def fetch_queue(
     return merged, trash
 
 
-def save_output(built_pdf: Path, output: Path | None, packet_date: date) -> Path:
+# A packet's file name, out of a title that is free text. Anything that
+# is not a letter or a digit becomes a dash, which is enough to survive a
+# shell, a Finder, and a mail attachment without quoting.
+_FILENAME_PUNCTUATION = re.compile(r"[^a-z0-9]+")
+_FILENAME_STEM_MAX = 40
+
+
+def packet_filename(title: str, packet_date: date, at: datetime) -> str:
+    """What the finished packet is called.
+
+    The reader ends up holding this file - in Preview, in a Downloads
+    folder, attached to a mail - so it is named for what it is rather
+    than for the step that produced it.
+
+    The time is part of it because a packet can be built twice in one
+    day: a print that jams, or a second look after starring one more
+    thing. Without it the second build silently replaces the first
+    wherever --output points.
+
+    `at` is read off the local clock by the caller rather than in UTC,
+    unlike every other time this program handles: this one is shown to
+    the reader, who compares it against the clock on their own wall.
+    """
+    stem = _FILENAME_PUNCTUATION.sub("-", title.casefold()).strip("-")
+    if len(stem) > _FILENAME_STEM_MAX:
+        # Cut on a dash so the name ends on a whole word, falling back to
+        # a hard cut for a single word longer than the whole allowance.
+        stem = stem[:_FILENAME_STEM_MAX].rpartition("-")[0] or stem[:_FILENAME_STEM_MAX]
+    return f"{stem or _PACKAGE}-{packet_date.isoformat()}-{at:%H%M}.pdf"
+
+
+def save_output(built_pdf: Path, output: Path | None, filename: str) -> Path:
     """Where the finished packet ends up, and its path afterwards.
 
     With no --output the packet stays in the run's temp directory, which
@@ -325,11 +359,7 @@ def save_output(built_pdf: Path, output: Path | None, packet_date: date) -> Path
     """
     if output is None:
         return built_pdf
-    destination = (
-        output / f"newsprint-{packet_date.isoformat()}.pdf"
-        if output.is_dir()
-        else output
-    )
+    destination = output / filename if output.is_dir() else output
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(built_pdf, destination)
     return destination
@@ -444,9 +474,6 @@ def unretire_last(config: Config) -> None:
             "failed": list(result.failed),
         }
     )
-
-
-_PACKAGE = "newsprint"
 
 
 def about() -> str:
@@ -758,9 +785,12 @@ def main(
     )
 
     click.echo("  Imposing onto sheets...")
-    sheets_pdf = work_dir / "sheets.pdf"
+    filename = packet_filename(
+        config.packet.title, packet_date, datetime.now().astimezone()
+    )
+    sheets_pdf = work_dir / filename
     sides = impose(stamped, config.printing.paper, sheets_pdf)
-    sheets_pdf = save_output(sheets_pdf, output, packet_date)
+    sheets_pdf = save_output(sheets_pdf, output, filename)
     cells = sum(item.cells for item in packet_built)
     click.echo(
         f"\n  {cells} cells - {sides} sheet sides on {config.printing.paper.name}"
