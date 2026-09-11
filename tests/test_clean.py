@@ -3581,3 +3581,108 @@ def test_padding_far_down_the_document_is_left_alone() -> None:
         )
     )
     assert "A late line that happens to be padded" in cleaned.html
+
+
+_ARTICLE = (
+    "<p>The return of sustained load growth after more than a decade and "
+    "a half of stagnation is the first fundamental change.</p>"
+) + "".join(
+    f"<p>Paragraph {n} carries the argument on at some length, as the "
+    f"body of a real newsletter does.</p>"
+    for n in range(10)
+)
+
+
+def test_the_mail_footer_is_cut_at_its_first_marker() -> None:
+    """Every newsletter ends with the same block: an unsubscribe link, a
+    copyright line, a mailing address. It is the last thing on the page,
+    so the article stops and a paragraph of legal text follows it.
+
+    Measured over the fixture corpus, 18 messages end this way and the
+    block runs to 8 lines apiece. The backwards chrome walk does not
+    reach them because the senders put a promotional sentence *after*
+    the footer - "Looking for more? Unlock our premium resources" - and
+    that reads as content, so the walk stops there and never gets past
+    it. Cutting forward from the marker does.
+    """
+    html = (
+        f"<html><body><div>{_ARTICLE}"
+        "<p>Update your profile | <a href='#'>Unsubscribe</a></p>"
+        "<p>Looking for more? Unlock our premium resources.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "Unsubscribe" not in cleaned.html
+    assert "Unlock our premium" not in cleaned.html, "the promo below it goes too"
+    assert "sustained load growth" in cleaned.html
+
+
+def test_a_footer_marker_in_the_body_is_not_a_cut_point() -> None:
+    """An article about newsletters says "unsubscribe" in a sentence, and
+    the Inbox Collective fixture is literally that publication. The cut
+    only looks in the closing stretch, so a mention while the article is
+    still going is just a word.
+
+    Tested against _strip_footer directly rather than through
+    clean_document, because a standalone sentence carrying a chrome
+    phrase is removed by _strip_line_chrome for reasons of its own - a
+    gap that module documents at length, and that has nothing to do with
+    where the footer starts.
+    """
+    from bs4 import BeautifulSoup
+
+    from newsprint.clean import _strip_footer
+
+    body = "".join(
+        f"<p>Paragraph {n} carries the argument on at some length.</p>"
+        for n in range(20)
+    )
+    soup = BeautifulSoup(
+        "<html><body><div>"
+        "<p>The first thing people do with a bad newsletter is unsubscribe "
+        "from it, which is the metric every publisher watches.</p>"
+        f"{body}</div></body></html>",
+        "lxml",
+    )
+    assert _strip_footer(soup) == ()
+    assert "is unsubscribe" in str(soup)
+
+
+def test_the_cut_takes_the_marker_and_everything_below_it() -> None:
+    """Whatever sits under the marker goes with it, unexamined - the same
+    way the trailing run removes what it reaches. Below a footer there is
+    only more footer, and the promotional line senders put last."""
+    from bs4 import BeautifulSoup
+
+    from newsprint.clean import _strip_footer
+
+    body = "".join(
+        f"<p>Paragraph {n} carries the argument on at some length.</p>"
+        for n in range(20)
+    )
+    soup = BeautifulSoup(
+        f"<html><body><div>{body}"
+        "<p>You are receiving this email because you subscribed.</p>"
+        "<p>Our mailing address is 2093 Philadelphia Pike.</p>"
+        "<p>Powered by Buttondown, the easiest way to grow.</p>"
+        "</div></body></html>",
+        "lxml",
+    )
+    dropped = _strip_footer(soup)
+    assert len(dropped) == 3
+    assert "Powered by Buttondown" not in str(soup)
+    assert "Paragraph 19" in str(soup)
+
+
+def test_a_short_document_is_never_cut() -> None:
+    """A newsletter of a few lines has no closing stretch to speak of,
+    and cutting 40% into one could take most of it."""
+    html = (
+        "<html><body><div>"
+        "<p>A short note about the state of the electricity market, which "
+        "is all this issue has to say this week.</p>"
+        "<p>Unsubscribe</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "state of the electricity market" in cleaned.html

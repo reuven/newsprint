@@ -461,6 +461,21 @@ Charts cost paper. A packet that was seven sheet sides can be ten once the
 charts are in it, and a publication that sets its charts on a black ground
 prints as a black ground.
 
+### What gets stripped
+
+Beyond images, each newsletter is reduced to what you would actually read:
+the masthead, the social bar, the "forwarded this email?" banner, the
+sponsor block, and the footer — unsubscribe link, copyright line, mailing
+address, "you are receiving this email because".
+
+The footer is cut forward from its first marker rather than trimmed
+backwards from the end, because senders put a promotional line *below* it
+("Powered by Buttondown, the easiest way to start and grow your
+newsletter") and a backwards trim stops there with the whole footer still
+above. Measured across the 268-newsletter archive: footer lines reaching
+the page fall from 51 to 16, and 18 messages lose a block of 8 lines
+apiece.
+
 ## Undoing a retirement
 
 Retiring is the one irreversible thing newsprint does: printed messages are
