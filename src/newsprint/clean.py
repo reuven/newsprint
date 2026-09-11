@@ -1056,6 +1056,50 @@ def _strip_sponsor_blocks(root: Tag) -> tuple[DroppedBlock, ...]:
     return tuple(dropped)
 
 
+# The padding a sender uses to control the preview line an inbox shows:
+# a sentence, then zero-width joiners repeated to push the rest of the
+# message out of the snippet. Measured over the fixture corpus, 19 of the
+# 20 surviving preheaders are padded with U+200C; the twentieth uses
+# no-break spaces alone, and is a real masthead rather than a preheader,
+# which is why the no-break space is not in this class.
+_PREHEADER_PADDING = re.compile("[\u200b\u200c\u200d\u2060\ufeff]")
+
+# How many padding characters make a line padding rather than prose. Real
+# text uses a zero-width character occasionally - a soft break inside a
+# long URL - and never four of them in one line.
+_PREHEADER_MIN_PADDING = 4
+
+# A preheader is the first thing in the body; that is what it is for.
+# Padding further down is a sender's layout hack inside real content, and
+# the line it sits on is content.
+_PREHEADER_LEAD_WINDOW = 3
+
+
+def _strip_preheader(root: Tag) -> tuple[DroppedBlock, ...]:
+    """Remove the inbox-preview line from the top of the body.
+
+    It is invisible in a mail client - the padding pushes it out of view
+    and the text is usually set in the background colour - but nothing
+    about it is invisible to clean.py, which is why
+    _prune_invisible_elements does not catch it: the words themselves are
+    ordinary rendered text. The padding is the whole signal.
+
+    On paper it prints as a stray sentence above the headline. For
+    Garrett Graff it prints as the subtitle, a second time, because the
+    preheader he writes is his own subtitle.
+    """
+    dropped = []
+    for leaf in list(_iter_text_elements(root))[:_PREHEADER_LEAD_WINDOW]:
+        text = leaf.get_text(" ", strip=True)
+        if len(_PREHEADER_PADDING.findall(text)) < _PREHEADER_MIN_PADDING:
+            continue
+        dropped.append(
+            DroppedBlock(text=_PREHEADER_PADDING.sub("", text).strip(), kind="chrome")
+        )
+        leaf.decompose()
+    return tuple(dropped)
+
+
 def _strip_line_chrome(root: Tag) -> tuple[DroppedBlock, ...]:
     """Remove any single element, anywhere in the document, whose whole
     rendered line of text is a high-confidence chrome phrase (F3, round 2).
@@ -1547,6 +1591,10 @@ def clean_document(document: Document) -> Document:
     # anchor to find the ad body from.
     dropped_sponsors = _strip_sponsor_blocks(root)
     dropped_lines = _strip_line_chrome(root)
+    # Before the leading-run walk below, so that walk starts at the
+    # newsletter's own first line rather than stopping at a preheader it
+    # does not recognise - the same reason _strip_line_chrome runs early.
+    dropped_lines += _strip_preheader(root)
     # Leading- and trailing-run removal run next, in either order (each
     # can only ever remove a run from its own end of the document, so they
     # cannot interfere with one another), before the block-level pass:

@@ -18,7 +18,7 @@ defaults.
 import os
 import shutil
 from collections.abc import Callable, Sequence
-from typing import cast
+from typing import Protocol, cast
 
 import questionary
 from prompt_toolkit.layout.containers import ScrollOffsets, Window
@@ -27,16 +27,33 @@ from questionary.prompts.common import InquirerControl
 from .models import Document
 from .picker import Picklist, layout_picklist
 
-CheckboxFactory = Callable[
-    [str, Sequence[questionary.Separator | questionary.Choice]], questionary.Question
-]
+
+class CheckboxFactory(Protocol):
+    """questionary.checkbox, or a test's stand-in for it.
+
+    A Protocol rather than a Callable alias because the prompt is
+    configured with keyword options (see questionary_prompt), and a
+    Callable alias cannot describe those.
+    """
+
+    def __call__(
+        self,
+        message: str,
+        choices: Sequence[questionary.Separator | questionary.Choice],
+        *,
+        use_search_filter: bool = ...,
+        use_jk_keys: bool = ...,
+    ) -> questionary.Question: ...
+
+
 TerminalSizeFactory = Callable[[], os.terminal_size]
 
 # questionary's checkbox binds only Ctrl-C (and Ctrl-Q) to abort - Escape
 # is not bound at all (verified against questionary 2.1.1's own key
 # bindings in prompts/checkbox.py) - so the hint says ctrl-c, not esc.
 _MESSAGE = (
-    "Add any to the packet? (space to toggle, enter to confirm, ctrl-c to cancel)"
+    "Add any to the packet? (type to filter, space to toggle, "
+    "enter to confirm, ctrl-c to cancel)"
 )
 
 
@@ -118,7 +135,17 @@ def questionary_prompt(
     choices = _choices(picklist, width)
     if not choices:
         return []
-    question = checkbox(_MESSAGE, choices)
+    question = checkbox(
+        _MESSAGE,
+        choices,
+        # --since can open the window to weeks, and a window that wide
+        # runs to a hundred candidates - more than anyone wants to scroll
+        # to find one publication. questionary refuses the filter and j/k
+        # navigation together, reasonably: j and k are letters the filter
+        # needs to receive. The arrow keys still move the cursor.
+        use_search_filter=True,
+        use_jk_keys=False,
+    )
     _keep_group_heading_visible(question)
     # .ask() is untyped upstream; the cast states the contract this
     # module's own signature already promises.

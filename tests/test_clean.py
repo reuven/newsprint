@@ -3517,3 +3517,67 @@ def test_a_document_that_is_only_its_own_headline_keeps_it() -> None:
         _with_title("<h1>Core Dispatch #10</h1>", title="Core Dispatch #10")
     )
     assert "Core Dispatch #10" in cleaned.html
+
+
+_PREHEADER_PADDING = "‌ " * 12
+
+
+def test_a_padded_preheader_line_is_removed() -> None:
+    """The line a sender hides at the top to control what the inbox shows
+    in its preview: a sentence, then zero-width joiners repeated to push
+    the rest of the message out of the snippet. On paper it is a stray
+    sentence above the headline - and for Garrett Graff it is the
+    subtitle, printed a second time."""
+    cleaned = clean_document(
+        _with_title(
+            f"<div>On the complex legacy of September 11th{_PREHEADER_PADDING}</div>"
+            f"<div>{_PROSE_PARAGRAPHS}</div>",
+            title="9/11's Lingering Questions",
+        )
+    )
+    assert "complex legacy" not in cleaned.html
+    assert "only had two jobs" in cleaned.html
+
+
+def test_the_same_sentence_without_the_padding_is_content() -> None:
+    """The padding is the whole signal. An opening line that simply says
+    something is the article starting, and must be left where it is."""
+    cleaned = clean_document(
+        _with_title(
+            "<div>On the complex legacy of September 11th</div>"
+            f"<div>{_PROSE_PARAGRAPHS}</div>",
+            title="9/11's Lingering Questions",
+        )
+    )
+    assert "complex legacy" in cleaned.html
+
+
+def test_a_stray_zero_width_character_in_prose_is_not_padding() -> None:
+    """Zero-width characters turn up in ordinary text - a soft break in a
+    long URL, a ligature control. It takes a run of them to mean padding,
+    and the threshold is well above what prose uses."""
+    cleaned = clean_document(
+        _with_title(
+            "<div>On the complex‌ legacy of September 11th</div>"
+            f"<div>{_PROSE_PARAGRAPHS}</div>",
+            title="9/11's Lingering Questions",
+        )
+    )
+    assert "complex" in cleaned.html
+
+
+def test_padding_far_down_the_document_is_left_alone() -> None:
+    """A preheader is the first thing in the body, always - that is what
+    it is for. Padding halfway down is a sender's layout hack inside real
+    content, and removing the line it sits on would take the content."""
+    filler = "".join(
+        f"<p>Paragraph {n} of the article body here.</p>" for n in range(8)
+    )
+    cleaned = clean_document(
+        _with_title(
+            f"<div>{_PROSE_PARAGRAPHS}{filler}"
+            f"<p>A late line that happens to be padded{_PREHEADER_PADDING}</p></div>",
+            title="An Issue",
+        )
+    )
+    assert "A late line that happens to be padded" in cleaned.html
