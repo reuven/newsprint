@@ -762,3 +762,27 @@ def test_mid_grey_is_light_enough_to_leave_alone() -> None:
     processed = _grayscale_and_cap(buffer.getvalue(), max_width_px=600)
     with Image.open(BytesIO(processed)) as result:
         assert result.getpixel((50, 50)) == 128
+
+
+def test_the_median_level_of_an_even_ramp_is_the_middle_level() -> None:
+    """One pixel at every one of the 256 levels: the middle one is 127.
+    A chart-shaped image cannot pin this down - it is nearly all ground,
+    so any quantile at all lands on the ground and the function could be
+    computing a third or a tenth without anything noticing."""
+    from newsprint.render import _median_level
+
+    ramp = Image.new("L", (256, 1))
+    ramp.putdata(range(256))
+    assert _median_level(ramp) == 127
+
+
+def test_the_median_level_counts_every_pixel_including_the_brightest() -> None:
+    """Two-fifths black, three-fifths white: the median is white, because
+    the white pixels are the majority. Dropping the top level from the
+    count - the brightest pixels in the image - would make it black, and
+    invert every light chart that happens to be mostly pure white."""
+    from newsprint.render import _median_level
+
+    skewed = Image.new("L", (100, 1))
+    skewed.putdata([0] * 40 + [255] * 60)
+    assert _median_level(skewed) == 255
