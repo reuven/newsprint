@@ -150,6 +150,22 @@ Anything in that folder you did *not* star is offered to you at run time, in
 a checklist, so a newsletter you forgot to star is one keypress away rather
 than a lost cause.
 
+The checklist scrolls, and **typing filters it** — useful when `--since`
+reaches back a few weeks and the list runs to a hundred:
+
+| key | what it does |
+| --- | --- |
+| any letter | narrows the list to rows containing what you have typed |
+| backspace | deletes one character; past the first, the whole list is back |
+| space | toggles the row under the cursor |
+| ↑ ↓ | move the cursor (`j`/`k` cannot navigate here — they are filter text) |
+| enter | confirm |
+| ctrl-c | cancel, selecting nothing |
+
+What you have already ticked stays ticked while you filter, so the way to
+pick from several publications is to filter, tick, backspace out, and filter
+again.
+
 ### Gmail
 
 Gmail has no folders, only labels — but a label is exactly what IMAP shows

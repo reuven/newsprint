@@ -291,3 +291,25 @@ def test_the_list_can_be_filtered_by_typing() -> None:
     assert options["use_search_filter"] is True
     assert options["use_jk_keys"] is False
     assert "filter" in message, "the hint has to say the filter is there"
+
+
+def test_the_hint_says_how_to_clear_the_filter() -> None:
+    """Backspacing past the first character is the only way out of a
+    filter - Escape is not bound, and questionary's own hint, which does
+    mention filtering, is replaced by "(N selections)" as soon as
+    anything is picked. That is precisely when a reader wants to know how
+    to get back to the whole list, so the way out belongs in the message,
+    which stays on screen."""
+    picklist = build_picklist(
+        [_doc("Money Stuff", "Issue A", "2026-09-02", uid=1)], sizes={1: 20_000}
+    )
+
+    calls: list[tuple] = []
+    questionary_prompt(
+        picklist,
+        checkbox=_fake_checkbox(calls, result=[]),
+        terminal_size=_fixed_width(80),
+    )
+
+    message, _choices, _options = calls[0]
+    assert "backspace" in message.lower()

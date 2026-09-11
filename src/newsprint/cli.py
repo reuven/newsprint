@@ -240,7 +240,8 @@ def _offer_picks(
         return [], []
 
     click.echo(
-        "  Choose newsletters to add (type to filter, space to toggle, enter to confirm; ctrl-c to cancel)."
+        "  Choose newsletters to add (type to filter, backspace to clear "
+        "the filter, space to toggle, enter to confirm; ctrl-c to cancel)."
     )
     picked_candidates = questionary_prompt(picklist) or []
     if not picked_candidates:

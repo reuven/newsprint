@@ -51,9 +51,16 @@ TerminalSizeFactory = Callable[[], os.terminal_size]
 # questionary's checkbox binds only Ctrl-C (and Ctrl-Q) to abort - Escape
 # is not bound at all (verified against questionary 2.1.1's own key
 # bindings in prompts/checkbox.py) - so the hint says ctrl-c, not esc.
+# questionary prints a hint of its own, and it does mention filtering -
+# but only while nothing is selected; the moment something is, it is
+# replaced by "(N selections)". That is exactly when a reader starts
+# wondering how to get back to the whole list, so the way out has to be
+# here, in the message, which stays on screen throughout. Backspacing
+# past the first character is that way out: Escape is not bound at all
+# (see the note below on ctrl-c), and there is no other clear key.
 _MESSAGE = (
-    "Add any to the packet? (type to filter, space to toggle, "
-    "enter to confirm, ctrl-c to cancel)"
+    "Add any to the packet? (type to filter, backspace to clear; "
+    "space to toggle, enter to confirm, ctrl-c to cancel)"
 )
 
 
