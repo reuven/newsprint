@@ -3080,3 +3080,44 @@ def test_chrome_late_in_the_sweep_is_still_removed() -> None:
     assert "Unsubscribe" not in cleaned.html
     assert "tiny link" in cleaned.html
     assert "took the news calmly" in cleaned.html
+
+
+def test_an_uncaptioned_chart_between_two_paragraphs_is_kept() -> None:
+    """Apricitas Economics sets a chart every few hundred words and never
+    introduces one: no lead-in colon, no Source caption, alt="". The
+    author-introduces-it rule can never fire for them, so every chart in a
+    charts newsletter was dropped. Prose on both sides is the structural
+    form of the same claim - this image interrupts an argument.
+    """
+    html = (
+        "<html><body><div>"
+        "<p>Demand from AI and heavy industry is driving load growth but "
+        "also outstripping growth in power infrastructure.</p>"
+        '<img src="https://example.com/chart.png" alt="" '
+        'width="550" height="351.3">'
+        "<p>The return of sustained load growth after more than a decade "
+        "and a half of stagnation is the first fundamental change.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 1
+    assert cleaned.images_dropped == ()
+
+
+def test_a_labelled_banner_between_two_paragraphs_is_not_kept() -> None:
+    """The same shape, but the image names itself. A masthead, a section
+    header or a sponsor's logo carries alt or title text, because the
+    sender wants it to read as that brand when images are blocked. An
+    author's chart is set for looking at, not for naming."""
+    html = (
+        "<html><body><div>"
+        "<p>Demand from AI and heavy industry is driving load growth but "
+        "also outstripping growth in power infrastructure.</p>"
+        '<img src="https://example.com/logo.png" alt="Bayer" '
+        'width="550" height="351.3">'
+        "<p>The return of sustained load growth after more than a decade "
+        "and a half of stagnation is the first fundamental change.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 0

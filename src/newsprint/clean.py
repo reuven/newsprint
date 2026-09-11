@@ -272,6 +272,12 @@ _CAPTION_BLOCK_TAGS = frozenset({"p", "div", "figcaption", "td", "li", "blockquo
 # caption text is even examined.
 _ARGUMENT_FIGURE_MIN_WIDTH_PX = _FIGURE_MIN_WIDTH_PX
 
+# How much prose has to sit on each side of an uncaptioned image before it
+# reads as a figure inside an argument rather than chrome at one end of
+# one. Long enough to be a real sentence, short enough that a two-line
+# paragraph between two charts still counts.
+_FIGURE_MIN_CONTEXT_CHARS = 80
+
 
 def _nearest_rendered_text(image: Tag, *, forward: bool) -> str | None:
     """The nearest non-blank text in document order before (forward=False)
@@ -296,16 +302,20 @@ def _nearest_rendered_text(image: Tag, *, forward: bool) -> str | None:
     return None
 
 
-def _nearest_block_text(image: Tag) -> str | None:
-    """All the text of the nearest block element following `image`.
+def _nearest_block_text(image: Tag, *, forward: bool = True) -> str | None:
+    """All the text of the nearest block element after `image`, or before
+    it with forward=False.
 
     _nearest_rendered_text answers with the first text *node*, which is
     the right unit for a lead-in sentence but the wrong one for a caption
     built out of markup: Platformer's "(<a>Link</a>)" starts with a text
     node of just "(". Joining the block's own text puts the caption back
-    together before any rule looks at it.
+    together before any rule looks at it - and it is also the right unit
+    for "is there a paragraph of prose on this side", which is what
+    _is_unintroduced_figure asks in both directions.
     """
-    for node in image.find_all_next():
+    walk = image.find_all_next if forward else image.find_all_previous
+    for node in walk():
         if node.name in _CAPTION_BLOCK_TAGS:
             text = node.get_text(" ", strip=True)
             if text:
@@ -340,8 +350,51 @@ def _is_argument_figure(image: Tag) -> bool:
     if after is not None and _CAPTION_LEAD.match(after):
         return True
     following_block = _nearest_block_text(image)
-    return following_block is not None and bool(
-        _CITATION_CAPTION.fullmatch(following_block)
+    if following_block is not None and _CITATION_CAPTION.fullmatch(following_block):
+        return True
+    return _is_unintroduced_figure(image)
+
+
+def _is_unintroduced_figure(image: Tag) -> bool:
+    """True when `image` is a figure the author set into the argument
+    without introducing it in words - see charts.md, "The rule", which
+    this widens.
+
+    Apricitas Economics is the case that forced it: fifteen charts in a
+    single issue, every one of them alt="", none preceded by a colon and
+    none followed by a Source caption. A charts newsletter came out with
+    no charts at all, because the only signal the original rule looks for
+    is one its author never writes.
+
+    Three gates stand in for the missing sentence, all required:
+
+    - a paragraph of real prose on both sides. A figure that is part of an
+      argument interrupts the argument; a masthead sits above the prose
+      and a footer logo below it, with nothing on the far side.
+    - no `alt` and no `title`. This reads backwards and is not: a sender
+      labels a masthead, a section header or a sponsor's logo precisely so
+      it still reads as that brand when images are blocked, while an
+      author setting a chart for people to look at rarely bothers. Puck's
+      "The Daily Courant", Bayer's logo and Wired's "WIRED Daily" all name
+      themselves; Apricitas's charts do not.
+    - a `height` in pixels rather than "auto". A content image carries its
+      own dimensions through the mail template; chrome is laid out
+      fluidly. This is the weakest of the three and the most likely to
+      need revisiting - it is what excludes Puck and Wired, whose
+      templates size everything with height="auto".
+
+    Width is the caller's gate, not this function's.
+    """
+    named = any(cast(str, image.get(attr, "")).strip() for attr in ("alt", "title"))
+    if named:
+        return False
+    height = cast(str, image.get("height", ""))
+    if not height.replace(".", "", 1).isdigit():
+        return False
+    return all(
+        (text := _nearest_block_text(image, forward=forward)) is not None
+        and len(text) >= _FIGURE_MIN_CONTEXT_CHARS
+        for forward in (False, True)
     )
 
 
