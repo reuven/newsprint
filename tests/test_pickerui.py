@@ -525,3 +525,100 @@ def test_a_question_with_no_layout_is_left_alone() -> None:
 
     _bind_escape_to_clear_the_filter(_NoLayout())
     assert _NoLayout.key_bindings.bindings == []
+
+
+def _mixed_picklist():
+    """A publication that sorts before the Axios ones and does not match,
+    which is what makes the filtered and unfiltered lists disagree about
+    what lives at a given index."""
+    uid = 0
+    docs = []
+    for publication, titles in (
+        ("AI Daily Brief", ["One story"]),
+        ("Axios Macro", ["New trade stakes", "Ludicrous precision", "Stimmy redux"]),
+        ("Axios Markets", ["Imagining", "Chilly scenes", "Go big", "Oil bonds"]),
+        ("Mike Allen (axios.com)", ["Axios AM: one", "Axios AM: two"]),
+    ):
+        for title in titles:
+            uid += 1
+            docs.append(_doc(publication, title, "2026-09-05", uid=uid))
+    return build_picklist(docs, sizes={d.origin.uid: 20_000 for d in docs})
+
+
+def test_the_cursor_walks_every_filtered_row_and_no_separator() -> None:
+    """questionary judges whether the cursor is on a separator by indexing
+    the *unfiltered* list, while pointed_at indexes the filtered one. With
+    a filter active the two disagree, so arrowing down skipped rows and
+    parked on blank lines - reported from a real run as "I'm not next to
+    any publication, and I missed two".
+    """
+    from newsprint.pickerui import _choices, _GroupAwareControl
+
+    control = InquirerControl(_choices(_mixed_picklist(), width=100))
+    control.__class__ = _GroupAwareControl
+    for character in "axios":
+        control.add_search_character(character)
+
+    def down() -> None:
+        control.select_next()
+        while not control.is_selection_valid():
+            control.select_next()
+
+    view = list(control.filtered_choices)
+    rows = [
+        str(c.title).strip() for c in view if not isinstance(c, questionary.Separator)
+    ]
+    visited = []
+    for _ in range(len(rows)):
+        down()
+        landed = view[control.pointed_at]
+        assert not isinstance(landed, questionary.Separator), (
+            f"landed on a separator at index {control.pointed_at}"
+        )
+        visited.append(str(landed.title).strip())
+
+    assert visited == rows, "every filtered row, in order, and nothing else"
+
+
+def test_a_cursor_past_the_end_of_a_filtered_list_is_not_valid() -> None:
+    """The filtered list shrinks as the filter grows. questionary resets
+    the cursor to 0 on every keystroke, so this should not arise - but a
+    stale index must read as "not a row to select", not raise, because
+    the answer decides whether the arrow keys keep moving."""
+    from newsprint.pickerui import _choices, _GroupAwareControl
+
+    control = InquirerControl(_choices(_mixed_picklist(), width=100))
+    control.__class__ = _GroupAwareControl
+    for character in "axios":
+        control.add_search_character(character)
+
+    control.pointed_at = len(list(control.filtered_choices)) + 5
+    assert control.is_selection_valid() is False
+    assert control.is_selection_disabled() is None
+
+
+def test_the_two_halves_of_validity_also_read_the_filtered_list() -> None:
+    """questionary only reaches these through is_selection_valid, which
+    is overridden too - but their base versions index the unfiltered
+    list, which is the bug, so they are corrected rather than left as
+    traps for a future version that calls them directly."""
+    from newsprint.pickerui import _choices, _GroupAwareControl
+
+    control = InquirerControl(_choices(_mixed_picklist(), width=100))
+    control.__class__ = _GroupAwareControl
+    for character in "axios":
+        control.add_search_character(character)
+
+    view = list(control.filtered_choices)
+    separator = next(
+        i for i, c in enumerate(view) if isinstance(c, questionary.Separator)
+    )
+    row = next(
+        i for i, c in enumerate(view) if not isinstance(c, questionary.Separator)
+    )
+
+    control.pointed_at = separator
+    assert control.is_selection_a_separator() is True
+    control.pointed_at = row
+    assert control.is_selection_a_separator() is False
+    assert control.is_selection_disabled() is None

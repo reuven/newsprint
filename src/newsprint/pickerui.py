@@ -137,13 +137,51 @@ def _matching_choices(
 
 
 class _GroupAwareControl(InquirerControl):
-    """questionary's own control, with filtering done by group.
+    """questionary's own control, with filtering done by group - and with
+    the cursor asking the same list it is an index into.
 
     The class of a live control is swapped to this one after the prompt
-    is built - questionary exposes no hook for the filtering rule, and
-    the attributes are the base class's own, untouched. The same reach
-    through the layout that _keep_group_heading_visible already makes.
+    is built - questionary exposes no hook for either, and the attributes
+    are the base class's own, untouched. The same reach through the
+    layout that _keep_group_heading_visible already makes.
     """
+
+    def _pointed_at(self) -> questionary.Separator | questionary.Choice | None:
+        """The line the cursor is on, from the list it indexes.
+
+        questionary's own is_selection_a_separator and
+        is_selection_disabled index `choices`, the *unfiltered* list,
+        while pointed_at is an index into `filtered_choices` - its own
+        get_pointed_at says so. With no filter the two are the same list
+        and nothing shows; with one, they disagree about what lives at a
+        given index, so the cursor skips rows and parks on blank lines.
+        Reported from a real run as "I'm not next to any publication, and
+        I missed two".
+        """
+        view = self.filtered_choices
+        if 0 <= self.pointed_at < len(view):
+            return view[self.pointed_at]
+        return None
+
+    def is_selection_a_separator(self) -> bool:
+        return isinstance(self._pointed_at(), questionary.Separator)
+
+    def is_selection_disabled(self) -> str | None:
+        pointed = self._pointed_at()
+        return None if pointed is None else pointed.disabled
+
+    def is_selection_valid(self) -> bool:
+        """Overridden as well as its two halves, because a cursor past
+        the end of the filtered list is neither disabled nor a separator
+        and would otherwise read as a perfectly good row. It is nothing
+        at all, and the arrow keys need to be told to keep moving.
+        """
+        pointed = self._pointed_at()
+        return (
+            pointed is not None
+            and not pointed.disabled
+            and not isinstance(pointed, questionary.Separator)
+        )
 
     @property
     def filtered_choices(
