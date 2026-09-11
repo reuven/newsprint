@@ -3686,3 +3686,55 @@ def test_a_short_document_is_never_cut() -> None:
     )
     cleaned = clean_document(document(html))
     assert "state of the electricity market" in cleaned.html
+
+
+def test_substacks_free_subscriber_pitch_is_a_footer_marker() -> None:
+    """ "You're currently a free subscriber to X. For the full experience,
+    upgrade your subscription." - Substack's own sign-off, and the most
+    widely printed chrome left in the corpus: 48 messages across 20
+    publications.
+
+    The obliged-text markers miss it because it is a sales pitch, not a
+    legal notice: no unsubscribe link, no copyright, no mailing address.
+    It earns its place on the list the same way they do, by being a fixed
+    template string that no one writes into an article.
+    """
+    from bs4 import BeautifulSoup
+
+    from newsprint.clean import _strip_footer
+
+    body = "".join(
+        f"<p>Paragraph {n} carries the argument on at some length.</p>"
+        for n in range(20)
+    )
+    soup = BeautifulSoup(
+        f"<html><body><div>{body}"
+        "<p>You're currently a free subscriber to Unraveled.</p>"
+        "<p>For the full experience, upgrade your subscription.</p>"
+        "</div></body></html>",
+        "lxml",
+    )
+    assert len(_strip_footer(soup)) == 2
+    assert "free subscriber" not in str(soup)
+    assert "Paragraph 19" in str(soup)
+
+
+def test_a_paid_subscriber_line_is_the_same_block() -> None:
+    """Substack writes the same sign-off to paying readers, with one word
+    changed. Matching only the free one would leave it printing for
+    exactly the people who already upgraded."""
+    from bs4 import BeautifulSoup
+
+    from newsprint.clean import _strip_footer
+
+    body = "".join(
+        f"<p>Paragraph {n} carries the argument on at some length.</p>"
+        for n in range(20)
+    )
+    soup = BeautifulSoup(
+        f"<html><body><div>{body}"
+        "<p>You're currently a paid subscriber to Unraveled.</p>"
+        "</div></body></html>",
+        "lxml",
+    )
+    assert len(_strip_footer(soup)) == 1

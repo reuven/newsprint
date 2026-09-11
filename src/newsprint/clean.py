@@ -717,10 +717,17 @@ def _iter_text_elements(node: Tag) -> Iterator[Tag]:
 
 
 # The lines every bulk mailer ends with, and that nothing else says.
-# Deliberately not a general chrome vocabulary: each of these is text a
-# sender is obliged to include, so none of them appears in an article
-# except as the subject of a sentence - which is what the closing-region
-# gate below is for.
+# Deliberately not a general chrome vocabulary: these are fixed template
+# strings a sender emits rather than writes, so none of them appears in
+# an article except as the subject of a sentence - which is what the
+# closing-region gate below is for.
+#
+# Most are text a sender is legally obliged to include. Substack's
+# "you're currently a free subscriber to X" is the one that is not - it
+# is a sales pitch - and it is here on the narrower ground that it is
+# still a fixed string the platform writes, never the author. It earns
+# its place by reach: 48 messages across 20 publications, the most
+# widely printed chrome left in the corpus.
 _FOOTER_MARKER = re.compile(
     r"\bunsubscribe\b"
     r"|you (are |is )?receiv(ing|ed) this (e-?mail|message|newsletter)"
@@ -728,7 +735,8 @@ _FOOTER_MARKER = re.compile(
     r"|update your (subscription )?preferences|manage your subscription"
     r"|our mailing address is|add us to your address book"
     r"|view (this|the) (e-?mail|newsletter) (online|in your browser)"
-    r"|no longer want to receive",
+    r"|no longer want to receive"
+    r"|you'?re currently a (free|paid) subscriber",
     re.IGNORECASE,
 )
 
