@@ -5,7 +5,7 @@ time, so it never appears in a config file or in the repository.
 """
 
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +18,12 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "newsprint" / "config.toml"
 # means "whatever CUPS treats as the default destination".
 DEFAULTS: dict[str, dict[str, Any]] = {
     "mail": {"host": "", "user": "", "folder": "INBOX/toprint", "trash": "auto"},
-    "print": {"printer": "", "paper": "A4", "duplex": "two-sided-long-edge"},
+    "print": {
+        "printer": "",
+        "paper": "A4",
+        "duplex": "two-sided-long-edge",
+        "cells_per_side": 4,
+    },
     "layout": {"margin_mm": 9.0, "font_size_pt": 9.0, "line_height": 1.35},
     "window": {"fallback_days": 7},
     # title empty: the contents page renders nothing above "CONTENTS ·"
@@ -63,8 +68,8 @@ class ConfigError(Exception):
 # [layout] key blew up with a raw, unhelpful TypeError. Both were wrong, in
 # different directions; this is the one behavior applied everywhere.
 _SECTION_KEYS: dict[str, frozenset[str]] = {
-    "mail": frozenset({"host", "user", "folder", "trash"}),
-    "print": frozenset({"printer", "paper", "duplex"}),
+    "mail": frozenset({"host", "user", "folder", "trash", "folders"}),
+    "print": frozenset({"printer", "paper", "duplex", "cells_per_side"}),
     "layout": frozenset({"margin_mm", "font_size_pt", "line_height"}),
     "window": frozenset({"fallback_days"}),
     "packet": frozenset({"title", "min_words"}),
@@ -134,10 +139,20 @@ def _reject_unknown_keys(data: dict[str, dict[str, Any]]) -> None:
 
 @dataclass(frozen=True, slots=True)
 class MailConfig:
+    """The account, and the folders newsletters are starred into.
+
+    `folder` is the original spelling and is in every config that exists,
+    including the one --setup writes, so it keeps working and means a
+    list of one. `folders` is how you name more than one. A uid means
+    nothing without the folder it came from, so everything downstream
+    carries the folder alongside it rather than a bare number.
+    """
+
     host: str
     user: str
     folder: str
     trash: str
+    folders: list[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +252,22 @@ class Config:
             )
 
 
+def _folders(mail: dict[str, Any], path: Path) -> list[str]:
+    """The folders to read, however they were spelled.
+
+    `folders` wins over `folder` when both are given: naming both is a
+    config half-edited, and the plural is the more deliberate of the two.
+    """
+    named = mail.get("folders")
+    if named is None:
+        return [mail["folder"]]
+    if not isinstance(named, list) or not all(isinstance(x, str) for x in named):
+        raise ConfigError(f"{path}: mail.folders must be a list of folder names")
+    if not named:
+        raise ConfigError(f"{path}: mail.folders needs at least one folder")
+    return list(named)
+
+
 def _merged(path: Path) -> dict[str, dict[str, Any]]:
     """Overlay the file's tables onto the defaults, key by key.
 
@@ -253,7 +284,9 @@ def _merged(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def load_config(
-    path: Path = DEFAULT_CONFIG_PATH, paper_override: str | None = None
+    path: Path = DEFAULT_CONFIG_PATH,
+    paper_override: str | None = None,
+    cells_override: int | None = None,
 ) -> Config:
     """Load and validate config.toml, raising only ConfigError.
 
@@ -273,10 +306,23 @@ def load_config(
             paper_override if paper_override is not None else data["print"]["paper"]
         )
         return Config(
-            mail=MailConfig(**data["mail"]),
+            mail=MailConfig(
+                host=data["mail"]["host"],
+                user=data["mail"]["user"],
+                folder=data["mail"]["folder"],
+                trash=data["mail"]["trash"],
+                folders=_folders(data["mail"], path),
+            ),
             printing=PrintConfig(
                 printer=data["print"]["printer"],
-                paper=paper_by_name(paper_name),
+                paper=replace(
+                    paper_by_name(paper_name),
+                    cells_per_side=(
+                        cells_override
+                        if cells_override is not None
+                        else data["print"]["cells_per_side"]
+                    ),
+                ),
                 duplex=data["print"]["duplex"],
             ),
             layout=LayoutConfig(**data["layout"]),

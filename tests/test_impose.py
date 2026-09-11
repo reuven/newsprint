@@ -158,3 +158,37 @@ def test_each_cell_lands_at_its_exact_offset(tmp_path: Path) -> None:
     for number, (x, y) in expected.items():
         assert found[number].x0 == pytest.approx(x, abs=0.01), f"cell {number} across"
         assert found[number].y0 == pytest.approx(y, abs=0.01), f"cell {number} down"
+
+
+def test_two_cells_a_side_stack_top_and_bottom(tmp_path: Path) -> None:
+    """Two a side is the top half and the bottom half, in reading order.
+    Each cell is the full width of the sheet, so there is nothing to sit
+    beside it."""
+    from dataclasses import replace
+
+    two_up = replace(A4, cells_per_side=2)
+    cells = numbered_cells(tmp_path / "cells.pdf", 2, paper=two_up)
+    out = tmp_path / "sheets.pdf"
+
+    assert impose([cells], two_up, out) == 1
+    _cell_width, cell_height = two_up.cell.as_points()
+    with pymupdf.open(out) as sheets:
+        sheet = sheets[0]
+        assert sheet.rect.width == pytest.approx(A4.sheet.as_points()[0], abs=1.0)
+        first = sheet.search_for("PAGE 1")[0]
+        second = sheet.search_for("PAGE 2")[0]
+
+    assert first.x0 == pytest.approx(second.x0, abs=0.01), "one column, not two"
+    assert second.y0 - first.y0 == pytest.approx(cell_height, abs=0.01)
+
+
+def test_two_cells_a_side_fills_two_sheets_with_four_cells(tmp_path: Path) -> None:
+    """Half as many to a side means twice as many sides for the same
+    reading - which is the trade being made for the larger type."""
+    from dataclasses import replace
+
+    two_up = replace(A4, cells_per_side=2)
+    cells = numbered_cells(tmp_path / "cells.pdf", 4, paper=two_up)
+    out = tmp_path / "sheets.pdf"
+    assert impose([cells], two_up, out) == 2
+    assert page_count(out) == 2

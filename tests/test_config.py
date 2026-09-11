@@ -27,7 +27,7 @@ def test_missing_file_yields_structural_defaults(tmp_path: Path) -> None:
     assert config.mail.user == ""
     assert config.printing.printer == ""
     assert config.mail.folder == "INBOX/toprint"
-    assert config.printing.paper is A4
+    assert config.printing.paper == A4
     assert config.layout.margin_mm == pytest.approx(9.0)
     assert config.fallback_days == 7
     assert config.packet.title == ""
@@ -72,7 +72,7 @@ def test_file_values_override_defaults(tmp_path: Path) -> None:
     assert config.mail.host == "imap.example.com"
     assert config.mail.folder == "INBOX/queue"
     assert config.printing.printer == "Test_Printer"
-    assert config.printing.paper is LETTER
+    assert config.printing.paper == LETTER
     assert config.layout.font_size_pt == pytest.approx(10.0)
 
 
@@ -89,7 +89,7 @@ def test_paper_override_beats_the_file(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(SAMPLE)
     config = load_config(path, paper_override="a4")
-    assert config.printing.paper is A4
+    assert config.printing.paper == A4
 
 
 def test_unknown_paper_is_rejected(tmp_path: Path) -> None:
@@ -326,3 +326,69 @@ def test_an_unknown_key_in_the_personal_section_is_an_error(tmp_path: Path) -> N
                 '[summary.personal]\nlooking_for = "x"\ninterest_title = "old name"\n',
             )
         )
+
+
+def test_cells_per_side_comes_from_the_file(tmp_path: Path) -> None:
+    """Two a side is a standing preference for most people who want it -
+    it is about how well they can read, not about one particular
+    packet - so it belongs in the file rather than in a flag typed every
+    week."""
+    path = tmp_path / "config.toml"
+    path.write_text("[print]\ncells_per_side = 2\n")
+    config = load_config(path)
+    assert config.printing.paper.cells_per_side == 2
+    assert config.printing.paper.cell.width_mm == pytest.approx(210.0)
+
+
+def test_a_cells_per_side_override_beats_the_file(tmp_path: Path) -> None:
+    """And the flag still wins for one run, the way --paper does."""
+    path = tmp_path / "config.toml"
+    path.write_text("[print]\ncells_per_side = 2\n")
+    assert load_config(path, cells_override=4).printing.paper.cells_per_side == 4
+
+
+def test_a_single_folder_is_still_spelled_folder(tmp_path: Path) -> None:
+    """Every config that exists says `folder = "..."`, including the one
+    the setup wizard writes. That spelling keeps working and means a list
+    of one."""
+    path = tmp_path / "config.toml"
+    path.write_text('[mail]\nfolder = "INBOX/reading"\n')
+    config = load_config(path)
+    assert config.mail.folders == ["INBOX/reading"]
+
+
+def test_several_folders_can_be_named(tmp_path: Path) -> None:
+    """Filters do not always put everything in one place."""
+    path = tmp_path / "config.toml"
+    path.write_text('[mail]\nfolders = ["INBOX/toprint", "INBOX/work"]\n')
+    config = load_config(path)
+    assert config.mail.folders == ["INBOX/toprint", "INBOX/work"]
+
+
+def test_folders_wins_over_folder_when_both_are_given(tmp_path: Path) -> None:
+    """Naming both is a config half-edited. The plural is the more
+    deliberate of the two, so it decides - and saying so beats guessing."""
+    path = tmp_path / "config.toml"
+    path.write_text('[mail]\nfolder = "INBOX/old"\nfolders = ["INBOX/new"]\n')
+    assert load_config(path).mail.folders == ["INBOX/new"]
+
+
+def test_an_empty_folders_list_is_refused(tmp_path: Path) -> None:
+    """Nowhere to read from is a mistake worth naming, not a run that
+    finds nothing."""
+    path = tmp_path / "config.toml"
+    path.write_text("[mail]\nfolders = []\n")
+    with pytest.raises(ConfigError, match="at least one folder"):
+        load_config(path)
+
+
+def test_a_folders_value_that_is_not_a_list_of_names_is_refused(
+    tmp_path: Path,
+) -> None:
+    """A bare string is the mistake someone makes reaching for the plural
+    while typing the singular, and it would otherwise be read one letter
+    at a time as a list of folders named I, N, B, O, X."""
+    path = tmp_path / "config.toml"
+    path.write_text('[mail]\nfolders = "INBOX/toprint"\n')
+    with pytest.raises(ConfigError, match="list of folder names"):
+        load_config(path)

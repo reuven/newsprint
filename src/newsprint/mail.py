@@ -413,6 +413,16 @@ class Mailbox:
                 self._imap = None
 
     @property
+    def folder(self) -> str:
+        """The folder this mailbox has open.
+
+        Read back rather than assumed: _open may have rewritten it to
+        suit the server's own hierarchy separator, and what a message is
+        retired from has to be the name that actually selected.
+        """
+        return self._folder
+
+    @property
     def _connection(self) -> imaplib.IMAP4:
         if self._imap is None:
             raise MailError("mailbox is not open; use it as a context manager")

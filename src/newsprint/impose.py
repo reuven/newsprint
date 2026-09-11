@@ -16,7 +16,22 @@ from pypdf import PageObject, PdfReader, PdfWriter, Transformation
 
 from .geometry import Paper
 
-CELLS_PER_SIDE = 4
+
+def _offsets(paper: Paper) -> tuple[tuple[float, float], ...]:
+    """Where each cell's bottom-left corner goes on the sheet.
+
+    The PDF origin is bottom-left, so the top row sits one cell height
+    up. Reading order is across then down, which for two a side is simply
+    top then bottom - there is nothing beside a cell that spans the
+    sheet.
+    """
+    cell_width, cell_height = paper.cell.as_points()
+    across = paper.cells_per_side // 2
+    return tuple(
+        (column * cell_width, cell_height if row == 0 else 0.0)
+        for row in range(2)
+        for column in range(across)
+    )
 
 
 def impose(cell_pdfs: Sequence[Path], paper: Paper, out: Path) -> int:
@@ -34,22 +49,14 @@ def impose(cell_pdfs: Sequence[Path], paper: Paper, out: Path) -> int:
         if not cells:
             raise ValueError("nothing to impose")
 
-        cell_width, cell_height = paper.cell.as_points()
         sheet_width, sheet_height = paper.sheet.as_points()
-
-        # The PDF origin is bottom-left, so the top row sits one cell height
-        # up. Reading order: top-left, top-right, bottom-left, bottom-right.
-        offsets = (
-            (0.0, cell_height),
-            (cell_width, cell_height),
-            (0.0, 0.0),
-            (cell_width, 0.0),
-        )
+        offsets = _offsets(paper)
+        per_side = len(offsets)
 
         writer = PdfWriter()
-        for start in range(0, len(cells), CELLS_PER_SIDE):
+        for start in range(0, len(cells), per_side):
             side = PageObject.create_blank_page(width=sheet_width, height=sheet_height)
-            for cell, (dx, dy) in zip(cells[start : start + CELLS_PER_SIDE], offsets):
+            for cell, (dx, dy) in zip(cells[start : start + per_side], offsets):
                 side.merge_transformed_page(cell, Transformation().translate(dx, dy))
             writer.add_page(side)
 

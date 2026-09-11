@@ -9,6 +9,7 @@ from click.testing import CliRunner
 from newsprint.cli import fetch_queue, main, retire_printed
 from newsprint.config import load_config
 from newsprint.mail import RetireResult
+from newsprint.models import Document, Origin
 from newsprint.picker import DISPLAY_LIMIT
 
 SAMPLE_CONFIG = """
@@ -50,6 +51,12 @@ class _FakeBox:
     without ever opening a real IMAP connection."""
 
     instances: ClassVar[list["_FakeBox"]] = []
+
+    @property
+    def folder(self) -> str:
+        """Mirrors Mailbox.folder: what was actually selected, which is
+        what a fetched message records as where it came from."""
+        return str(self.kwargs.get("folder", "INBOX/toprint"))
 
     def __init__(self, **kwargs) -> None:
         self.kwargs = kwargs
@@ -224,7 +231,7 @@ def test_dry_run_never_prints_and_never_retires(monkeypatch, tmp_path: Path) -> 
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: spooled.append(pdf))
     monkeypatch.setattr(
         "newsprint.cli.retire_printed",
-        lambda config, uids, trash: retired.append(uids),
+        lambda config, uids, trash, folder=None: retired.append(uids),
     )
 
     result = CliRunner().invoke(
@@ -297,7 +304,7 @@ def test_accepting_prints_then_retires_in_that_order(
         lambda pdf, config: (events.append("spool"), "Printer-1")[1],
     )
 
-    def fake_retire_printed(config, uids, trash):
+    def fake_retire_printed(config, uids, trash, folder=None):
         events.append(f"retire:{uids}")
         return RetireResult(retired=tuple(uids), failed=())
 
@@ -328,7 +335,7 @@ def test_no_retire_spools_but_never_calls_retire_printed(
     )
     monkeypatch.setattr(
         "newsprint.cli.retire_printed",
-        lambda config, uids, trash: retired.append(uids),
+        lambda config, uids, trash, folder=None: retired.append(uids),
     )
     monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "r")
 
@@ -357,7 +364,9 @@ def test_no_retire_records_the_outcome_as_printed_kept(
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr(
         "newsprint.cli.retire_printed",
-        lambda config, uids, trash: pytest.fail("retire_printed must not be called"),
+        lambda config, uids, trash, folder=None: pytest.fail(
+            "retire_printed must not be called"
+        ),
     )
 
     def fake_record(entry, **kw):
@@ -469,7 +478,7 @@ def test_a_url_sourced_document_prints_without_ever_calling_retire(
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr(
         "newsprint.cli.retire_printed",
-        lambda config, uids, trash: retired.append(uids),
+        lambda config, uids, trash, folder=None: retired.append(uids),
     )
     monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "r")
 
@@ -496,7 +505,7 @@ def test_a_print_failure_leaves_mail_untouched(monkeypatch, tmp_path: Path) -> N
     monkeypatch.setattr("newsprint.cli.spool", explode)
     monkeypatch.setattr(
         "newsprint.cli.retire_printed",
-        lambda config, uids, trash: retired.append(uids),
+        lambda config, uids, trash, folder=None: retired.append(uids),
     )
     monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "r")
 
@@ -540,7 +549,7 @@ def test_a_retire_failure_after_printing_is_reported_not_crashed(
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
 
-    def exploding_retire(config, uids, trash):
+    def exploding_retire(config, uids, trash, folder=None):
         raise MailError("could not reopen the folder writable")
 
     monkeypatch.setattr("newsprint.cli.retire_printed", exploding_retire)
@@ -569,7 +578,7 @@ def test_an_imap_readonly_error_from_retire_is_reported_not_crashed(
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
 
-    def exploding_retire(config, uids, trash):
+    def exploding_retire(config, uids, trash, folder=None):
         raise imaplib.IMAP4.readonly("INBOX/toprint is not writable")
 
     monkeypatch.setattr("newsprint.cli.retire_printed", exploding_retire)
@@ -642,7 +651,7 @@ def test_retirement_outcome_is_logged(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr(
         "newsprint.cli.retire_printed",
-        lambda config, uids, trash: RetireResult(retired=(4,), failed=()),
+        lambda config, uids, trash, folder=None: RetireResult(retired=(4,), failed=()),
     )
 
     def fake_record(entry, **kw):
@@ -677,7 +686,9 @@ def test_a_partial_retirement_outcome_is_logged(monkeypatch, tmp_path: Path) -> 
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr(
         "newsprint.cli.retire_printed",
-        lambda config, uids, trash: RetireResult(retired=(4,), failed=(7,)),
+        lambda config, uids, trash, folder=None: RetireResult(
+            retired=(4,), failed=(7,)
+        ),
     )
 
     def fake_record(entry, **kw):
@@ -711,7 +722,7 @@ def test_an_unrecoverable_message_is_named_in_the_run_log(
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr(
         "newsprint.cli.retire_printed",
-        lambda config, uids, trash: RetireResult(
+        lambda config, uids, trash, folder=None: RetireResult(
             retired=(), failed=(4,), unrecoverable=(4,)
         ),
     )
@@ -956,7 +967,7 @@ def test_a_skipped_teaser_is_not_retired(monkeypatch, tmp_path: Path) -> None:
     )
     monkeypatch.setattr(
         "newsprint.cli.retire_printed",
-        lambda config, uids, trash: retired.append(uids),
+        lambda config, uids, trash, folder=None: retired.append(uids),
     )
 
     result = CliRunner().invoke(
@@ -979,7 +990,7 @@ def test_a_skipped_teaser_is_excluded_from_uids_alongside_a_real_build(
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
 
-    def fake_retire_printed(config, uids, trash):
+    def fake_retire_printed(config, uids, trash, folder=None):
         assert uids == [4]  # _queued()'s uid only - the teaser's is absent
         return RetireResult(retired=tuple(uids), failed=())
 
@@ -1006,7 +1017,9 @@ def test_skipped_teasers_are_recorded_in_the_run_log(
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr(
         "newsprint.cli.retire_printed",
-        lambda config, uids, trash: RetireResult(retired=tuple(uids), failed=()),
+        lambda config, uids, trash, folder=None: RetireResult(
+            retired=tuple(uids), failed=()
+        ),
     )
 
     def fake_record(entry, **kw):
@@ -1383,7 +1396,10 @@ def test_retire_printed_reports_progress_before_connecting(
     retire_printed(mail_config, [4, 7], "INBOX/Trash")
 
     output = capsys.readouterr().out
-    assert "Retiring 2 message(s) to INBOX/Trash" in output
+    # Naming the folder too: a run can span more than one, and "retiring
+    # 2 messages" without saying from where is not an account of what
+    # happened.
+    assert "Retiring 2 message(s) from INBOX/toprint to INBOX/Trash" in output
 
 
 def test_retire_printed_moves_messages_with_no_failures(
@@ -2503,7 +2519,7 @@ def test_a_picked_newsletter_is_retired_like_any_other(
 
     retired_uids: list[list[int]] = []
 
-    def fake_retire_printed(config, uids, trash):
+    def fake_retire_printed(config, uids, trash, folder=None):
         retired_uids.append(uids)
         return RetireResult(retired=tuple(uids), failed=())
 
@@ -2552,7 +2568,7 @@ def test_picker_trash_is_used_when_the_starred_queue_was_empty(
 
     retire_calls: list[tuple] = []
 
-    def fake_retire_printed(config, uids, trash):
+    def fake_retire_printed(config, uids, trash, folder=None):
         retire_calls.append((uids, trash))
         return RetireResult(retired=tuple(uids), failed=())
 
@@ -2848,7 +2864,7 @@ def test_no_print_asks_before_retiring_and_never_spools(
         lambda pdf, config: events.append("spool") or "Printer-1",
     )
 
-    def fake_retire_printed(config, uids, trash):
+    def fake_retire_printed(config, uids, trash, folder=None):
         events.append(f"retire:{uids}")
         return RetireResult(retired=tuple(uids), failed=())
 
@@ -2872,7 +2888,7 @@ def test_no_print_declined_leaves_mail_untouched(monkeypatch, tmp_path: Path) ->
     )
     monkeypatch.setattr(
         "newsprint.cli.retire_printed",
-        lambda config, uids, trash: events.append("retire"),
+        lambda config, uids, trash, folder=None: events.append("retire"),
     )
 
     result = CliRunner().invoke(
@@ -2892,7 +2908,7 @@ def test_no_print_with_no_retire_never_asks(monkeypatch, tmp_path: Path) -> None
     _no_mail(monkeypatch, tmp_path)
     monkeypatch.setattr(
         "newsprint.cli.retire_printed",
-        lambda config, uids, trash: events.append("retire"),
+        lambda config, uids, trash, folder=None: events.append("retire"),
     )
 
     result = CliRunner().invoke(
@@ -2932,7 +2948,7 @@ def test_dry_run_is_exactly_no_print_plus_no_retire(
         )
         monkeypatch.setattr(
             "newsprint.cli.retire_printed",
-            lambda config, uids, trash: events.__setitem__(
+            lambda config, uids, trash, folder=None: events.__setitem__(
                 "retire", events["retire"] + 1
             ),
         )
@@ -3297,6 +3313,9 @@ def test_unretire_records_what_it_restored(monkeypatch, tmp_path) -> None:
         {
             "outcome": "unretired",
             "folder": "INBOX/toprint",
+            # Which messages went back where, so a later reader of the log
+            # can see a multi-folder undo as clearly as a single-folder one.
+            "folders": {"INBOX/toprint": ["<a@x>", "<b@x>"]},
             "trash": "INBOX/Trash",
             "restored": ["<a@x>"],
             "missing": ["<b@x>"],
@@ -3739,3 +3758,167 @@ def test_a_packet_that_will_not_delete_does_not_stop_the_run(
     assert result.exit_code == 0, result.output
     assert stuck.exists(), "left where it is"
     assert "Swept" not in result.output, "and not counted as swept"
+
+
+# ---------------------------------------------------------------------------
+# Reading from more than one folder.
+# ---------------------------------------------------------------------------
+
+
+def test_a_run_reads_every_configured_folder(monkeypatch, tmp_path: Path) -> None:
+    """Filters do not always put everything in one place. Each folder is
+    opened in turn, and every message records which one it came from -
+    a uid means nothing without it."""
+    _FakeBox.instances.clear()
+    monkeypatch.setattr("newsprint.cli.Mailbox", _FakeBox)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "[mail]\n"
+        'host = "imap.example.com"\n'
+        'user = "someone@example.com"\n'
+        'folders = ["INBOX/toprint", "INBOX/work"]\n'
+    )
+    documents, _trash = fetch_queue(load_config(path), no_pick=True)
+
+    assert [box.kwargs["folder"] for box in _FakeBox.instances] == [
+        "INBOX/toprint",
+        "INBOX/work",
+    ]
+    assert {document.origin.folder for document in documents} == {
+        "INBOX/toprint",
+        "INBOX/work",
+    }
+
+
+def test_each_message_is_retired_from_the_folder_it_came_from(
+    monkeypatch, mail_config
+) -> None:
+    """Two folders can both hold a uid 4, and they are different
+    messages. Retiring the whole run against one folder would move
+    whatever happened to share a number in the other."""
+    from newsprint.cli import retire_printed_by_folder
+
+    _FakeBox.instances.clear()
+    monkeypatch.setattr("newsprint.cli.Mailbox", _FakeBox)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    def _doc(uid: int, folder: str) -> Document:
+        return Document(
+            origin=Origin(
+                kind="email", identifier=f"<{uid}@{folder}>", uid=uid, folder=folder
+            ),
+            publication="Paper",
+            title="An Issue",
+            date=datetime(2026, 9, 11, tzinfo=UTC),
+            html="<p>x</p>",
+        )
+
+    documents = [_doc(4, "INBOX/toprint"), _doc(4, "INBOX/work")]
+    retire_printed_by_folder(mail_config, documents, "INBOX/Trash")
+
+    by_folder = {box.kwargs["folder"]: box.retire_calls for box in _FakeBox.instances}
+    assert by_folder == {
+        "INBOX/toprint": [((4,), "INBOX/Trash")],
+        "INBOX/work": [((4,), "INBOX/Trash")],
+    }
+
+
+def test_unretire_reads_an_entry_written_before_folders_existed(
+    monkeypatch, tmp_path
+) -> None:
+    """The run log on a working installation already holds retirements
+    written without a per-folder breakdown - the author's own has two
+    from this week. They name one folder and a flat list of ids, and they
+    have to keep working exactly as they did."""
+    from newsprint.mail import UnretireResult
+
+    directory = _retirement_log(tmp_path, folder="INBOX/lastweek")
+    monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", directory)
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "r")
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    seen: list[tuple[str, tuple[str, ...]]] = []
+
+    class FakeBox:
+        def __init__(self, **kwargs):
+            self._folder = kwargs["folder"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def unretire(self, message_ids, trash):
+            seen.append((self._folder, tuple(message_ids)))
+            return UnretireResult(restored=tuple(message_ids))
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", FakeBox)
+    result = CliRunner().invoke(
+        main, ["--unretire", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code == 0, result.output
+    assert seen == [("INBOX/lastweek", ("<a@x>", "<b@x>"))]
+
+
+def test_unretire_puts_each_message_back_in_its_own_folder(
+    monkeypatch, tmp_path
+) -> None:
+    """A run that read two folders retires from both, and undoing it has
+    to send each message back where it came from - not all of them to
+    whichever folder happened to be named first."""
+    from newsprint.mail import UnretireResult
+
+    directory = _retirement_log(
+        tmp_path,
+        folder="INBOX/toprint",
+        folders={"INBOX/toprint": ["<a@x>"], "INBOX/work": ["<b@x>"]},
+        retired_ids=["<a@x>", "<b@x>"],
+    )
+    monkeypatch.setattr("newsprint.runlog.DEFAULT_STATE_DIR", directory)
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "r")
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    seen: list[tuple[str, tuple[str, ...]]] = []
+
+    class FakeBox:
+        def __init__(self, **kwargs):
+            self._folder = kwargs["folder"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def unretire(self, message_ids, trash):
+            seen.append((self._folder, tuple(message_ids)))
+            return UnretireResult(restored=tuple(message_ids))
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", FakeBox)
+    result = CliRunner().invoke(
+        main, ["--unretire", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code == 0, result.output
+    assert sorted(seen) == [
+        ("INBOX/toprint", ("<a@x>",)),
+        ("INBOX/work", ("<b@x>",)),
+    ]
+
+
+def test_a_document_with_no_uid_is_not_retired(mail_config) -> None:
+    """A summary or contents page has no uid because it was never mail.
+    Grouping the run by folder has to step over it rather than try to
+    retire a page this tool wrote itself."""
+    from newsprint.cli import retire_printed_by_folder
+
+    page = Document(
+        origin=Origin(kind="url", identifier="summary-topics"),
+        publication="Summary",
+        title="This Week's Topics",
+        date=datetime(2026, 9, 11, tzinfo=UTC),
+        html="<p>x</p>",
+    )
+    assert retire_printed_by_folder(mail_config, [page], "INBOX/Trash") == {}

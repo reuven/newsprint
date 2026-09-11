@@ -32,7 +32,14 @@ from .config import (
 from .contents import build_contents
 from .extract import extract
 from .impose import impose
-from .mail import FETCH_CHUNK_SIZE, Mailbox, MailError, RetireResult, password_for
+from .mail import (
+    FETCH_CHUNK_SIZE,
+    Mailbox,
+    MailError,
+    RetireResult,
+    UnretireResult,
+    password_for,
+)
 from .models import Document, Verdict
 from .picker import DISPLAY_LIMIT, build_picklist, window_since
 from .pickerui import questionary_prompt
@@ -99,7 +106,11 @@ def _fetch_documents(
                 raw.update(box.fetch_many(chunk, items))
     elapsed = time.monotonic() - started
     click.echo(f"{label} {len(raw)} message(s) in {elapsed:.2f}s.")
-    return [extract(raw[uid], uid=uid, names=names) for uid in uids if uid in raw]
+    return [
+        extract(raw[uid], uid=uid, names=names, folder=box.folder)
+        for uid in uids
+        if uid in raw
+    ]
 
 
 def _resolve_trash(box: Mailbox, config: Config, uids: Sequence[int]) -> str | None:
@@ -282,34 +293,44 @@ def fetch_queue(
     click.echo(f"Connecting to {config.mail.host} as {config.mail.user}...")
     password = password_for(config.mail.host, config.mail.user)
     names = load_publication_names()
-    with Mailbox(
-        host=config.mail.host,
-        user=config.mail.user,
-        password=password,
-        folder=config.mail.folder,
-        notify=lambda message: click.echo(f"  {message}"),
-    ) as box:
-        click.echo(f"  Opened {config.mail.folder} ({box.message_count} messages).")
-        starred_uids = box.search_flagged()
-        click.echo(f"  {len(starred_uids)} starred message(s) found.")
-        documents = _fetch_documents(
-            box, starred_uids, names, items=_FULL_ITEMS, label="  Fetching"
-        )
+    collected: list[Document] = []
+    trash: str | None = None
+    # One connection per folder, opened in turn. A single folder - which
+    # is every config that has ever existed - is one connection, exactly
+    # as before; the count only grows for someone who asked for more.
+    for folder in config.mail.folders:
+        with Mailbox(
+            host=config.mail.host,
+            user=config.mail.user,
+            password=password,
+            folder=folder,
+            notify=lambda message: click.echo(f"  {message}"),
+        ) as box:
+            click.echo(f"  Opened {box.folder} ({box.message_count} messages).")
+            starred_uids = box.search_flagged()
+            click.echo(f"  {len(starred_uids)} starred message(s) found.")
+            collected += _fetch_documents(
+                box, starred_uids, names, items=_FULL_ITEMS, label="  Fetching"
+            )
 
-        picked: list[Document] = []
-        picked_uids: list[int] = []
-        if not no_pick:
-            try:
-                today = datetime.now(UTC).date()
-                since = window_since(config.fallback_days, today)
-                picked, picked_uids = _offer_picks(box, config, names, since, today)
-            except MailError as error:
-                click.echo(
-                    f"  Could not check for unstarred newsletters: {error}", err=True
-                )
+            picked_uids: list[int] = []
+            if not no_pick:
+                try:
+                    today = datetime.now(UTC).date()
+                    since = window_since(config.fallback_days, today)
+                    picked, picked_uids = _offer_picks(box, config, names, since, today)
+                    collected += picked
+                except MailError as error:
+                    click.echo(
+                        f"  Could not check for unstarred newsletters: {error}",
+                        err=True,
+                    )
 
-        trash = _resolve_trash(box, config, [*starred_uids, *picked_uids])
-    merged = sorted([*documents, *picked], key=lambda document: document.date)
+            # The trash belongs to the account, not to a folder, so the
+            # first folder able to answer settles it for the whole run.
+            if trash is None:
+                trash = _resolve_trash(box, config, [*starred_uids, *picked_uids])
+    merged = sorted(collected, key=lambda document: document.date)
     return merged, trash
 
 
@@ -416,14 +437,17 @@ def _open_preview(pdf: Path) -> None:
             continue
 
 
-def retire_printed(config: Config, uids: list[int], trash: str) -> RetireResult:
-    click.echo(f"\nRetiring {len(uids)} message(s) to {trash}...")
+def retire_printed(
+    config: Config, uids: list[int], trash: str, folder: str | None = None
+) -> RetireResult:
+    source = folder or config.mail.folder
+    click.echo(f"\nRetiring {len(uids)} message(s) from {source} to {trash}...")
     password = password_for(config.mail.host, config.mail.user)
     with Mailbox(
         host=config.mail.host,
         user=config.mail.user,
         password=password,
-        folder=config.mail.folder,
+        folder=source,
     ) as box:
         result = box.retire(uids, trash)
     if result.failed:
@@ -445,6 +469,30 @@ def retire_printed(config: Config, uids: list[int], trash: str) -> RetireResult:
     return result
 
 
+def retire_printed_by_folder(
+    config: Config, documents: Sequence[Document], trash: str
+) -> dict[str, RetireResult]:
+    """Retire each message from the folder it was read out of.
+
+    A uid is issued by a folder and means nothing outside it: two folders
+    can both hold a uid 4, and they are different messages. Retiring a
+    whole run against one folder would move whatever happened to share a
+    number in the other - so the run is grouped by folder first, and each
+    group goes back to its own.
+    """
+    by_folder: dict[str, list[int]] = {}
+    for document in documents:
+        uid = document.origin.uid
+        if uid is None:
+            continue
+        source = document.origin.folder or config.mail.folder
+        by_folder.setdefault(source, []).append(uid)
+    return {
+        folder: retire_printed(config, uids, trash, folder=folder)
+        for folder, uids in by_folder.items()
+    }
+
+
 def unretire_last(config: Config) -> None:
     """Put the most recently retired messages back where they came from.
 
@@ -458,36 +506,60 @@ def unretire_last(config: Config) -> None:
         raise click.ClickException(
             "No retirement in the run log, so there is nothing to undo."
         )
-    message_ids = [str(i) for i in entry.get("retired_ids") or []]
+    # A run may have spanned several folders, and each message goes back
+    # to its own. `folders` carries that; an entry written before it
+    # existed - every entry on any installation older than this version,
+    # including the ones already in the author's own log - names one
+    # folder and a flat list, and still works.
+    named = entry.get("folders")
+    if isinstance(named, dict) and any(named.values()):
+        restoring = {
+            str(folder): [str(i) for i in ids] for folder, ids in named.items() if ids
+        }
+    else:
+        restoring = {
+            str(entry.get("folder") or config.mail.folder): [
+                str(i) for i in entry.get("retired_ids") or []
+            ]
+        }
+    message_ids = [i for ids in restoring.values() for i in ids]
     trash = str(entry.get("trash") or "")
-    folder = str(entry.get("folder") or config.mail.folder)
     if not message_ids or not trash:
         raise click.ClickException(
             "The last retirement predates --unretire and did not record which "
             "messages it moved; they can only be restored by hand."
         )
 
+    where = ", ".join(sorted(restoring))
     click.echo(
         f"Last retirement ({entry.get('at')}): "
         f"{len(message_ids)} message(s) moved to {trash}."
     )
-    if not click.confirm(
-        f"Move them back to {folder} and re-star them?", default=False
-    ):
+    if not click.confirm(f"Move them back to {where} and re-star them?", default=False):
         click.echo("Nothing changed.")
         return
 
     password = password_for(config.mail.host, config.mail.user)
-    with Mailbox(
-        host=config.mail.host,
-        user=config.mail.user,
-        password=password,
-        folder=folder,
-        notify=lambda message: click.echo(f"  {message}"),
-    ) as box:
-        result = box.unretire(message_ids, trash)
+    restored: list[str] = []
+    missing: list[str] = []
+    failed: list[str] = []
+    for folder, ids in restoring.items():
+        with Mailbox(
+            host=config.mail.host,
+            user=config.mail.user,
+            password=password,
+            folder=folder,
+            notify=lambda message: click.echo(f"  {message}"),
+        ) as box:
+            outcome = box.unretire(ids, trash)
+        restored += outcome.restored
+        missing += outcome.missing
+        failed += outcome.failed
+    result = UnretireResult(
+        restored=tuple(restored), missing=tuple(missing), failed=tuple(failed)
+    )
 
-    click.echo(f"Restored {len(result.restored)} message(s) to {folder}.")
+    click.echo(f"Restored {len(result.restored)} message(s) to {where}.")
     if result.missing:
         click.echo(
             f"  {len(result.missing)} not found in {trash} - most likely the "
@@ -500,7 +572,8 @@ def unretire_last(config: Config) -> None:
     runlog.record(
         {
             "outcome": "unretired",
-            "folder": folder,
+            "folder": next(iter(restoring)),
+            "folders": restoring,
             "trash": trash,
             "restored": list(result.restored),
             "missing": list(result.missing),
@@ -535,6 +608,18 @@ def about() -> str:
     type=click.Choice(["a4", "letter"], case_sensitive=False),
     default=None,
     help="Paper size. Defaults to A4; use letter when printing in the US.",
+)
+@click.option(
+    "--cells-per-side",
+    type=click.Choice(["2", "4"]),
+    default=None,
+    help=(
+        "How many newsletters go on each side of a sheet. Four is the "
+        "default. Two gives each one a cell twice the size, on the same "
+        "paper and with the same fold - raise [layout] font_size_pt to "
+        "around 18 to spend that on larger type, or the lines come out "
+        "too long to read comfortably. Overrides [print] cells_per_side."
+    ),
 )
 @click.option(
     "--config",
@@ -616,6 +701,7 @@ def about() -> str:
 )
 def main(
     paper: str | None,
+    cells_per_side: str | None,
     config_path: Path,
     dry_run: bool,
     no_retire: bool,
@@ -634,13 +720,21 @@ def main(
     click.echo(f"Reading config: {config_path}")
     if unretire:
         try:
-            config = load_config(config_path, paper_override=paper)
+            config = load_config(
+                config_path,
+                paper_override=paper,
+                cells_override=int(cells_per_side) if cells_per_side else None,
+            )
             unretire_last(config)
         except (MailError, ConfigError) as error:
             raise click.ClickException(str(error)) from error
         return
     try:
-        config = load_config(config_path, paper_override=paper)
+        config = load_config(
+            config_path,
+            paper_override=paper,
+            cells_override=int(cells_per_side) if cells_per_side else None,
+        )
         documents, trash = fetch_queue(config, no_pick)
     except (MailError, ConfigError) as error:
         raise click.ClickException(str(error)) from error
@@ -929,41 +1023,56 @@ def main(
 
     if trash and uids:
         try:
-            retirement = retire_printed(config, uids, trash)
+            by_folder = retire_printed_by_folder(
+                config, [item.document for item in built], trash
+            )
         except (MailError, imaplib.IMAP4.error, OSError) as error:
-            # The job is already spooled: password_for(), Mailbox.__enter__(),
-            # or imaplib's own readonly guard on the write-mode SELECT can
-            # all still raise here, after printing has already succeeded.
-            # OSError covers the second connection itself failing to open -
-            # imaplib.IMAP4_SSL(host) raises a raw OSError (socket.gaierror
-            # on a DNS blip, ssl.SSLError on a dropped VPN both being
-            # subclasses of it), minutes after the first connection and
-            # right after the printer has already accepted the job. Report
-            # exactly what happened rather than let it escape as a
-            # traceback that leaves the user unsure whether their mail was
-            # touched.
             runlog.record({"outcome": "retire-failed", "error": str(error)})
             raise click.ClickException(
                 f"Printed, but could not retire: {error}\n"
                 f"Mail may be partly modified; check {trash} by hand."
             ) from error
-        # folder and retired_ids are what --unretire reads: the uids below
-        # name nothing once a message has moved, but a Message-ID is the
-        # same wherever the message goes.
-        retired_uids = set(retirement.retired)
+
+        # One entry for the whole run, whatever it spanned: --unretire
+        # undoes a run rather than a folder. `folders` says which
+        # messages came from where, and the flat `retired_ids` stays
+        # beside it because every entry written before today has that and
+        # nothing else - including the ones in the user's own log.
+        by_folder_ids: dict[str, list[str]] = {}
+        retired_total: list[int] = []
+        failed_total: list[int] = []
+        unrecoverable_total: list[int] = []
+        for folder, retirement in by_folder.items():
+            done = set(retirement.retired)
+            by_folder_ids[folder] = [
+                item.document.origin.identifier
+                for item in built
+                if item.document.origin.uid in done
+                and (item.document.origin.folder or config.mail.folder) == folder
+            ]
+            retired_total += retirement.retired
+            failed_total += retirement.failed
+            unrecoverable_total += retirement.unrecoverable
+
         runlog.record(
             {
                 "outcome": "retired",
-                "folder": config.mail.folder,
+                "folder": next(iter(by_folder_ids), config.mail.folder),
+                "folders": by_folder_ids,
                 "trash": trash,
                 "retired_ids": [
-                    item.document.origin.identifier
-                    for item in built
-                    if item.document.origin.uid in retired_uids
+                    identifier
+                    for identifiers in by_folder_ids.values()
+                    for identifier in identifiers
                 ],
-                "retired": list(retirement.retired),
-                "failed": list(retirement.failed),
-                "unrecoverable": list(retirement.unrecoverable),
+                "retired": retired_total,
+                "failed": failed_total,
+                "unrecoverable": unrecoverable_total,
             }
+        )
+        retirement = RetireResult(
+            retired=tuple(retired_total),
+            failed=tuple(failed_total),
+            unrecoverable=tuple(unrecoverable_total),
         )
         click.echo(f"Retired {len(retirement.retired)} message(s) to {trash}.")
