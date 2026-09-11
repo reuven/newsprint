@@ -347,14 +347,21 @@ def test_a_cells_per_side_override_beats_the_file(tmp_path: Path) -> None:
     assert load_config(path, cells_override=4).printing.paper.cells_per_side == 4
 
 
-def test_a_single_folder_is_still_spelled_folder(tmp_path: Path) -> None:
-    """Every config that exists says `folder = "..."`, including the one
-    the setup wizard writes. That spelling keeps working and means a list
-    of one."""
+def test_one_folder_can_be_named_without_a_list(tmp_path: Path) -> None:
+    """Most people read from one folder, and making them wrap it in
+    brackets to say so is a tax on the common case."""
+    path = tmp_path / "config.toml"
+    path.write_text('[mail]\nfolders = "INBOX/reading"\n')
+    assert load_config(path).mail.folders == ["INBOX/reading"]
+
+
+def test_the_older_singular_spelling_still_works(tmp_path: Path) -> None:
+    """`folder` is what every config written before this says, including
+    the one --setup used to write. It means the same thing and is not
+    going anywhere."""
     path = tmp_path / "config.toml"
     path.write_text('[mail]\nfolder = "INBOX/reading"\n')
-    config = load_config(path)
-    assert config.mail.folders == ["INBOX/reading"]
+    assert load_config(path).mail.folders == ["INBOX/reading"]
 
 
 def test_several_folders_can_be_named(tmp_path: Path) -> None:
@@ -382,13 +389,124 @@ def test_an_empty_folders_list_is_refused(tmp_path: Path) -> None:
         load_config(path)
 
 
-def test_a_folders_value_that_is_not_a_list_of_names_is_refused(
+def test_a_folders_value_that_is_neither_a_name_nor_a_list_is_refused(
     tmp_path: Path,
 ) -> None:
-    """A bare string is the mistake someone makes reaching for the plural
-    while typing the singular, and it would otherwise be read one letter
-    at a time as a list of folders named I, N, B, O, X."""
+    """A string and a list of strings are the two shapes this takes.
+    Anything else is a mistake worth naming, not something to coerce."""
+    path = tmp_path / "config.toml"
+    path.write_text("[mail]\nfolders = 7\n")
+    with pytest.raises(ConfigError, match="a folder name or a list"):
+        load_config(path)
+
+    path.write_text("[mail]\nfolders = [1, 2]\n")
+    with pytest.raises(ConfigError, match="a folder name or a list"):
+        load_config(path)
+
+
+def test_naming_both_folder_and_folders_says_which_one_won(
+    tmp_path: Path, capsys
+) -> None:
+    """Adding `folders` to a config that already has `folder`, meaning
+    "also read this one", silently drops the folder the tool has been
+    reading all along - and a packet that arrives without it looks like a
+    broken run rather than a half-edited config. Say so."""
+    path = tmp_path / "config.toml"
+    path.write_text('[mail]\nfolder = "INBOX/toprint"\nfolders = ["INBOX/work"]\n')
+
+    config = load_config(path)
+
+    assert config.mail.folders == ["INBOX/work"]
+    warning = capsys.readouterr().err
+    assert "INBOX/toprint" in warning
+    assert "folders" in warning
+
+
+def test_folders_alone_says_nothing(tmp_path: Path, capsys) -> None:
+    """The warning is for a config that contradicts itself, not for one
+    that simply uses the plural."""
+    path = tmp_path / "config.toml"
+    path.write_text('[mail]\nfolders = ["INBOX/work"]\n')
+    load_config(path)
+    assert capsys.readouterr().err == ""
+
+
+def test_the_singular_folder_says_it_is_deprecated(tmp_path: Path, capsys) -> None:
+    """Grandfathered, not endorsed. A config that says `folder` keeps
+    working for as long as it takes its owner to get round to changing
+    it, and says so once a run so that getting round to it happens."""
+    path = tmp_path / "config.toml"
+    path.write_text('[mail]\nfolder = "INBOX/reading"\n')
+
+    assert load_config(path).mail.folders == ["INBOX/reading"]
+    warning = capsys.readouterr().err
+    assert "folder" in warning and "folders" in warning
+    assert "deprecated" in warning.lower()
+
+
+def test_a_config_that_sets_neither_says_nothing(tmp_path: Path, capsys) -> None:
+    """The default is the singular's value, but nobody wrote it down, so
+    there is nothing to warn them about."""
+    load_config(tmp_path / "absent.toml")
+    assert capsys.readouterr().err == ""
+
+
+def test_renaming_the_key_leaves_everything_else_exactly_as_it_was(
+    tmp_path: Path,
+) -> None:
+    """A config is hand-written and full of comments. Rewriting it by
+    parsing and re-serializing would throw those away, so the rename is a
+    line edit: the key changes and nothing else does - not the value, not
+    the trailing comment, not a single other line. The `=` on that one
+    line ends up a character to the right, which is the whole cost."""
+    from newsprint.config import rename_folder_key
+
+    path = tmp_path / "config.toml"
+    original = (
+        "# my notes\n"
+        "[mail]\n"
+        'host   = "imap.example.com"\n'
+        'folder = "INBOX/toprint"         # the one I star into\n'
+        'trash  = "auto"\n'
+        "\n"
+        "[print]\n"
+        '# folder = "not this one, it is a comment"\n'
+        'paper = "A4"\n'
+    )
+    path.write_text(original)
+
+    assert rename_folder_key(path) is True
+    assert path.read_text() == original.replace(
+        'folder = "INBOX/toprint"', 'folders = "INBOX/toprint"'
+    )
+
+
+def test_renaming_reports_when_there_is_nothing_to_rename(tmp_path: Path) -> None:
+    """Already renamed, or never named at all - either way the file is
+    left alone and the caller is told so rather than shown a success it
+    did not earn."""
+    from newsprint.config import rename_folder_key
+
     path = tmp_path / "config.toml"
     path.write_text('[mail]\nfolders = "INBOX/toprint"\n')
-    with pytest.raises(ConfigError, match="list of folder names"):
-        load_config(path)
+    assert rename_folder_key(path) is False
+    assert path.read_text() == '[mail]\nfolders = "INBOX/toprint"\n'
+
+
+def test_an_indented_key_is_renamed_and_stays_indented(tmp_path: Path) -> None:
+    """TOML allows leading whitespace on a key, and some people indent
+    the body of a table. The indent is theirs and survives."""
+    from newsprint.config import rename_folder_key
+
+    path = tmp_path / "config.toml"
+    path.write_text('[mail]\n    folder = "INBOX/toprint"\n')
+    assert rename_folder_key(path) is True
+    assert path.read_text() == '[mail]\n    folders = "INBOX/toprint"\n'
+
+
+def test_a_config_that_cannot_be_read_is_left_to_the_loader(tmp_path: Path) -> None:
+    """Reporting an unreadable config properly is load_config's job, a
+    moment later. A rename that cannot read it just declines to act."""
+    from newsprint.config import rename_folder_key
+
+    assert rename_folder_key(tmp_path / "not-here.toml") is False

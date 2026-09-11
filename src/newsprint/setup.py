@@ -30,10 +30,10 @@ _TEMPLATE = """\
 # for every option and what it does.
 
 [mail]
-host   = "{host}"
-user   = "{user}"
-folder = "{folder}"
-trash  = "auto"
+host    = "{host}"
+user    = "{user}"
+folders = "{folder}"
+trash   = "auto"
 
 [print]
 printer = "{printer}"

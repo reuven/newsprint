@@ -61,8 +61,11 @@ def test_setup_writes_a_config_and_stores_the_password(tmp_path: Path) -> None:
     )
 
     written = path.read_text()
-    assert 'host   = "imap.example.com"' in written
-    assert 'folder = "INBOX.toprint"' in written
+    assert 'host    = "imap.example.com"' in written
+    # The plural, which is the setting - it takes one name as readily as
+    # a list, and a config written today should use the name that is
+    # documented rather than the one kept working for older ones.
+    assert 'folders = "INBOX.toprint"' in written
     assert 'paper   = "A4"' in written
     assert stored == [("imap.example.com", "someone@example.com", "hunter2")]
     assert "hunter2" not in written, "the password never goes in the config file"
