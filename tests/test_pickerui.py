@@ -478,3 +478,50 @@ def test_a_layout_with_no_choice_list_is_left_alone() -> None:
     question = _FakeQuestionWithLayout(Window())
     _configure_prompt(question)
     assert question.application.key_bindings.bindings == []
+
+
+def test_clearing_the_filter_leaves_the_cursor_on_a_real_row() -> None:
+    """pointed_at indexes the *filtered* list, so a cursor deep in a short
+    filtered view points at nothing sensible once the whole list is back.
+    It goes to the top - and the top line is a separator, never
+    selectable, so it has to step past it or the first space press does
+    nothing."""
+    from newsprint.pickerui import _choices, _configure_prompt
+
+    control = InquirerControl(_choices(_axios_picklist(), width=100))
+    control.search_filter = "money"
+    control.pointed_at = 7
+    question = _FakeQuestionWithLayout(Window(content=control))
+
+    _configure_prompt(question)
+    _press_escape(question)
+
+    assert control.search_filter is None
+    assert control.is_selection_valid(), "the cursor is on a selectable row"
+    pointed = list(control.choices)[control.pointed_at]
+    assert not isinstance(pointed, questionary.Separator)
+    assert control.pointed_at == 2, "the first row, under its blank and heading"
+
+
+def test_a_question_with_no_key_bindings_is_left_alone() -> None:
+    """Both halves of the guard matter: a stand-in with a layout but no
+    bindings must be as harmless as one with neither."""
+    from newsprint.pickerui import _bind_escape_to_clear_the_filter
+
+    class _NoBindings:
+        key_bindings = None
+        layout = _FakeQuestionWithLayout(Window()).application.layout
+
+    _bind_escape_to_clear_the_filter(_NoBindings())  # must not raise
+
+
+def test_a_question_with_no_layout_is_left_alone() -> None:
+    """And the mirror case."""
+    from newsprint.pickerui import _bind_escape_to_clear_the_filter
+
+    class _NoLayout:
+        key_bindings = KeyBindings()
+        layout = None
+
+    _bind_escape_to_clear_the_filter(_NoLayout())
+    assert _NoLayout.key_bindings.bindings == []

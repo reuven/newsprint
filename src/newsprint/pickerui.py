@@ -172,11 +172,18 @@ def _clear_the_filter(control: InquirerControl) -> None:
     pointed_at is an index into the *filtered* list, so a cursor deep in
     a short filtered view would land somewhere arbitrary once the whole
     list came back. Sending it to the top is the only answer that is
-    right regardless of what was filtered.
+    right regardless of what was filtered - and the top of the list is a
+    blank separator, so it has to walk on to the first real row.
     """
     control.search_filter = None
     control.pointed_at = 0
-    if not control.is_selection_valid():
+    # Each group opens with two separators, a blank and a ruled heading,
+    # and neither is selectable - so this steps until it lands on a row
+    # rather than once. Bounded by the choice count, because a list that
+    # is all separators has nothing to land on and must still terminate.
+    for _ in range(control.choice_count):
+        if control.is_selection_valid():
+            return
         control.select_next()
 
 
