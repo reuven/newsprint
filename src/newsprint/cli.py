@@ -537,6 +537,18 @@ def about() -> str:
     help="Paper size. Defaults to A4; use letter when printing in the US.",
 )
 @click.option(
+    "--cells-per-side",
+    type=click.Choice(["2", "4"]),
+    default=None,
+    help=(
+        "How many newsletters go on each side of a sheet. Four is the "
+        "default. Two gives each one a cell twice the size, on the same "
+        "paper and with the same fold - raise [layout] font_size_pt to "
+        "around 18 to spend that on larger type, or the lines come out "
+        "too long to read comfortably. Overrides [print] cells_per_side."
+    ),
+)
+@click.option(
     "--config",
     "config_path",
     type=click.Path(path_type=Path),
@@ -616,6 +628,7 @@ def about() -> str:
 )
 def main(
     paper: str | None,
+    cells_per_side: str | None,
     config_path: Path,
     dry_run: bool,
     no_retire: bool,
@@ -634,13 +647,21 @@ def main(
     click.echo(f"Reading config: {config_path}")
     if unretire:
         try:
-            config = load_config(config_path, paper_override=paper)
+            config = load_config(
+                config_path,
+                paper_override=paper,
+                cells_override=int(cells_per_side) if cells_per_side else None,
+            )
             unretire_last(config)
         except (MailError, ConfigError) as error:
             raise click.ClickException(str(error)) from error
         return
     try:
-        config = load_config(config_path, paper_override=paper)
+        config = load_config(
+            config_path,
+            paper_override=paper,
+            cells_override=int(cells_per_side) if cells_per_side else None,
+        )
         documents, trash = fetch_queue(config, no_pick)
     except (MailError, ConfigError) as error:
         raise click.ClickException(str(error)) from error

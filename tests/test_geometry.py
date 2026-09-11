@@ -41,3 +41,36 @@ def test_paper_by_name_is_forgiving(name: str) -> None:
 def test_paper_by_name_rejects_unknown() -> None:
     with pytest.raises(ValueError, match="unknown paper"):
         paper_by_name("foolscap")
+
+
+def test_four_cells_a_side_quarters_the_sheet() -> None:
+    """The default: two across and two down, so each cell is half the
+    sheet each way."""
+    assert A4.cell.width_mm == pytest.approx(105.0)
+    assert A4.cell.height_mm == pytest.approx(148.5)
+
+
+def test_two_cells_a_side_halves_it_the_long_way() -> None:
+    """Two a side is one across and two down - full width, half height -
+    so the fold that separates them is the same horizontal fold, and the
+    cell is A5 for an A4 sheet rather than a tall half-column.
+
+    This is what doubles the type: the cell is twice the area, and the
+    font size in the config is unchanged.
+    """
+    from dataclasses import replace
+
+    two_up = replace(A4, cells_per_side=2)
+    assert two_up.cell.width_mm == pytest.approx(210.0)
+    assert two_up.cell.height_mm == pytest.approx(148.5)
+    assert two_up.sheet == A4.sheet, "the paper is the same paper"
+
+
+def test_a_cell_count_the_imposition_cannot_lay_out_is_refused() -> None:
+    """Only 2 and 4 are offered. One is "do not impose at all", and eight
+    puts the text below anything a person would read on paper."""
+    from dataclasses import replace
+
+    for count in (1, 3, 8):
+        with pytest.raises(ValueError, match="cells per side"):
+            _ = replace(A4, cells_per_side=count).cell

@@ -211,10 +211,63 @@ Preview for a look, and asks before printing. Useful flags:
 - `--no-preview` — skip opening the PDF in Preview.
 - `--paper a4` / `--paper letter` — override the configured paper size for
   one run.
+- `--cells-per-side 2` / `--cells-per-side 4` — override how many
+  newsletters go on each side of a sheet. See [Bigger
+  type](#bigger-type).
 - `--config PATH` — use a config file other than the default.
 
 Run `newsprint --help` for the full list, and `newsprint --version` for the
 release, project page and author.
+
+### Bigger type
+
+Four newsletters a side is the default: each gets a quarter of the sheet,
+A6 on A4 paper. Two a side gives each one half the sheet instead — A5,
+twice the area, folded the same way.
+
+That is *room* for larger type rather than larger type by itself. A wider
+cell at the same font size just makes the lines longer, and past about 75
+characters a line they get hard to follow. Measured on a real packet:
+
+| layout | `font_size_pt` | characters per line |
+|---|---|---|
+| four a side | 9 (default) | 55 |
+| two a side | 9 | 116 — too long |
+| two a side | 16 | 68 |
+| two a side | 18 | 61 |
+
+So the pair that actually buys you larger type is:
+
+```toml
+[print]
+cells_per_side = 2
+
+[layout]
+font_size_pt = 18
+```
+
+Half as many newsletters to a side means twice as many sheets for the same
+reading, which is the trade.
+
+## Where packets go
+
+With no `--output`, a finished packet is written to `[output] directory`
+— `~/.local/state/newsprint/packets` by default — rather than to a temp
+directory the system later deletes. That matters because a print run
+retires the mail as soon as CUPS accepts the job, which is not the same as
+paper having come out right: if it jams, the packet is still there to
+print again.
+
+Each run then removes packets in that directory older than `[output]
+keep_days`, 30 by default. Set it to `0` to keep them all. The sweep only
+ever touches PDFs directly in that directory, and never touches a
+directory you named yourself with `--output`.
+
+```toml
+[output]
+directory = "~/.local/state/newsprint/packets"
+keep_days = 30
+```
 
 ## Summary pages (optional)
 

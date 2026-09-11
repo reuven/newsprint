@@ -5,7 +5,7 @@ time, so it never appears in a config file or in the repository.
 """
 
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +18,12 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "newsprint" / "config.toml"
 # means "whatever CUPS treats as the default destination".
 DEFAULTS: dict[str, dict[str, Any]] = {
     "mail": {"host": "", "user": "", "folder": "INBOX/toprint", "trash": "auto"},
-    "print": {"printer": "", "paper": "A4", "duplex": "two-sided-long-edge"},
+    "print": {
+        "printer": "",
+        "paper": "A4",
+        "duplex": "two-sided-long-edge",
+        "cells_per_side": 4,
+    },
     "layout": {"margin_mm": 9.0, "font_size_pt": 9.0, "line_height": 1.35},
     "window": {"fallback_days": 7},
     # title empty: the contents page renders nothing above "CONTENTS ·"
@@ -64,7 +69,7 @@ class ConfigError(Exception):
 # different directions; this is the one behavior applied everywhere.
 _SECTION_KEYS: dict[str, frozenset[str]] = {
     "mail": frozenset({"host", "user", "folder", "trash"}),
-    "print": frozenset({"printer", "paper", "duplex"}),
+    "print": frozenset({"printer", "paper", "duplex", "cells_per_side"}),
     "layout": frozenset({"margin_mm", "font_size_pt", "line_height"}),
     "window": frozenset({"fallback_days"}),
     "packet": frozenset({"title", "min_words"}),
@@ -253,7 +258,9 @@ def _merged(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def load_config(
-    path: Path = DEFAULT_CONFIG_PATH, paper_override: str | None = None
+    path: Path = DEFAULT_CONFIG_PATH,
+    paper_override: str | None = None,
+    cells_override: int | None = None,
 ) -> Config:
     """Load and validate config.toml, raising only ConfigError.
 
@@ -276,7 +283,14 @@ def load_config(
             mail=MailConfig(**data["mail"]),
             printing=PrintConfig(
                 printer=data["print"]["printer"],
-                paper=paper_by_name(paper_name),
+                paper=replace(
+                    paper_by_name(paper_name),
+                    cells_per_side=(
+                        cells_override
+                        if cells_override is not None
+                        else data["print"]["cells_per_side"]
+                    ),
+                ),
                 duplex=data["print"]["duplex"],
             ),
             layout=LayoutConfig(**data["layout"]),

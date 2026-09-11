@@ -27,7 +27,7 @@ def test_missing_file_yields_structural_defaults(tmp_path: Path) -> None:
     assert config.mail.user == ""
     assert config.printing.printer == ""
     assert config.mail.folder == "INBOX/toprint"
-    assert config.printing.paper is A4
+    assert config.printing.paper == A4
     assert config.layout.margin_mm == pytest.approx(9.0)
     assert config.fallback_days == 7
     assert config.packet.title == ""
@@ -72,7 +72,7 @@ def test_file_values_override_defaults(tmp_path: Path) -> None:
     assert config.mail.host == "imap.example.com"
     assert config.mail.folder == "INBOX/queue"
     assert config.printing.printer == "Test_Printer"
-    assert config.printing.paper is LETTER
+    assert config.printing.paper == LETTER
     assert config.layout.font_size_pt == pytest.approx(10.0)
 
 
@@ -89,7 +89,7 @@ def test_paper_override_beats_the_file(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(SAMPLE)
     config = load_config(path, paper_override="a4")
-    assert config.printing.paper is A4
+    assert config.printing.paper == A4
 
 
 def test_unknown_paper_is_rejected(tmp_path: Path) -> None:
@@ -326,3 +326,22 @@ def test_an_unknown_key_in_the_personal_section_is_an_error(tmp_path: Path) -> N
                 '[summary.personal]\nlooking_for = "x"\ninterest_title = "old name"\n',
             )
         )
+
+
+def test_cells_per_side_comes_from_the_file(tmp_path: Path) -> None:
+    """Two a side is a standing preference for most people who want it -
+    it is about how well they can read, not about one particular
+    packet - so it belongs in the file rather than in a flag typed every
+    week."""
+    path = tmp_path / "config.toml"
+    path.write_text("[print]\ncells_per_side = 2\n")
+    config = load_config(path)
+    assert config.printing.paper.cells_per_side == 2
+    assert config.printing.paper.cell.width_mm == pytest.approx(210.0)
+
+
+def test_a_cells_per_side_override_beats_the_file(tmp_path: Path) -> None:
+    """And the flag still wins for one run, the way --paper does."""
+    path = tmp_path / "config.toml"
+    path.write_text("[print]\ncells_per_side = 2\n")
+    assert load_config(path, cells_override=4).printing.paper.cells_per_side == 4
