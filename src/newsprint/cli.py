@@ -650,9 +650,9 @@ def about() -> str:
         "How many newsletters go on each side of a sheet. Four is the "
         "default, printed portrait. Two turns the sheet landscape and "
         "puts them side by side, each a cell twice the size on the same "
-        "paper - raise [layout] font_size_pt to around 14 to spend that "
-        "on larger type, or the lines come out no longer, just fewer. "
-        "Overrides [print] cells_per_side."
+        "paper, and sets the type at 12pt rather than 9pt to spend that "
+        "on larger type instead of longer lines. Overrides [print] "
+        "cells_per_side."
     ),
 )
 @click.option(

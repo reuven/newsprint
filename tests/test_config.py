@@ -514,12 +514,13 @@ def test_a_config_that_cannot_be_read_is_left_to_the_loader(tmp_path: Path) -> N
 
 def test_two_a_side_reads_at_a_larger_default_size(tmp_path: Path) -> None:
     """A cell twice the size at the same type size does not give larger
-    type, it gives longer lines - 88 characters, where 55 is comfortable.
-    Measured on a real packet, 14pt puts the landscape cell back at the
-    same 55 characters the four-up default gets."""
+    type, it gives longer lines - 88 characters, where 45-75 is
+    comfortable. Measured on a real packet, 12pt puts the landscape cell
+    at 66 characters, inside the band and visibly larger than four a
+    side."""
     path = tmp_path / "config.toml"
     path.write_text("[print]\ncells_per_side = 2\n")
-    assert load_config(path).layout.font_size_pt == pytest.approx(14.0)
+    assert load_config(path).layout.font_size_pt == pytest.approx(12.0)
 
 
 def test_the_flag_gets_the_larger_default_too(tmp_path: Path) -> None:
@@ -530,7 +531,7 @@ def test_the_flag_gets_the_larger_default_too(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     path.write_text("[print]\ncells_per_side = 4\n")
     config = load_config(path, cells_override=2)
-    assert config.layout.font_size_pt == pytest.approx(14.0)
+    assert config.layout.font_size_pt == pytest.approx(12.0)
 
 
 def test_a_font_size_written_down_is_never_overridden(tmp_path: Path) -> None:

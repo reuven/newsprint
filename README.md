@@ -241,14 +241,14 @@ packet:
 
 | layout | `font_size_pt` | characters per line |
 |---|---|---|
-| four a side | 9 (default) | 55 |
+| four a side | 9 (default four a side) | 55 |
 | two a side | 9 | 88 — too long |
-| two a side | 12 | 66 |
+| two a side | 12 (default two a side) | 66 |
 | two a side | 14 | 55 |
 | two a side | 18 | 44 — getting choppy |
 
-So the type size follows the layout by itself — 9pt four a side, 14pt two
-a side, both about 55 characters to the line. All you set is the layout:
+So the type size follows the layout by itself — 9pt four a side, 12pt two
+a side, both well inside the comfortable band. All you set is the layout:
 
 ```toml
 [print]

@@ -340,10 +340,11 @@ def rename_folder_key(path: Path) -> bool:
 
 # Two a side gets a larger default, because the point of the layout is to
 # be easier to read and the cell alone does not do that. A landscape A5
-# cell at the four-up default runs to 88 characters a line; at 14pt it
-# runs to 55, the same measure the four-up cell gets. Measured on a real
-# packet - see the README's table.
-_TWO_UP_FONT_SIZE_PT = 14.0
+# cell at the four-up default runs to 88 characters a line, past the
+# 45-75 that reads comfortably; at 12pt it runs to 66, comfortably
+# inside it and noticeably larger type than four a side. Measured on a
+# real packet - see the README's table.
+_TWO_UP_FONT_SIZE_PT = 12.0
 
 
 def _font_size_pt(

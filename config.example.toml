@@ -38,8 +38,9 @@ margin_mm   = 9.0
 line_height = 1.35
 # font_size_pt = 9.0             # left unset on purpose: the default
                                   # follows the layout, 9pt four a side
-                                  # and 14pt two a side, both of which
-                                  # give about 55 characters to the line.
+                                  # and 12pt two a side, both of which
+                                  # keep the line inside the 45-75
+                                  # characters that read comfortably.
                                   # Set it here to override both.
 
 [window]

@@ -76,8 +76,8 @@ class Paper:
         characters to the line, past the 45-75 that reads comfortably,
         where an A6 cell at the same size gives 55. Two a side is the
         *room* for larger type; layout.font_size_pt is what spends it,
-        and 14pt brings the measure back to 55 - which is why config.py
-        defaults this layout to 14pt rather than 9pt.
+        and 12pt brings the measure back to 66 - which is why config.py
+        defaults this layout to 12pt rather than 9pt.
         """
         if self.cells_per_side in (2, 4):
             sheet = self.sheet
