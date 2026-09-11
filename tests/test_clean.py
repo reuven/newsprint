@@ -3121,3 +3121,96 @@ def test_a_labelled_banner_between_two_paragraphs_is_not_kept() -> None:
     )
     cleaned = clean_document(document(html))
     assert cleaned.images_kept == 0
+
+
+def test_an_image_with_nothing_before_it_is_not_a_figure() -> None:
+    """A masthead opens the newsletter: prose after it, nothing before.
+
+    The backward walk has to skip the image's own ancestors. A containing
+    <div> starts before the image but does not end before it, so its text
+    is the image's whole surroundings - letting the prose *after* the
+    image answer the question "is there prose before it?" and waving
+    every masthead through.
+    """
+    html = (
+        "<html><body><div>"
+        '<img src="https://example.com/masthead.png" alt="" '
+        'width="550" height="351.3">'
+        "<p>The return of sustained load growth after more than a decade "
+        "and a half of stagnation is the first fundamental change.</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 0
+
+
+def test_an_image_with_nothing_after_it_is_not_a_figure() -> None:
+    """The mirror case: a sign-off logo, with the article above it and
+    nothing below."""
+    html = (
+        "<html><body><div>"
+        "<p>The return of sustained load growth after more than a decade "
+        "and a half of stagnation is the first fundamental change.</p>"
+        '<img src="https://example.com/logo.png" alt="" '
+        'width="550" height="351.3">'
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 0
+
+
+def _figure_between(before: str, after: str, **attrs: str) -> str:
+    """A wide, unlabelled image with `before` above it and `after` below."""
+    extra = "".join(f' {name}="{value}"' for name, value in attrs.items())
+    return (
+        f"<html><body><div><p>{before}</p>"
+        f'<img src="https://example.com/chart.png" alt="" '
+        f'width="550" height="351.3"{extra}>'
+        f"<p>{after}</p></div></body></html>"
+    )
+
+
+_PROSE = (
+    "The return of sustained load growth after more than a decade and a "
+    "half of stagnation is the first fundamental change."
+)
+
+
+def test_a_title_alone_is_enough_to_name_an_image() -> None:
+    """Puck's section headers carry both alt and title; some senders set
+    only one. Either one is the sender naming the image, which is what
+    disqualifies it."""
+    html = _figure_between(_PROSE, _PROSE, title="The Daily Courant")
+    assert clean_document(document(html)).images_kept == 0
+
+
+def test_a_caption_length_line_on_one_side_is_not_prose() -> None:
+    """A chart stacked directly on another chart has only its own caption
+    between them. That is not the argument resuming, so neither image is
+    an unintroduced figure - both want a real paragraph on each side."""
+    html = _figure_between("Change in electricity sales", _PROSE)
+    assert clean_document(document(html)).images_kept == 0
+
+
+def test_exactly_the_minimum_context_on_both_sides_is_enough() -> None:
+    """80 characters is the shortest paragraph that counts, not the
+    longest that does not."""
+    exactly_80 = "x" * 80
+    assert len(exactly_80) == 80
+    html = _figure_between(exactly_80, exactly_80)
+    assert clean_document(document(html)).images_kept == 1
+
+
+def test_a_height_with_two_decimal_points_is_not_a_number() -> None:
+    """Only one decimal point is forgiven, because a height is written
+    "351.3" and nothing else about an image is written "1.2.3". A second
+    point means the attribute is not a measurement, and an image whose
+    dimensions cannot be read is not one we claim to recognize."""
+    html = (
+        "<html><body><div>"
+        f"<p>{_PROSE}</p>"
+        '<img src="https://example.com/chart.png" alt="" '
+        'width="550" height="1.2.3">'
+        f"<p>{_PROSE}</p></div></body></html>"
+    )
+    assert clean_document(document(html)).images_kept == 0

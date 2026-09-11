@@ -315,8 +315,14 @@ def _nearest_block_text(image: Tag, *, forward: bool = True) -> str | None:
     _is_unintroduced_figure asks in both directions.
     """
     walk = image.find_all_next if forward else image.find_all_previous
+    ancestors = frozenset(id(node) for node in image.parents)
     for node in walk():
-        if node.name in _CAPTION_BLOCK_TAGS:
+        # An ancestor starts before the image but does not end before it,
+        # so backwards it would answer with the image's whole
+        # surroundings - letting the prose after an opening masthead
+        # answer "is there prose before it?". Forwards the question does
+        # not arise: an ancestor is never after its own child.
+        if node.name in _CAPTION_BLOCK_TAGS and id(node) not in ancestors:
             text = node.get_text(" ", strip=True)
             if text:
                 return text

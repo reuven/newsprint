@@ -418,11 +418,11 @@ In practice that is rare — most newsletter images ship with `alt=""`.
 If an image cannot be fetched — a dead URL, a login wall, a timeout — the
 run says so and prints the packet without it.
 
-Measured across a 268-newsletter archive: **1.57 images kept per
+Measured across a 268-newsletter archive: **1.51 images kept per
 newsletter**, and one text placeholder in the entire corpus. The
 introduced-figure rule alone accounts for 0.97 of that; the uncaptioned
 rule adds the rest, and it is what the chart-heavy publications live on —
-Apricitas Economics goes from none of its charts to fourteen, and Prof G
+Apricitas Economics goes from none of its charts to thirteen, and Prof G
 Markets, Derek Thompson and David Skilling appear for the first time.
 
 Charts cost paper. A packet that was seven sheet sides can be ten once the
