@@ -592,9 +592,16 @@ def test_a_cursor_past_the_end_of_a_filtered_list_is_not_valid() -> None:
     for character in "axios":
         control.add_search_character(character)
 
-    control.pointed_at = len(list(control.filtered_choices)) + 5
-    assert control.is_selection_valid() is False
-    assert control.is_selection_disabled() is None
+    # Exactly one past the last index, which is the boundary an
+    # off-by-one would step onto, and then well past it.
+    for beyond in (
+        len(list(control.filtered_choices)),
+        len(list(control.filtered_choices)) + 5,
+    ):
+        control.pointed_at = beyond
+        assert control.is_selection_valid() is False
+        assert control.is_selection_disabled() is None
+        assert control.is_selection_a_separator() is False
 
 
 def test_the_two_halves_of_validity_also_read_the_filtered_list() -> None:
@@ -619,6 +626,11 @@ def test_the_two_halves_of_validity_also_read_the_filtered_list() -> None:
 
     control.pointed_at = separator
     assert control.is_selection_a_separator() is True
+    # A Separator carries questionary's own disabled marker, so this is
+    # the case that shows the method is reading the line at all rather
+    # than answering None whatever the cursor is on.
+    assert control.is_selection_disabled()
+
     control.pointed_at = row
     assert control.is_selection_a_separator() is False
     assert control.is_selection_disabled() is None
