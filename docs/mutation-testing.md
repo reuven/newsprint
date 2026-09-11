@@ -153,6 +153,11 @@ the reason rather than re-derive it.
 - **`cast(...)`** - `typing.cast` does nothing at runtime, so every
   mutation of its first argument survives by construction. All eight of
   `_rendered_lines`' survivors are this.
+- **`is_layout_table`'s `recursive=False`** - bs4 tests the flag for
+  truthiness, so `recursive=None` makes the same call. Note that the two
+  sibling mutants here, which drop the `["td", "th"]` name filter, are
+  *not* equivalent: lxml leaves stray markup inside a `<tr>` as a direct
+  child of the row, so the filter is load-bearing and has a test.
 - **`_is_unintroduced_figure`'s missing-height default** - the default
   only has to be something that is not a number, and every string mutmut
   substitutes for `""` is also not a number. `"".replace(".", "", 1)` and

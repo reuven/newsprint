@@ -3334,3 +3334,98 @@ def test_unwrapping_an_outer_layout_table_spares_a_real_one_inside_it() -> None:
     assert len(soup.find_all("table")) == 1
     assert len(soup.find_all("tr")) == 2, "the inner table keeps both rows"
     assert "Nvidia" in soup.get_text() and "Intel" in soup.get_text()
+
+
+def test_a_header_row_of_th_cells_is_real_columns() -> None:
+    """A data table names its columns with <th>, and that header row is
+    often the clearest evidence it has columns at all. Counting only <td>
+    would read the header as empty and unwrap the table under it."""
+    from newsprint.clean import is_layout_table
+
+    assert not is_layout_table(
+        _table(
+            "<table>"
+            "<tr><th>Ticker</th><th>Change on the day</th></tr>"
+            "<tr><td>Nvidia</td><td>up four percent</td></tr>"
+            "</table>"
+        )
+    )
+
+
+def test_a_gutter_cell_of_only_whitespace_carries_nothing() -> None:
+    """Email templates indent their markup, so a spacer cell is rarely
+    empty - it holds a newline and a run of spaces. Counting that as
+    content makes every padded layout table look two-column and leaves
+    the article unbreakable inside it."""
+    from newsprint.clean import is_layout_table
+
+    assert is_layout_table(
+        _table(
+            "<table><tr>\n"
+            "    <td>\n      \n    </td>\n"
+            "    <td><p>The turbulent AI era is here.</p></td>\n"
+            "</tr></table>"
+        )
+    )
+
+
+def test_own_rows_are_rows_and_only_this_tables_rows() -> None:
+    """Two claims in one, because the helper makes two: what comes back
+    is <tr> elements, and they belong to this table rather than to one
+    nested inside it."""
+    from newsprint.clean import _own_rows
+
+    outer = _table(
+        "<table>"
+        "<tr><td><table><tr><td>inner</td></tr></table></td></tr>"
+        "<tr><td>outer second row</td></tr>"
+        "</table>"
+    )
+    rows = _own_rows(outer)
+    assert [row.name for row in rows] == ["tr", "tr"]
+    assert "inner" not in rows[1].get_text()
+    assert _own_rows(outer.find("table")) == [outer.find("table").find("tr")]
+
+
+def test_rows_are_found_through_an_explicit_tbody() -> None:
+    """Mail templates write <tbody> out by hand. Looking only at a row's
+    immediate parent would find tbody rather than the table, decide the
+    table has no rows of its own, and unwrap every table in the document
+    including the ones with real columns."""
+    from newsprint.clean import _own_rows, is_layout_table
+
+    table = _table(
+        "<table><tbody>"
+        "<tr><td>Nvidia</td><td>up four percent on the day</td></tr>"
+        "</tbody></table>"
+    )
+    assert len(_own_rows(table)) == 1
+    assert not is_layout_table(table)
+
+
+def test_a_table_that_is_only_a_header_row_still_has_columns() -> None:
+    """The chrome passes can strip a table's body and leave its header
+    standing. Two <th> cells are still two columns, and unwrapping them
+    would run the column names together into one line."""
+    from newsprint.clean import is_layout_table
+
+    assert not is_layout_table(
+        _table("<table><tr><th>Ticker</th><th>Change on the day</th></tr></table>")
+    )
+
+
+def test_only_cells_count_as_cells() -> None:
+    """lxml leaves stray markup inside a <tr> exactly where it found it,
+    as a direct child of the row beside the real cells. Counting every
+    child would read one padded cell plus a stray <span> as two columns,
+    and leave the article unbreakable in the wrapper it came in."""
+    from newsprint.clean import is_layout_table
+
+    assert is_layout_table(
+        _table(
+            "<table><tr>"
+            "<span>stray markup the template left behind</span>"
+            "<td><p>The turbulent AI era is here.</p></td>"
+            "</tr></table>"
+        )
+    )
