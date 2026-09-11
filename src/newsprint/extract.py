@@ -181,6 +181,7 @@ def extract(
     raw: bytes,
     uid: int | None = None,
     names: PublicationNames | None = None,
+    folder: str | None = None,
 ) -> Document:
     message = email.message_from_bytes(raw)
     display, raw_address = email.utils.parseaddr(_header(message, "From"))
@@ -191,6 +192,7 @@ def extract(
             kind="email",
             identifier=_header(message, "Message-ID", default=address),
             uid=uid,
+            folder=folder,
         ),
         publication=_publication(message, address, display, names or _EMPTY_NAMES),
         title=_subject(message),

@@ -68,7 +68,7 @@ class ConfigError(Exception):
 # [layout] key blew up with a raw, unhelpful TypeError. Both were wrong, in
 # different directions; this is the one behavior applied everywhere.
 _SECTION_KEYS: dict[str, frozenset[str]] = {
-    "mail": frozenset({"host", "user", "folder", "trash"}),
+    "mail": frozenset({"host", "user", "folder", "trash", "folders"}),
     "print": frozenset({"printer", "paper", "duplex", "cells_per_side"}),
     "layout": frozenset({"margin_mm", "font_size_pt", "line_height"}),
     "window": frozenset({"fallback_days"}),
@@ -139,10 +139,20 @@ def _reject_unknown_keys(data: dict[str, dict[str, Any]]) -> None:
 
 @dataclass(frozen=True, slots=True)
 class MailConfig:
+    """The account, and the folders newsletters are starred into.
+
+    `folder` is the original spelling and is in every config that exists,
+    including the one --setup writes, so it keeps working and means a
+    list of one. `folders` is how you name more than one. A uid means
+    nothing without the folder it came from, so everything downstream
+    carries the folder alongside it rather than a bare number.
+    """
+
     host: str
     user: str
     folder: str
     trash: str
+    folders: list[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +252,22 @@ class Config:
             )
 
 
+def _folders(mail: dict[str, Any], path: Path) -> list[str]:
+    """The folders to read, however they were spelled.
+
+    `folders` wins over `folder` when both are given: naming both is a
+    config half-edited, and the plural is the more deliberate of the two.
+    """
+    named = mail.get("folders")
+    if named is None:
+        return [mail["folder"]]
+    if not isinstance(named, list) or not all(isinstance(x, str) for x in named):
+        raise ConfigError(f"{path}: mail.folders must be a list of folder names")
+    if not named:
+        raise ConfigError(f"{path}: mail.folders needs at least one folder")
+    return list(named)
+
+
 def _merged(path: Path) -> dict[str, dict[str, Any]]:
     """Overlay the file's tables onto the defaults, key by key.
 
@@ -280,7 +306,13 @@ def load_config(
             paper_override if paper_override is not None else data["print"]["paper"]
         )
         return Config(
-            mail=MailConfig(**data["mail"]),
+            mail=MailConfig(
+                host=data["mail"]["host"],
+                user=data["mail"]["user"],
+                folder=data["mail"]["folder"],
+                trash=data["mail"]["trash"],
+                folders=_folders(data["mail"], path),
+            ),
             printing=PrintConfig(
                 printer=data["print"]["printer"],
                 paper=replace(

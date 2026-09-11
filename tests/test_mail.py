@@ -1512,3 +1512,16 @@ def test_a_folder_name_that_is_not_utf8_is_still_listed() -> None:
         names = box.folders()
     assert names[1] == "INBOX.toprint"
     assert names[0].startswith("INBOX.caf")
+
+
+def test_the_folder_read_back_is_the_one_that_selected() -> None:
+    """A server whose hierarchy separator is a dot gets "INBOX/toprint"
+    rewritten to "INBOX.toprint" before it will open. What a message
+    records as where it came from - and what a retirement then selects -
+    has to be that name, not the one in the config file."""
+    with mailbox(DottedServerIMAP("h")) as box:
+        assert box.folder == "INBOX.toprint"
+
+    plain = FakeIMAP("h")
+    with mailbox(plain) as box:
+        assert box.folder == "INBOX/toprint"

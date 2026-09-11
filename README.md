@@ -249,6 +249,28 @@ font_size_pt = 18
 Half as many newsletters to a side means twice as many sheets for the same
 reading, which is the trade.
 
+## Reading from more than one folder
+
+`folder` names one, and is what every config says today:
+
+```toml
+[mail]
+folder = "INBOX/toprint"
+```
+
+`folders` names several, and wins if you give both:
+
+```toml
+[mail]
+folders = ["INBOX/toprint", "INBOX/work-reading"]
+```
+
+Each is opened in turn on its own connection, and every message
+remembers which one it came from — a uid is issued by a folder and means
+nothing outside it, so two folders can both hold a uid 4 and they are
+different messages. Retirement sends each back to its own folder, and so
+does `--unretire`.
+
 ## Where packets go
 
 With no `--output`, a finished packet is written to `[output] directory`
