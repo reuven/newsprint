@@ -153,6 +153,11 @@ the reason rather than re-derive it.
 - **`cast(...)`** - `typing.cast` does nothing at runtime, so every
   mutation of its first argument survives by construction. All eight of
   `_rendered_lines`' survivors are this.
+- **`_is_unintroduced_figure`'s missing-height default** - the default
+  only has to be something that is not a number, and every string mutmut
+  substitutes for `""` is also not a number. `"".replace(".", "", 1)` and
+  `"XXXX".replace(".", "", 1)` both fail `isdigit()`, so the image is
+  rejected either way.
 - **`_is_argument_figure`'s `before.rstrip()`** - `_nearest_rendered_text`
   strips what it returns.
 
