@@ -1193,6 +1193,52 @@ def _is_short_date_line(line: str) -> bool:
     return bool(_SHORT_DATE_LINE.fullmatch(line.strip()))
 
 
+# A heading is the one place a repeat of the Subject needs no further
+# evidence: render.py stamps the Subject as an <h1> directly above the
+# body, so a body heading saying the same thing is the headline printed
+# twice. h3 and below are left alone - those are section headings, and
+# one matching the Subject is a section of the article rather than a
+# repeat of its name.
+_DUPLICATE_HEADING_TAGS = frozenset({"h1", "h2"})
+
+
+def _strip_duplicate_title_heading(
+    root: Tag, document: Document
+) -> tuple[DroppedBlock, ...]:
+    """Remove leading headings that repeat the title render.py stamps.
+
+    _strip_duplicate_title_block, above, handles the same complaint but
+    demands a bare date line to confirm the match, because it is willing
+    to remove ordinary lines and a recurring section name is often a
+    genuine prefix of a longer Subject. A heading needs no such
+    confirmation: whatever else it is, the reader has already been shown
+    it. That is what lets this pass catch the three shapes the date guard
+    misses - Core Dispatch, whose date line reads "Core Dispatch · August
+    27, 2026" and so is not bare; the Gates Notes, which runs title and
+    dek together in one <h1> and has no date line at all; and Garrett
+    Graff, whose date sits *above* the title rather than below it.
+
+    Gated to the leading region for the same reason the other pass is,
+    and for the same reason h3 is excluded: far enough down, a heading
+    that matches the Subject is a section of the article.
+    """
+    leaves = list(_iter_text_elements(root))
+    dropped = []
+    for leaf in leaves[:_DUPLICATE_TITLE_LEAD_WINDOW]:
+        if leaf.name not in _DUPLICATE_HEADING_TAGS:
+            continue
+        text = leaf.get_text(" ", strip=True)
+        if not _title_line_matches(text, document.title):
+            continue
+        if len(leaves) < 2:
+            # Removing it would empty an otherwise non-empty document -
+            # the same guard the leading and trailing runs apply.
+            break
+        dropped.append(DroppedBlock(text=text, kind="duplicate_title"))
+        leaf.decompose()
+    return tuple(dropped)
+
+
 def _strip_duplicate_title_block(
     root: Tag, document: Document
 ) -> tuple[DroppedBlock, ...]:
@@ -1516,6 +1562,10 @@ def clean_document(document: Document) -> Document:
     # it. Runs before the trailing run and the block-level pass, neither
     # of which this leading-region pass could ever conflict with.
     dropped_duplicate_title = _strip_duplicate_title_block(root, document)
+    # After the block pass, not before: that one removes the whole header
+    # run (title, subtitle, byline, date) where it applies, and would
+    # lose its anchor if the title heading had already gone.
+    dropped_duplicate_title += _strip_duplicate_title_heading(root, document)
     dropped_trailing = _strip_trailing_chrome_run(root)
     dropped_blocks = _strip_chrome_blocks(root)
     # Round 3, section E: runs last, after every judgement-based pass

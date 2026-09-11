@@ -1397,11 +1397,15 @@ def test_a_title_match_with_no_date_anchor_nearby_is_not_removed() -> None:
     the subject (a recurring section name like "Money Talks" or "Axios
     AM" in the live queue) is not, on its own, evidence of Substack's own
     duplicated header - only a short date line following within a few
-    lines confirms that. Measured against the full fixture corpus: this
-    guard is what correctly leaves newsletters-e-economist-com's "Money
-    Talks" section name, and noreply-e-economist-com's "Cover Story", "The
-    Insider" section names, and mike-axios-com's "Axios AM" masthead
-    alone - none of them are followed by a bare date line."""
+    lines confirms that. What this guard protects is the *run*: the
+    subtitle, the byline and the editor's title below the section name
+    are real content and must not be swept up with it.
+
+    The section name itself is a heading, and headings are now removed on
+    sight by _strip_duplicate_title_heading, because render.py stamps the
+    Subject as an <h1> directly above the body - so the reader still sees
+    "Money Talks: Chinamaxxing GDP" in full at the top of the cell, and
+    a second "Money Talks" below it is the headline printed twice."""
     html = (
         "<html><body><div>"
         "<h2>Money Talks</h2>"
@@ -1414,19 +1418,24 @@ def test_a_title_match_with_no_date_anchor_nearby_is_not_removed() -> None:
         "</div></body></html>"
     )
     cleaned = clean_document(document(html, title="Money Talks: Chinamaxxing GDP"))
-    assert "Money Talks" in cleaned.html
-    assert "Don Weinland" in cleaned.html
+    assert "Money Talks" not in cleaned.html, "the stamped headline says it"
+    assert "Don Weinland" in cleaned.html, "the run below it is real content"
     assert "China business and finance editor" in cleaned.html
+    assert "Dissecting the big themes" in cleaned.html
 
 
 def test_the_real_headline_at_the_document_start_survives_a_later_duplicate() -> None:
     """The flagship regression case (from the project's own history: the
-    reverted 095d0e5 change destroyed this exact headline). "Don't Call it
-    a Cult" is the newsletter's own genuine headline at the very start of
-    the body - it has no date line following it within the lookahead, so
-    it must survive. A few lines later, Substack's own duplicated header
-    block (title again, subtitle, author, date) DOES have a date anchor,
-    and that one must be removed."""
+    reverted 095d0e5 change destroyed this exact headline). What that
+    revert was protecting is the article, not the headline: the danger
+    was a pass that swallowed the real opening paragraphs along with the
+    header block.
+
+    The headline itself appears three times in the printed cell if it is
+    left alone - once stamped by render.py from the Subject, and twice
+    more in the body - which is the complaint this pair of passes exists
+    to answer. Both body copies go; the stamped one remains, and so does
+    the article."""
     html = (
         "<html><body><div>"
         "<h2>Don't Call it a Cult</h2>"
@@ -1441,8 +1450,8 @@ def test_the_real_headline_at_the_document_start_survives_a_later_duplicate() ->
         "</div></body></html>"
     )
     cleaned = clean_document(document(html, title="Don't Call it a Cult"))
-    assert cleaned.html.count("Don't Call it a Cult") == 1
-    assert "It's one of the cardinal rules" in cleaned.html
+    assert cleaned.html.count("Don't Call it a Cult") == 0, "render.py stamps it"
+    assert "It's one of the cardinal rules" in cleaned.html, "the article survives"
 
 
 def test_duplicate_title_block_beyond_line_15_is_not_touched() -> None:
@@ -3429,3 +3438,82 @@ def test_only_cells_count_as_cells() -> None:
             "</tr></table>"
         )
     )
+
+
+def _with_title(body: str, title: str) -> Document:
+    return document(f"<html><body>{body}</body></html>", title=title)
+
+
+def test_a_heading_repeating_the_stamped_title_goes() -> None:
+    """render.py stamps the Subject as an <h1> above the body, so a body
+    heading saying the same thing prints the headline twice. Core
+    Dispatch does exactly this: its own <h1> is the Subject verbatim."""
+    cleaned = clean_document(
+        _with_title(
+            "<h1>Core Dispatch #10</h1>"
+            "<h3>Core Dispatch · August 27, 2026</h3>"
+            f"<div>{_PROSE_PARAGRAPHS}</div>",
+            title="Core Dispatch #10",
+        )
+    )
+    assert cleaned.html.count("Core Dispatch #10") == 0
+    assert "only had two jobs" in cleaned.html
+
+
+def test_a_heading_that_is_the_title_plus_its_subtitle_goes_too() -> None:
+    """The Gates Notes runs title and dek together in one <h1>, so the
+    heading is not equal to the Subject but begins with it. The stamped
+    headline above already says that much."""
+    cleaned = clean_document(
+        _with_title(
+            "<h1>The turbulent AI era is here. The choices we make now "
+            "are critical.</h1>"
+            f"<div>{_PROSE_PARAGRAPHS}</div>",
+            title="The turbulent AI era is here",
+        )
+    )
+    assert "turbulent AI era is here" not in cleaned.html
+    assert "only had two jobs" in cleaned.html
+
+
+def test_a_repeated_heading_nested_in_a_header_block_still_goes() -> None:
+    """Garrett Graff's duplicate sits inside a <div> with the date above
+    it and the subtitle below, so the heading is not a top-level child of
+    the body. Depth is not what makes it a duplicate."""
+    cleaned = clean_document(
+        _with_title(
+            "<div><p>September 10, 2026</p>"
+            "<h1>9/11's Lingering Questions</h1>"
+            "<p>On the complex legacy of September 11th</p></div>"
+            f"<div>{_PROSE_PARAGRAPHS}</div>",
+            title="9/11's Lingering Questions",
+        )
+    )
+    assert "Lingering Questions" not in cleaned.html
+    assert "only had two jobs" in cleaned.html
+
+
+def test_a_section_heading_further_down_is_left_alone() -> None:
+    """The rule is gated to the leading region for the same reason the
+    other duplicate pass is: a heading that matches the Subject halfway
+    down is a section of the article, not a repeat of its headline."""
+    filler = "".join(f"<p>Paragraph {n} of the article body.</p>" for n in range(20))
+    cleaned = clean_document(
+        _with_title(
+            f"<div>{_PROSE_PARAGRAPHS}{filler}<h2>Upcoming Releases</h2>"
+            "<p>Python 3.15.0 release candidate 2 lands on September 1.</p>"
+            "</div>",
+            title="Upcoming Releases",
+        )
+    )
+    assert "Upcoming Releases" in cleaned.html
+
+
+def test_a_document_that_is_only_its_own_headline_keeps_it() -> None:
+    """The guard the other passes all apply: removing the duplicate must
+    not empty the document. With nothing but the heading there, a reader
+    handed a blank cell learns less than one handed the headline twice."""
+    cleaned = clean_document(
+        _with_title("<h1>Core Dispatch #10</h1>", title="Core Dispatch #10")
+    )
+    assert "Core Dispatch #10" in cleaned.html
