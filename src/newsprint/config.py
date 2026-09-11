@@ -9,7 +9,7 @@ import sys
 import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .geometry import Paper, paper_by_name
 
@@ -338,6 +338,32 @@ def rename_folder_key(path: Path) -> bool:
     return False
 
 
+# Two a side gets a larger default, because the point of the layout is to
+# be easier to read and the cell alone does not do that. A landscape A5
+# cell at the four-up default runs to 88 characters a line; at 14pt it
+# runs to 55, the same measure the four-up cell gets. Measured on a real
+# packet - see the README's table.
+_TWO_UP_FONT_SIZE_PT = 14.0
+
+
+def _font_size_pt(
+    layout: dict[str, Any], written: dict[str, Any], cells_per_side: int
+) -> float:
+    """The type size to set, which depends on the layout being printed.
+
+    A size written down always wins - this is a default, not a policy.
+    Failing that it follows `cells_per_side`, and specifically the layout
+    actually being printed rather than the one in the file, since
+    --cells-per-side 2 is how most people try the layout the first time
+    and is exactly the case where nothing has been written down.
+    """
+    if "font_size_pt" in written:
+        return cast(float, layout["font_size_pt"])
+    if cells_per_side == 2:
+        return _TWO_UP_FONT_SIZE_PT
+    return cast(float, layout["font_size_pt"])
+
+
 def _merged(path: Path) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     """Overlay the file's tables onto the defaults, key by key.
 
@@ -380,6 +406,11 @@ def load_config(
         paper_name = (
             paper_override if paper_override is not None else data["print"]["paper"]
         )
+        cells = (
+            cells_override
+            if cells_override is not None
+            else data["print"]["cells_per_side"]
+        )
         return Config(
             mail=MailConfig(
                 host=data["mail"]["host"],
@@ -390,17 +421,17 @@ def load_config(
             ),
             printing=PrintConfig(
                 printer=data["print"]["printer"],
-                paper=replace(
-                    paper_by_name(paper_name),
-                    cells_per_side=(
-                        cells_override
-                        if cells_override is not None
-                        else data["print"]["cells_per_side"]
-                    ),
-                ),
+                paper=replace(paper_by_name(paper_name), cells_per_side=cells),
                 duplex=data["print"]["duplex"],
             ),
-            layout=LayoutConfig(**data["layout"]),
+            layout=LayoutConfig(
+                **{
+                    **data["layout"],
+                    "font_size_pt": _font_size_pt(
+                        data["layout"], written.get("layout", {}), cells
+                    ),
+                }
+            ),
             fallback_days=data["window"]["fallback_days"],
             packet=PacketConfig(**data["packet"]),
             output=OutputConfig(
