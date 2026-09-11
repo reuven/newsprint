@@ -337,7 +337,7 @@ def test_cells_per_side_comes_from_the_file(tmp_path: Path) -> None:
     path.write_text("[print]\ncells_per_side = 2\n")
     config = load_config(path)
     assert config.printing.paper.cells_per_side == 2
-    assert config.printing.paper.cell.width_mm == pytest.approx(210.0)
+    assert config.printing.paper.cell.width_mm == pytest.approx(148.5)
 
 
 def test_a_cells_per_side_override_beats_the_file(tmp_path: Path) -> None:
