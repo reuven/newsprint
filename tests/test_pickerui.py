@@ -54,8 +54,8 @@ class _FakeQuestion:
 
 
 def _fake_checkbox(calls: list[tuple], result: list[Document] | None):
-    def factory(message: str, choices):
-        calls.append((message, choices))
+    def factory(message: str, choices, **options):
+        calls.append((message, choices, options))
         return _FakeQuestion(result)
 
     return factory
@@ -76,7 +76,7 @@ def test_builds_a_blank_and_a_heading_separator_before_each_groups_rows() -> Non
     )
 
     assert len(calls) == 1
-    _message, choices = calls[0]
+    _message, choices, _options = calls[0]
     kinds = [type(choice).__name__ for choice in choices]
     # blank, heading, row per group - see picker.py's layout_picklist.
     assert kinds == [
@@ -114,7 +114,7 @@ def test_a_blank_separator_line_is_a_single_space_not_the_library_default() -> N
         checkbox=_fake_checkbox(calls, result=[]),
         terminal_size=_fixed_width(80),
     )
-    _message, choices = calls[0]
+    _message, choices, _options = calls[0]
     assert choices[0].line != questionary.Separator.default_separator
 
 
@@ -198,7 +198,7 @@ def test_a_narrow_terminal_still_produces_the_same_number_of_choices() -> None:
         checkbox=_fake_checkbox(calls, result=[]),
         terminal_size=_fixed_width(20),
     )
-    _message, choices = calls[0]
+    _message, choices, _options = calls[0]
     assert len(choices) == 3
 
 
@@ -240,7 +240,7 @@ def test_the_group_heading_stays_on_screen_when_the_cursor_reaches_a_first_row()
     prompt_toolkit only keeps the cursor line itself visible."""
     built: list[_RealLayoutQuestion] = []
 
-    def factory(message: str, choices):
+    def factory(message: str, choices, **options):
         built.append(_RealLayoutQuestion(message, choices))
         return built[-1]
 
@@ -268,3 +268,26 @@ def test_a_checkbox_that_is_not_questionarys_own_is_left_alone() -> None:
         )
         == []
     )
+
+
+def test_the_list_can_be_filtered_by_typing() -> None:
+    """--since can open the window to weeks, and a window that wide runs
+    to a hundred candidates - too many to find one publication by
+    scrolling. questionary filters as you type, but only if asked, and
+    only with j/k navigation turned off: it refuses both at once, since
+    j and k are letters a filter needs to receive."""
+    picklist = build_picklist(
+        [_doc("Money Stuff", "Issue A", "2026-09-02", uid=1)], sizes={1: 20_000}
+    )
+
+    calls: list[tuple] = []
+    questionary_prompt(
+        picklist,
+        checkbox=_fake_checkbox(calls, result=[]),
+        terminal_size=_fixed_width(80),
+    )
+
+    message, _choices, options = calls[0]
+    assert options["use_search_filter"] is True
+    assert options["use_jk_keys"] is False
+    assert "filter" in message, "the hint has to say the filter is there"
