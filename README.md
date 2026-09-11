@@ -221,29 +221,35 @@ release, project page and author.
 
 ### Bigger type
 
-Four newsletters a side is the default: each gets a quarter of the sheet,
-A6 on A4 paper. Two a side gives each one half the sheet instead — A5,
-twice the area, folded the same way.
+Four newsletters a side is the default: the sheet prints portrait and each
+newsletter gets a quarter of it, A6 on A4 paper.
 
-That is *room* for larger type rather than larger type by itself. A wider
-cell at the same font size just makes the lines longer, and past about 75
-characters a line they get hard to follow. Measured on a real packet:
+Two a side turns the sheet **landscape** and puts the two newsletters side
+by side, so each one is A5 — portrait, twice the area, and the fold that
+separates them runs down the middle of the sheet. That is the shape of an
+ordinary booklet.
+
+The extra area is *room* for larger type rather than larger type by itself:
+at the same font size a bigger cell just makes the lines longer, and past
+about 75 characters a line they get hard to follow. Measured on a real
+packet:
 
 | layout | `font_size_pt` | characters per line |
 |---|---|---|
 | four a side | 9 (default) | 55 |
-| two a side | 9 | 116 — too long |
-| two a side | 16 | 68 |
-| two a side | 18 | 61 |
+| two a side | 9 | 88 — too long |
+| two a side | 12 | 66 |
+| two a side | 14 | 55 |
+| two a side | 18 | 44 — getting choppy |
 
-So the pair that actually buys you larger type is:
+So the pair that buys you the 4-up measure at half again the type size is:
 
 ```toml
 [print]
 cells_per_side = 2
 
 [layout]
-font_size_pt = 18
+font_size_pt = 14
 ```
 
 Half as many newsletters to a side means twice as many sheets for the same
