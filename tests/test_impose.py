@@ -160,10 +160,12 @@ def test_each_cell_lands_at_its_exact_offset(tmp_path: Path) -> None:
         assert found[number].y0 == pytest.approx(y, abs=0.01), f"cell {number} down"
 
 
-def test_two_cells_a_side_stack_top_and_bottom(tmp_path: Path) -> None:
-    """Two a side is the top half and the bottom half, in reading order.
-    Each cell is the full width of the sheet, so there is nothing to sit
-    beside it."""
+def test_two_cells_a_side_sit_side_by_side_on_a_turned_sheet(
+    tmp_path: Path,
+) -> None:
+    """Two a side is the left half and the right half of a landscape
+    sheet, in reading order. Each cell is the full height of the sheet,
+    so there is nothing to sit above or below it."""
     from dataclasses import replace
 
     two_up = replace(A4, cells_per_side=2)
@@ -171,15 +173,17 @@ def test_two_cells_a_side_stack_top_and_bottom(tmp_path: Path) -> None:
     out = tmp_path / "sheets.pdf"
 
     assert impose([cells], two_up, out) == 1
-    _cell_width, cell_height = two_up.cell.as_points()
+    cell_width, _cell_height = two_up.cell.as_points()
+    sheet_width, sheet_height = A4.stock.as_points()
     with pymupdf.open(out) as sheets:
         sheet = sheets[0]
-        assert sheet.rect.width == pytest.approx(A4.sheet.as_points()[0], abs=1.0)
+        assert sheet.rect.width == pytest.approx(sheet_height, abs=1.0), "turned"
+        assert sheet.rect.height == pytest.approx(sheet_width, abs=1.0)
         first = sheet.search_for("PAGE 1")[0]
         second = sheet.search_for("PAGE 2")[0]
 
-    assert first.x0 == pytest.approx(second.x0, abs=0.01), "one column, not two"
-    assert second.y0 - first.y0 == pytest.approx(cell_height, abs=0.01)
+    assert first.y0 == pytest.approx(second.y0, abs=0.01), "one row, not two"
+    assert second.x0 - first.x0 == pytest.approx(cell_width, abs=0.01)
 
 
 def test_two_cells_a_side_fills_two_sheets_with_four_cells(tmp_path: Path) -> None:

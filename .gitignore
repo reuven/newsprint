@@ -7,3 +7,5 @@ out/
 .coverage
 .superpowers/
 dist/
+mutants/
+.mutmut-cache

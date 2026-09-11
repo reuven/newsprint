@@ -14,23 +14,23 @@ from pathlib import Path
 
 from pypdf import PageObject, PdfReader, PdfWriter, Transformation
 
-from .geometry import Paper
+from .geometry import CELLS_ACROSS, Paper
 
 
 def _offsets(paper: Paper) -> tuple[tuple[float, float], ...]:
     """Where each cell's bottom-left corner goes on the sheet.
 
-    The PDF origin is bottom-left, so the top row sits one cell height
-    up. Reading order is across then down, which for two a side is simply
-    top then bottom - there is nothing beside a cell that spans the
-    sheet.
+    Two cells across, always; the layouts differ in how many rows go down
+    the sheet. The PDF origin is bottom-left and reading order runs across
+    then down, so row 0 - the first one read - sits highest, and the last
+    row sits on the origin.
     """
     cell_width, cell_height = paper.cell.as_points()
-    across = paper.cells_per_side // 2
+    down = paper.cells_per_side // CELLS_ACROSS
     return tuple(
-        (column * cell_width, cell_height if row == 0 else 0.0)
-        for row in range(2)
-        for column in range(across)
+        (column * cell_width, (down - 1 - row) * cell_height)
+        for row in range(down)
+        for column in range(CELLS_ACROSS)
     )
 
 

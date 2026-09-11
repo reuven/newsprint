@@ -50,20 +50,26 @@ def test_four_cells_a_side_quarters_the_sheet() -> None:
     assert A4.cell.height_mm == pytest.approx(148.5)
 
 
-def test_two_cells_a_side_halves_it_the_long_way() -> None:
-    """Two a side is one across and two down - full width, half height -
-    so the fold that separates them is the same horizontal fold, and the
-    cell is A5 for an A4 sheet rather than a tall half-column.
-
-    This is what doubles the type: the cell is twice the area, and the
-    font size in the config is unchanged.
+def test_two_cells_a_side_turns_the_sheet_sideways() -> None:
+    """Two a side prints landscape, so that each of the two cells is
+    itself portrait - A5, for an A4 sheet - and the fold between them is
+    the vertical fold down the middle. Printed portrait instead, two a
+    side would give cells 210mm wide and 148.5mm tall: a line of text
+    half a metre long at any readable size.
     """
     from dataclasses import replace
 
     two_up = replace(A4, cells_per_side=2)
-    assert two_up.cell.width_mm == pytest.approx(210.0)
-    assert two_up.cell.height_mm == pytest.approx(148.5)
-    assert two_up.sheet == A4.sheet, "the paper is the same paper"
+    assert two_up.sheet.width_mm == pytest.approx(297.0)
+    assert two_up.sheet.height_mm == pytest.approx(210.0)
+    assert two_up.cell.width_mm == pytest.approx(148.5)
+    assert two_up.cell.height_mm == pytest.approx(210.0)
+    assert two_up.stock == A4.stock, "the paper is the same paper"
+
+
+def test_four_cells_a_side_prints_the_sheet_as_it_comes() -> None:
+    """Only two a side turns the sheet; the default leaves it portrait."""
+    assert A4.sheet == A4.stock
 
 
 def test_a_cell_count_the_imposition_cannot_lay_out_is_refused() -> None:

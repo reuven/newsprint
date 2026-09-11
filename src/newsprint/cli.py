@@ -644,10 +644,11 @@ def about() -> str:
     default=None,
     help=(
         "How many newsletters go on each side of a sheet. Four is the "
-        "default. Two gives each one a cell twice the size, on the same "
-        "paper and with the same fold - raise [layout] font_size_pt to "
-        "around 18 to spend that on larger type, or the lines come out "
-        "too long to read comfortably. Overrides [print] cells_per_side."
+        "default, printed portrait. Two turns the sheet landscape and "
+        "puts them side by side, each a cell twice the size on the same "
+        "paper - raise [layout] font_size_pt to around 14 to spend that "
+        "on larger type, or the lines come out no longer, just fewer. "
+        "Overrides [print] cells_per_side."
     ),
 )
 @click.option(

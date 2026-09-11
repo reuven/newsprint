@@ -221,29 +221,35 @@ release, project page and author.
 
 ### Bigger type
 
-Four newsletters a side is the default: each gets a quarter of the sheet,
-A6 on A4 paper. Two a side gives each one half the sheet instead — A5,
-twice the area, folded the same way.
+Four newsletters a side is the default: the sheet prints portrait and each
+newsletter gets a quarter of it, A6 on A4 paper.
 
-That is *room* for larger type rather than larger type by itself. A wider
-cell at the same font size just makes the lines longer, and past about 75
-characters a line they get hard to follow. Measured on a real packet:
+Two a side turns the sheet **landscape** and puts the two newsletters side
+by side, so each one is A5 — portrait, twice the area, and the fold that
+separates them runs down the middle of the sheet. That is the shape of an
+ordinary booklet.
+
+The extra area is *room* for larger type rather than larger type by itself:
+at the same font size a bigger cell just makes the lines longer, and past
+about 75 characters a line they get hard to follow. Measured on a real
+packet:
 
 | layout | `font_size_pt` | characters per line |
 |---|---|---|
 | four a side | 9 (default) | 55 |
-| two a side | 9 | 116 — too long |
-| two a side | 16 | 68 |
-| two a side | 18 | 61 |
+| two a side | 9 | 88 — too long |
+| two a side | 12 | 66 |
+| two a side | 14 | 55 |
+| two a side | 18 | 44 — getting choppy |
 
-So the pair that actually buys you larger type is:
+So the pair that buys you the 4-up measure at half again the type size is:
 
 ```toml
 [print]
 cells_per_side = 2
 
 [layout]
-font_size_pt = 18
+font_size_pt = 14
 ```
 
 Half as many newsletters to a side means twice as many sheets for the same
@@ -378,6 +384,22 @@ text says it matters:
 - the block after it is nothing but a parenthesised link, which is how
   Platformer cites the screenshots in "Those good posts".
 
+Some newsletters are *built* out of charts and never introduce one in
+words. Apricitas Economics sets fifteen to an issue: no lead-in, no
+caption, `alt=""`. For those, three structural signs stand in for the
+missing sentence, all three required:
+
+- a paragraph of real prose on both sides — a figure inside an argument
+  interrupts the argument, while a masthead sits above all of it and a
+  footer logo below, with nothing on the far side;
+- no `alt` **and** no `title` — which reads backwards and is not. A sender
+  labels a masthead, a section header or a sponsor's logo precisely so it
+  still reads as that brand when images are blocked; an author setting a
+  chart for people to look at rarely bothers;
+- a height in pixels rather than `auto`, since a content image carries its
+  own dimensions through the mail template while chrome is laid out
+  fluidly.
+
 A kept image is fetched at print time, converted to grayscale, and resized
 down to the cell's text column — 87mm at 200dpi, so 685px. Nothing else is
 ever fetched: a dropped image's URL is recorded for the run report and
@@ -396,10 +418,16 @@ In practice that is rare — most newsletter images ship with `alt=""`.
 If an image cannot be fetched — a dead URL, a login wall, a timeout — the
 run says so and prints the packet without it.
 
-Measured across a 268-newsletter archive: **0.97 images kept per
-newsletter**, about 16 dropped, and one text placeholder in the entire
-corpus. Roughly one figure per newsletter is about what a reader would
-point at and call a chart, and the 16 are mastheads, icons and spacers.
+Measured across a 268-newsletter archive: **1.51 images kept per
+newsletter**, and one text placeholder in the entire corpus. The
+introduced-figure rule alone accounts for 0.97 of that; the uncaptioned
+rule adds the rest, and it is what the chart-heavy publications live on —
+Apricitas Economics goes from none of its charts to thirteen, and Prof G
+Markets, Derek Thompson and David Skilling appear for the first time.
+
+Charts cost paper. A packet that was seven sheet sides can be ten once the
+charts are in it, and a publication that sets its charts on a black ground
+prints as a black ground.
 
 ## Undoing a retirement
 
