@@ -3738,3 +3738,76 @@ def test_a_paid_subscriber_line_is_the_same_block() -> None:
         "lxml",
     )
     assert len(_strip_footer(soup)) == 1
+
+
+def test_the_view_in_browser_bar_goes_and_takes_the_preheader_with_it() -> None:
+    """The bar mail clients put above everything - "View in browser |
+    Update your preferences" - printed as the first thing under the
+    headline, in ten messages.
+
+    _strip_leading_chrome_run cannot reach it for the mirror image of the
+    footer's reason: line 1 is the preheader, a plain sentence with no
+    padding to give it away, so the forward walk stops at position 0 with
+    the bar still below it. Cutting back to the start from the marker
+    takes both, and the walk then carries on through what is left.
+    """
+    from bs4 import BeautifulSoup
+
+    from newsprint.clean import _strip_leading_bar
+
+    body = "".join(
+        f"<p>Paragraph {n} carries the argument on at some length.</p>"
+        for n in range(20)
+    )
+    soup = BeautifulSoup(
+        "<html><body><div>"
+        "<p>Writing things down is powerful, for humans and for AI.</p>"
+        "<p>View in browser</p><p>|</p>"
+        f"{body}</div></body></html>",
+        "lxml",
+    )
+    dropped = _strip_leading_bar(soup)
+    assert len(dropped) == 2, "the bar and the preheader above it"
+    assert "View in browser" not in str(soup)
+    assert "Writing things down" not in str(soup)
+    assert "Paragraph 0" in str(soup)
+
+
+def test_a_browser_link_further_down_is_left_alone() -> None:
+    """Past the opening few lines the same words are an article talking
+    about email, and cutting back to the start from there would take the
+    whole beginning of the newsletter."""
+    from bs4 import BeautifulSoup
+
+    from newsprint.clean import _strip_leading_bar
+
+    body = "".join(
+        f"<p>Paragraph {n} carries the argument on at some length.</p>"
+        for n in range(20)
+    )
+    soup = BeautifulSoup(
+        f"<html><body><div>{body}"
+        "<p>Readers who click view in browser are telling you something.</p>"
+        "</div></body></html>",
+        "lxml",
+    )
+    assert _strip_leading_bar(soup) == ()
+    assert "Paragraph 0" in str(soup)
+
+
+def test_a_short_newsletter_keeps_its_opening() -> None:
+    """Same guard the footer cut applies, for the same reason: in a very
+    short message the opening lines are most of it."""
+    from bs4 import BeautifulSoup
+
+    from newsprint.clean import _strip_leading_bar
+
+    soup = BeautifulSoup(
+        "<html><body><div>"
+        "<p>A short note this week.</p><p>View in browser</p>"
+        "<p>And that really is all of it.</p>"
+        "</div></body></html>",
+        "lxml",
+    )
+    assert _strip_leading_bar(soup) == ()
+    assert "A short note this week" in str(soup)
