@@ -717,10 +717,17 @@ def _iter_text_elements(node: Tag) -> Iterator[Tag]:
 
 
 # The lines every bulk mailer ends with, and that nothing else says.
-# Deliberately not a general chrome vocabulary: each of these is text a
-# sender is obliged to include, so none of them appears in an article
-# except as the subject of a sentence - which is what the closing-region
-# gate below is for.
+# Deliberately not a general chrome vocabulary: these are fixed template
+# strings a sender emits rather than writes, so none of them appears in
+# an article except as the subject of a sentence - which is what the
+# closing-region gate below is for.
+#
+# Most are text a sender is legally obliged to include. Substack's
+# "you're currently a free subscriber to X" is the one that is not - it
+# is a sales pitch - and it is here on the narrower ground that it is
+# still a fixed string the platform writes, never the author. It earns
+# its place by reach: 48 messages across 20 publications, the most
+# widely printed chrome left in the corpus.
 _FOOTER_MARKER = re.compile(
     r"\bunsubscribe\b"
     r"|you (are |is )?receiv(ing|ed) this (e-?mail|message|newsletter)"
@@ -728,7 +735,8 @@ _FOOTER_MARKER = re.compile(
     r"|update your (subscription )?preferences|manage your subscription"
     r"|our mailing address is|add us to your address book"
     r"|view (this|the) (e-?mail|newsletter) (online|in your browser)"
-    r"|no longer want to receive",
+    r"|no longer want to receive"
+    r"|you'?re currently a (free|paid) subscriber",
     re.IGNORECASE,
 )
 
@@ -741,6 +749,59 @@ _FOOTER_REGION = 0.6
 # Below this many lines there is no closing stretch worth the name, and
 # cutting 60% of the way into a five-line note could take most of it.
 _FOOTER_MIN_LEAVES = 8
+
+
+# The bar a mail client's template puts above everything, offering the
+# web copy and the preferences page. Same kind of string as the footer
+# markers: emitted by the platform, never written by the author.
+_LEADING_BAR = re.compile(
+    r"view (it )?(in|online in) (your |a )?browser"
+    r"|view this e-?mail online"
+    r"|^view online$"
+    r"|open (this )?(e-?mail )?in (a |your )?browser",
+    re.IGNORECASE,
+)
+
+# How far in the bar may sit. Measured over the fixture corpus it is
+# always line 2, under the preheader; four is room for a masthead line
+# above it without reaching far enough to matter.
+_LEADING_BAR_WINDOW = 4
+
+
+def _strip_leading_bar(root: Tag) -> tuple[DroppedBlock, ...]:
+    """Cut from the start of the document through a browser-bar marker.
+
+    The mirror image of _strip_footer, and it exists for the mirror
+    reason. _strip_leading_chrome_run walks forward from position 0 while
+    what it sees is chrome, and stops for good at the first content. Line
+    1 of these messages is the preheader - "Plus: a brand-new cartoon.",
+    "Writing things down is powerful, for humans and for AI" - which is a
+    plain sentence with none of the padding _strip_preheader looks for,
+    so it reads as content and the walk stops there with the bar still
+    below it.
+
+    Cutting back to the start from the marker takes the bar and whatever
+    preheader sat above it, and leaves the forward walk to carry on
+    through the "|" and "Update your preferences" below. Bounded to the
+    opening few leaves, because further down the same words are an
+    article talking about email, and cutting to the start from there
+    would take the whole beginning of the newsletter.
+    """
+    leaves = list(_iter_text_elements(root))
+    if len(leaves) < _FOOTER_MIN_LEAVES:
+        return ()
+    for index in range(min(_LEADING_BAR_WINDOW, len(leaves))):
+        if not _LEADING_BAR.search(leaves[index].get_text(" ", strip=True)):
+            continue
+        block = leaves[: index + 1]
+        dropped = tuple(
+            DroppedBlock(text=leaf.get_text(" ", strip=True), kind="chrome")
+            for leaf in block
+        )
+        for leaf in block:
+            leaf.decompose()
+        return dropped
+    return ()
 
 
 def _strip_footer(root: Tag) -> tuple[DroppedBlock, ...]:
@@ -1671,7 +1732,10 @@ def clean_document(document: Document) -> Document:
     # block-level pass then still catches remaining mid-document chrome
     # blocks that are themselves top-level, which the run-only passes
     # structurally cannot touch.
-    dropped_leading = _strip_leading_chrome_run(root)
+    # Before the forward walk, which stops at the preheader sitting
+    # above the bar - see _strip_leading_bar.
+    dropped_leading = _strip_leading_bar(root)
+    dropped_leading += _strip_leading_chrome_run(root)
     # Round 3, section D: with the leading chrome run already gone, the
     # "first 15 lines" this pass is gated to are spent on the newsletter's
     # own content rather than on a "Forwarded this email?" banner ahead of
