@@ -5,7 +5,7 @@ time, so it never appears in a config file or in the repository.
 """
 
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +18,12 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "newsprint" / "config.toml"
 # means "whatever CUPS treats as the default destination".
 DEFAULTS: dict[str, dict[str, Any]] = {
     "mail": {"host": "", "user": "", "folder": "INBOX/toprint", "trash": "auto"},
-    "print": {"printer": "", "paper": "A4", "duplex": "two-sided-long-edge"},
+    "print": {
+        "printer": "",
+        "paper": "A4",
+        "duplex": "two-sided-long-edge",
+        "cells_per_side": 4,
+    },
     "layout": {"margin_mm": 9.0, "font_size_pt": 9.0, "line_height": 1.35},
     "window": {"fallback_days": 7},
     # title empty: the contents page renders nothing above "CONTENTS ·"
@@ -27,6 +32,10 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     # largest teaser (124) from the smallest real article (514), so 250
     # sits comfortably in the middle with no tuning required.
     "packet": {"title": "", "min_words": 250},
+    "output": {
+        "directory": "~/.local/state/newsprint/packets",
+        "keep_days": 30,
+    },
     # Off by default: the tool must work with no API key, no network, and no
     # configuration, exactly as it did before this section existed. The key
     # itself is never stored here - only where to find it. api_key_file and
@@ -59,11 +68,12 @@ class ConfigError(Exception):
 # [layout] key blew up with a raw, unhelpful TypeError. Both were wrong, in
 # different directions; this is the one behavior applied everywhere.
 _SECTION_KEYS: dict[str, frozenset[str]] = {
-    "mail": frozenset({"host", "user", "folder", "trash"}),
-    "print": frozenset({"printer", "paper", "duplex"}),
+    "mail": frozenset({"host", "user", "folder", "trash", "folders"}),
+    "print": frozenset({"printer", "paper", "duplex", "cells_per_side"}),
     "layout": frozenset({"margin_mm", "font_size_pt", "line_height"}),
     "window": frozenset({"fallback_days"}),
     "packet": frozenset({"title", "min_words"}),
+    "output": frozenset({"directory", "keep_days"}),
     "summary": frozenset(
         {
             "enabled",
@@ -129,10 +139,20 @@ def _reject_unknown_keys(data: dict[str, dict[str, Any]]) -> None:
 
 @dataclass(frozen=True, slots=True)
 class MailConfig:
+    """The account, and the folders newsletters are starred into.
+
+    `folder` is the original spelling and is in every config that exists,
+    including the one --setup writes, so it keeps working and means a
+    list of one. `folders` is how you name more than one. A uid means
+    nothing without the folder it came from, so everything downstream
+    carries the folder alongside it rather than a bare number.
+    """
+
     host: str
     user: str
     folder: str
     trash: str
+    folders: list[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +173,22 @@ class LayoutConfig:
 class PacketConfig:
     title: str
     min_words: int
+
+
+@dataclass(frozen=True, slots=True)
+class OutputConfig:
+    """Where a packet goes when --output says nothing, and how long it
+    stays there.
+
+    A packet outlives the run that made it: spool() returning success
+    means CUPS accepted the job, not that paper came out right, and by
+    the time anyone knows otherwise the mail has been retired. So the
+    default home is somewhere durable rather than a temp directory - and
+    then it needs sweeping, or it becomes another thing to tidy.
+    """
+
+    directory: Path
+    keep_days: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +232,7 @@ class Config:
     layout: LayoutConfig
     fallback_days: int
     packet: PacketConfig
+    output: OutputConfig
     summary: SummaryConfig
     path: Path
 
@@ -215,6 +252,22 @@ class Config:
             )
 
 
+def _folders(mail: dict[str, Any], path: Path) -> list[str]:
+    """The folders to read, however they were spelled.
+
+    `folders` wins over `folder` when both are given: naming both is a
+    config half-edited, and the plural is the more deliberate of the two.
+    """
+    named = mail.get("folders")
+    if named is None:
+        return [mail["folder"]]
+    if not isinstance(named, list) or not all(isinstance(x, str) for x in named):
+        raise ConfigError(f"{path}: mail.folders must be a list of folder names")
+    if not named:
+        raise ConfigError(f"{path}: mail.folders needs at least one folder")
+    return list(named)
+
+
 def _merged(path: Path) -> dict[str, dict[str, Any]]:
     """Overlay the file's tables onto the defaults, key by key.
 
@@ -231,7 +284,9 @@ def _merged(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def load_config(
-    path: Path = DEFAULT_CONFIG_PATH, paper_override: str | None = None
+    path: Path = DEFAULT_CONFIG_PATH,
+    paper_override: str | None = None,
+    cells_override: int | None = None,
 ) -> Config:
     """Load and validate config.toml, raising only ConfigError.
 
@@ -251,15 +306,32 @@ def load_config(
             paper_override if paper_override is not None else data["print"]["paper"]
         )
         return Config(
-            mail=MailConfig(**data["mail"]),
+            mail=MailConfig(
+                host=data["mail"]["host"],
+                user=data["mail"]["user"],
+                folder=data["mail"]["folder"],
+                trash=data["mail"]["trash"],
+                folders=_folders(data["mail"], path),
+            ),
             printing=PrintConfig(
                 printer=data["print"]["printer"],
-                paper=paper_by_name(paper_name),
+                paper=replace(
+                    paper_by_name(paper_name),
+                    cells_per_side=(
+                        cells_override
+                        if cells_override is not None
+                        else data["print"]["cells_per_side"]
+                    ),
+                ),
                 duplex=data["print"]["duplex"],
             ),
             layout=LayoutConfig(**data["layout"]),
             fallback_days=data["window"]["fallback_days"],
             packet=PacketConfig(**data["packet"]),
+            output=OutputConfig(
+                directory=Path(data["output"]["directory"]).expanduser(),
+                keep_days=data["output"]["keep_days"],
+            ),
             summary=SummaryConfig(
                 enabled=data["summary"]["enabled"],
                 api_key_file=Path(data["summary"]["api_key_file"]).expanduser(),

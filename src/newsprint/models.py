@@ -16,11 +16,18 @@ class Verdict(Enum):
 
 @dataclass(frozen=True, slots=True)
 class Origin:
-    """Where a document came from, and how to retire it afterwards."""
+    """Where a document came from, and how to retire it afterwards.
+
+    `folder` matters because a uid is only meaningful inside the folder
+    it was issued in: uid 5 in one folder and uid 5 in another are
+    different messages, so retiring by number alone would move the wrong
+    mail once a run reads from more than one place.
+    """
 
     kind: Literal["email", "url"]
     identifier: str
     uid: int | None = None
+    folder: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
