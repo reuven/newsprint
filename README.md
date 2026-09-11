@@ -384,6 +384,22 @@ text says it matters:
 - the block after it is nothing but a parenthesised link, which is how
   Platformer cites the screenshots in "Those good posts".
 
+Some newsletters are *built* out of charts and never introduce one in
+words. Apricitas Economics sets fifteen to an issue: no lead-in, no
+caption, `alt=""`. For those, three structural signs stand in for the
+missing sentence, all three required:
+
+- a paragraph of real prose on both sides — a figure inside an argument
+  interrupts the argument, while a masthead sits above all of it and a
+  footer logo below, with nothing on the far side;
+- no `alt` **and** no `title` — which reads backwards and is not. A sender
+  labels a masthead, a section header or a sponsor's logo precisely so it
+  still reads as that brand when images are blocked; an author setting a
+  chart for people to look at rarely bothers;
+- a height in pixels rather than `auto`, since a content image carries its
+  own dimensions through the mail template while chrome is laid out
+  fluidly.
+
 A kept image is fetched at print time, converted to grayscale, and resized
 down to the cell's text column — 87mm at 200dpi, so 685px. Nothing else is
 ever fetched: a dropped image's URL is recorded for the run report and
@@ -402,10 +418,16 @@ In practice that is rare — most newsletter images ship with `alt=""`.
 If an image cannot be fetched — a dead URL, a login wall, a timeout — the
 run says so and prints the packet without it.
 
-Measured across a 268-newsletter archive: **0.97 images kept per
-newsletter**, about 16 dropped, and one text placeholder in the entire
-corpus. Roughly one figure per newsletter is about what a reader would
-point at and call a chart, and the 16 are mastheads, icons and spacers.
+Measured across a 268-newsletter archive: **1.57 images kept per
+newsletter**, and one text placeholder in the entire corpus. The
+introduced-figure rule alone accounts for 0.97 of that; the uncaptioned
+rule adds the rest, and it is what the chart-heavy publications live on —
+Apricitas Economics goes from none of its charts to fourteen, and Prof G
+Markets, Derek Thompson and David Skilling appear for the first time.
+
+Charts cost paper. A packet that was seven sheet sides can be ten once the
+charts are in it, and a publication that sets its charts on a black ground
+prints as a black ground.
 
 ## Undoing a retirement
 
