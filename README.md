@@ -468,13 +468,17 @@ the masthead, the social bar, the "forwarded this email?" banner, the
 sponsor block, and the footer — unsubscribe link, copyright line, mailing
 address, "you are receiving this email because".
 
-The footer is cut forward from its first marker rather than trimmed
-backwards from the end, because senders put a promotional line *below* it
-("Powered by Buttondown, the easiest way to start and grow your
-newsletter") and a backwards trim stops there with the whole footer still
-above. Measured across the 268-newsletter archive: footer lines reaching
-the page fall from 51 to 16, and 18 messages lose a block of 8 lines
-apiece.
+Both ends are cut from a marker rather than trimmed inwards from the
+edge, and for the same reason. A backwards trim from the end stops on the
+promotional line senders put *below* the footer ("Powered by Buttondown,
+the easiest way to start and grow your newsletter"); a forward trim from
+the start stops on the preheader sitting *above* the browser bar. Each is
+a content-shaped line standing between the edge and the chrome, so the
+cut starts from the chrome instead.
+
+Measured across the 268-newsletter archive: chrome lines reaching the page
+fall from 51 across 25 messages to 4 across 4, and 399 lines go without a
+single message growing by one.
 
 ## Undoing a retirement
 
