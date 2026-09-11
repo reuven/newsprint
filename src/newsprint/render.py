@@ -17,14 +17,16 @@ rule reads more clearly than two.
 
 import hashlib
 import tempfile
+from bisect import bisect_left
 from collections.abc import Callable
 from html import escape
 from io import BytesIO
+from itertools import accumulate
 from pathlib import Path
 from string import Template
 from typing import Protocol
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 from ._libpath import prepare_dyld_fallback_library_path
 
@@ -168,6 +170,26 @@ def _cap_width_px(config: Config) -> int:
     return max(1, round(text_width_mm / MM_PER_INCH * _IMAGE_DPI))
 
 
+# Darker than mid-grey and the image is read as being set on a dark
+# ground. Apricitas Economics' charts, the ones that prompted this,
+# measure 41 of 255; an ordinary black-on-white chart measures about 240.
+# Nothing real sits near the line, so it is drawn at the midpoint rather
+# than tuned to either.
+_DARK_GROUND_MEDIAN = 128
+
+
+def _median_level(image: Image.Image) -> int:
+    """The middle grey level of `image`, from its histogram.
+
+    The median rather than the mean, because what is being asked is "what
+    colour is the ground" and the ground is most of the pixels. A chart
+    with a bright legend on black has a mean dragged upwards by the
+    legend; its median is still the black.
+    """
+    cumulative = list(accumulate(image.histogram()))
+    return bisect_left(cumulative, cumulative[-1] / 2)
+
+
 def _grayscale_and_cap(data: bytes, max_width_px: int) -> bytes:
     """Convert a fetched image's raw bytes to 8-bit grayscale PNG, resized
     down if wider than `max_width_px`. Real pixel-level work, not CSS: see
@@ -185,6 +207,11 @@ def _grayscale_and_cap(data: bytes, max_width_px: int) -> bytes:
             (max_width_px, max(1, round(grayscale.height * ratio))),
             Image.Resampling.LANCZOS,
         )
+    if _median_level(grayscale) < _DARK_GROUND_MEDIAN:
+        # White-on-black is a screen convention. On paper it is a page of
+        # toner, and the reader expects ink on white like everything
+        # around it - so a chart set on a dark ground is turned over.
+        grayscale = ImageOps.invert(grayscale)
     buffer = BytesIO()
     grayscale.save(buffer, format="PNG")
     return buffer.getvalue()
