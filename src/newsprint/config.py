@@ -27,6 +27,10 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     # largest teaser (124) from the smallest real article (514), so 250
     # sits comfortably in the middle with no tuning required.
     "packet": {"title": "", "min_words": 250},
+    "output": {
+        "directory": "~/.local/state/newsprint/packets",
+        "keep_days": 30,
+    },
     # Off by default: the tool must work with no API key, no network, and no
     # configuration, exactly as it did before this section existed. The key
     # itself is never stored here - only where to find it. api_key_file and
@@ -64,6 +68,7 @@ _SECTION_KEYS: dict[str, frozenset[str]] = {
     "layout": frozenset({"margin_mm", "font_size_pt", "line_height"}),
     "window": frozenset({"fallback_days"}),
     "packet": frozenset({"title", "min_words"}),
+    "output": frozenset({"directory", "keep_days"}),
     "summary": frozenset(
         {
             "enabled",
@@ -156,6 +161,22 @@ class PacketConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class OutputConfig:
+    """Where a packet goes when --output says nothing, and how long it
+    stays there.
+
+    A packet outlives the run that made it: spool() returning success
+    means CUPS accepted the job, not that paper came out right, and by
+    the time anyone knows otherwise the mail has been retired. So the
+    default home is somewhere durable rather than a temp directory - and
+    then it needs sweeping, or it becomes another thing to tidy.
+    """
+
+    directory: Path
+    keep_days: int
+
+
+@dataclass(frozen=True, slots=True)
 class PersonalSummary:
     """The optional second summary page: a heading, and what to look for.
 
@@ -196,6 +217,7 @@ class Config:
     layout: LayoutConfig
     fallback_days: int
     packet: PacketConfig
+    output: OutputConfig
     summary: SummaryConfig
     path: Path
 
@@ -260,6 +282,10 @@ def load_config(
             layout=LayoutConfig(**data["layout"]),
             fallback_days=data["window"]["fallback_days"],
             packet=PacketConfig(**data["packet"]),
+            output=OutputConfig(
+                directory=Path(data["output"]["directory"]).expanduser(),
+                keep_days=data["output"]["keep_days"],
+            ),
             summary=SummaryConfig(
                 enabled=data["summary"]["enabled"],
                 api_key_file=Path(data["summary"]["api_key_file"]).expanduser(),

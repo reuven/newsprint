@@ -3586,3 +3586,156 @@ def test_a_very_long_title_is_cut_to_a_usable_length() -> None:
     assert len(stem) <= 40
     assert not stem.endswith("-")
     assert name.endswith("-2026-09-11-1432.pdf")
+
+
+# ---------------------------------------------------------------------------
+# Where packets live when --output says nothing, and how long they stay.
+# ---------------------------------------------------------------------------
+
+
+def test_a_packet_with_no_output_lands_somewhere_it_will_survive(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A temp directory is the wrong home for the one artifact of a run:
+    spool() returning success means CUPS took the job, not that paper
+    came out right, and by the time you know otherwise the mail is
+    retired and the OS has the PDF."""
+    _no_mail(monkeypatch, tmp_path)
+    packets = tmp_path / "packets"
+    config = tmp_path / "config.toml"
+    config.write_text(f'[output]\ndirectory = "{packets}"\n')
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(config)]
+    )
+    assert result.exit_code == 0, result.output
+    written = list(packets.glob("*.pdf"))
+    assert len(written) == 1, result.output
+    assert str(written[0]) in result.output
+
+
+def test_old_packets_are_swept_when_a_new_one_is_built(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Kept forever, the directory becomes another thing to tidy. The
+    sweep runs when a packet is written, removes only PDFs, and says what
+    it took - every other removal in this tool is reported."""
+    import os
+    import time
+
+    _no_mail(monkeypatch, tmp_path)
+    packets = tmp_path / "packets"
+    packets.mkdir()
+    stale = packets / "newsprint-2026-01-01-0900.pdf"
+    stale.write_bytes(b"%PDF-1.4 old")
+    fresh = packets / "newsprint-2026-09-10-0900.pdf"
+    fresh.write_bytes(b"%PDF-1.4 recent")
+    not_a_packet = packets / "notes.txt"
+    not_a_packet.write_text("mine")
+    long_ago = time.time() - 60 * 60 * 24 * 45
+    for path in (stale, not_a_packet):
+        os.utime(path, (long_ago, long_ago))
+
+    config = tmp_path / "config.toml"
+    config.write_text(f'[output]\ndirectory = "{packets}"\nkeep_days = 30\n')
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(config)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not stale.exists(), "a packet past the limit goes"
+    assert fresh.exists(), "one inside it stays"
+    assert not_a_packet.exists(), "anything that is not a packet is left alone"
+    assert "1 packet" in result.output
+
+
+def test_keeping_packets_forever_is_available(monkeypatch, tmp_path: Path) -> None:
+    """Zero days means no sweep at all, for anyone who would rather keep
+    the lot and tidy it themselves."""
+    import os
+    import time
+
+    _no_mail(monkeypatch, tmp_path)
+    packets = tmp_path / "packets"
+    packets.mkdir()
+    ancient = packets / "newsprint-2020-01-01-0900.pdf"
+    ancient.write_bytes(b"%PDF-1.4 ancient")
+    long_ago = time.time() - 60 * 60 * 24 * 4000
+    os.utime(ancient, (long_ago, long_ago))
+
+    config = tmp_path / "config.toml"
+    config.write_text(f'[output]\ndirectory = "{packets}"\nkeep_days = 0\n')
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(config)]
+    )
+    assert result.exit_code == 0, result.output
+    assert ancient.exists()
+
+
+def test_an_explicit_output_directory_is_never_swept(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """--output names a directory of the reader's own. Deleting things
+    out of it because they are old is not this tool's business."""
+    import os
+    import time
+
+    _no_mail(monkeypatch, tmp_path)
+    mine = tmp_path / "mine"
+    mine.mkdir()
+    old = mine / "newsprint-2020-01-01-0900.pdf"
+    old.write_bytes(b"%PDF-1.4 ancient")
+    long_ago = time.time() - 60 * 60 * 24 * 4000
+    os.utime(old, (long_ago, long_ago))
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--dry-run",
+            "--no-preview",
+            "--output",
+            str(mine),
+            "--config",
+            str(tmp_path / "absent.toml"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert old.exists()
+
+
+def test_a_packet_that_will_not_delete_does_not_stop_the_run(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Tidying is the least important thing a run does. A packet that
+    cannot be removed - a permission, a file open in a viewer, a
+    disappearing network mount - is left where it is and offered again
+    next time, rather than taking the newsletters down with it."""
+    import os
+    import time
+
+    _no_mail(monkeypatch, tmp_path)
+    packets = tmp_path / "packets"
+    packets.mkdir()
+    stuck = packets / "newsprint-2020-01-01-0900.pdf"
+    stuck.write_bytes(b"%PDF-1.4 old")
+    long_ago = time.time() - 60 * 60 * 24 * 4000
+    os.utime(stuck, (long_ago, long_ago))
+
+    real_unlink = Path.unlink
+
+    def refuse(self: Path, *args: object, **kwargs: object) -> None:
+        if self.name == stuck.name:
+            raise PermissionError(self)
+        real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+
+    config = tmp_path / "config.toml"
+    config.write_text(f'[output]\ndirectory = "{packets}"\nkeep_days = 30\n')
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(config)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stuck.exists(), "left where it is"
+    assert "Swept" not in result.output, "and not counted as swept"

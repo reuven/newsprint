@@ -344,13 +344,43 @@ def packet_filename(title: str, packet_date: date, at: datetime) -> str:
     return f"{stem or _PACKAGE}-{packet_date.isoformat()}-{at:%H%M}.pdf"
 
 
-def save_output(built_pdf: Path, output: Path | None, filename: str) -> Path:
+def sweep_packets(directory: Path, keep_days: int, now: datetime) -> list[Path]:
+    """Remove packets in `directory` older than `keep_days`, and say which.
+
+    Only ever PDFs, and only ever directly in this directory: it is the
+    one newsprint chose, but a reader may well have put something of
+    their own beside the packets, and age is no reason to delete it.
+
+    `keep_days` of 0 sweeps nothing, for anyone who would rather keep the
+    lot and tidy it themselves.
+    """
+    if keep_days <= 0 or not directory.is_dir():
+        return []
+    cutoff = now.timestamp() - keep_days * 24 * 60 * 60
+    swept = []
+    for path in sorted(directory.glob("*.pdf")):
+        try:
+            if path.stat().st_mtime >= cutoff:
+                continue
+            path.unlink()
+        except OSError:
+            # A packet that cannot be read or removed is not worth
+            # failing a print run over; it will be offered again next
+            # time, and the run has newsletters to get to.
+            continue
+        swept.append(path)
+    return swept
+
+
+def save_output(
+    built_pdf: Path, output: Path | None, filename: str, default_dir: Path
+) -> Path:
     """Where the finished packet ends up, and its path afterwards.
 
-    With no --output the packet stays in the run's temp directory, which
-    is right for a run that prints immediately and useless for one that
-    hands the user a PDF to print themselves - a random directory under
-    /var/folders that the OS eventually deletes.
+    With no --output the packet goes to the configured directory rather
+    than staying in the run's temp directory, which the OS eventually
+    deletes - and a print that comes out wrong is only discovered after
+    the mail has been retired, so the PDF has to outlive the run.
 
     An --output naming an existing directory gets a dated file inside it,
     since "where do I put this week's packet" is the common case and
@@ -358,7 +388,10 @@ def save_output(built_pdf: Path, output: Path | None, filename: str) -> Path:
     file path to write.
     """
     if output is None:
-        return built_pdf
+        default_dir.mkdir(parents=True, exist_ok=True)
+        destination = default_dir / filename
+        shutil.copyfile(built_pdf, destination)
+        return destination
     destination = output / filename if output.is_dir() else output
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(built_pdf, destination)
@@ -790,7 +823,18 @@ def main(
     )
     sheets_pdf = work_dir / filename
     sides = impose(stamped, config.printing.paper, sheets_pdf)
-    sheets_pdf = save_output(sheets_pdf, output, filename)
+    sheets_pdf = save_output(sheets_pdf, output, filename, config.output.directory)
+    if output is None:
+        swept = sweep_packets(
+            config.output.directory,
+            config.output.keep_days,
+            datetime.now().astimezone(),
+        )
+        if swept:
+            click.echo(
+                f"  Swept {len(swept)} packet(s) older than "
+                f"{config.output.keep_days} days."
+            )
     cells = sum(item.cells for item in packet_built)
     click.echo(
         f"\n  {cells} cells - {sides} sheet sides on {config.printing.paper.name}"
