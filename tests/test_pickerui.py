@@ -18,6 +18,11 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 import questionary
+from prompt_toolkit.application import Application
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
+from prompt_toolkit.layout import Layout, Window
+from questionary.prompts.common import InquirerControl
 
 from newsprint.models import Document, Origin
 from newsprint.picker import build_picklist
@@ -32,6 +37,25 @@ def _doc(publication: str, title: str, day: str, uid: int = 1) -> Document:
         date=datetime.fromisoformat(day).replace(tzinfo=UTC),
         html="<p>x</p>",
     )
+
+
+class _FakeQuestionWithLayout:
+    """A questionary.Question as far as the prompt tweaks are concerned:
+    an application with a layout to walk and key bindings to add to."""
+
+    def __init__(self, window: Window) -> None:
+        self.application = Application(
+            layout=Layout(window), key_bindings=KeyBindings()
+        )
+
+
+def _press_escape(question: _FakeQuestionWithLayout) -> None:
+    """Run whatever got bound to Escape, without a terminal."""
+    for binding in question.application.key_bindings.bindings:
+        if binding.keys == (Keys.Escape,):
+            binding.handler(None)
+            return
+    raise AssertionError("nothing was bound to Escape")
 
 
 def _fixed_width(columns: int) -> Callable[[], os.terminal_size]:
@@ -294,12 +318,10 @@ def test_the_list_can_be_filtered_by_typing() -> None:
 
 
 def test_the_hint_says_how_to_clear_the_filter() -> None:
-    """Backspacing past the first character is the only way out of a
-    filter - Escape is not bound, and questionary's own hint, which does
-    mention filtering, is replaced by "(N selections)" as soon as
-    anything is picked. That is precisely when a reader wants to know how
-    to get back to the whole list, so the way out belongs in the message,
-    which stays on screen."""
+    """questionary's own hint does mention filtering, but it is replaced
+    by "(N selections)" as soon as anything is picked - precisely when a
+    reader wants to know how to get back to the whole list. So the way
+    out belongs in the message, which stays on screen."""
     picklist = build_picklist(
         [_doc("Money Stuff", "Issue A", "2026-09-02", uid=1)], sizes={1: 20_000}
     )
@@ -312,4 +334,147 @@ def test_the_hint_says_how_to_clear_the_filter() -> None:
     )
 
     message, _choices, _options = calls[0]
-    assert "backspace" in message.lower()
+    assert "esc" in message.lower()
+
+
+def _axios_picklist():
+    """Three Axios publications, only one of which names itself in its
+    own subjects - the exact shape of the reported bug."""
+    candidates = [
+        _doc("Axios Macro", "Rock-solid jobs", "2026-09-05", uid=1),
+        _doc("Axios Markets", "Go big or go home", "2026-09-06", uid=2),
+        _doc("Mike Allen (axios.com)", "Axios AM: Trump, alone", "2026-09-09", uid=3),
+        _doc("Money Stuff", "Something else entirely", "2026-09-09", uid=4),
+    ]
+    return build_picklist(candidates, sizes={i: 20_000 for i in range(1, 5)})
+
+
+def test_filtering_on_a_publication_keeps_that_publications_rows() -> None:
+    """The reported bug: filtering on "axios" left the AXIOS MACRO and
+    AXIOS MARKETS headings on screen with no rows under them, because
+    questionary matches each line's own text and those publications do
+    not repeat their name in every subject. A heading with nothing under
+    it is worse than no heading - the newsletters looked unreachable."""
+    from newsprint.pickerui import _choices, _matching_choices
+
+    choices = _choices(_axios_picklist(), width=100)
+    kept = _matching_choices(choices, "axios")
+    titles = [str(c.title) for c in kept]
+
+    assert any("Rock-solid jobs" in t for t in titles), "Axios Macro's row"
+    assert any("Go big or go home" in t for t in titles), "Axios Markets' row"
+    assert any("Trump, alone" in t for t in titles), "Mike Allen's row"
+    assert not any("Something else entirely" in t for t in titles)
+
+
+def test_a_heading_never_survives_without_its_rows() -> None:
+    """The visible symptom, stated directly: every heading kept must have
+    at least one row under it."""
+    import questionary
+
+    from newsprint.pickerui import _choices, _matching_choices
+
+    kept = _matching_choices(_choices(_axios_picklist(), width=100), "axios")
+    for index, choice in enumerate(kept):
+        if isinstance(choice, questionary.Separator) and str(choice.title).strip():
+            rest = kept[index + 1 :]
+            assert any(not isinstance(c, questionary.Separator) for c in rest), (
+                f"{choice.title!r} has no rows after it"
+            )
+            break
+
+
+def test_filtering_on_a_subject_keeps_only_the_matching_rows() -> None:
+    """Matching a row still narrows to that row - a publication whose
+    heading does not match is not dragged in wholesale by one of its
+    articles matching."""
+    from newsprint.pickerui import _choices, _matching_choices
+
+    kept = _matching_choices(_choices(_axios_picklist(), width=100), "rock-solid")
+    titles = [str(c.title) for c in kept]
+    assert any("Rock-solid jobs" in t for t in titles)
+    assert not any("Go big or go home" in t for t in titles)
+    assert any("AXIOS MACRO" in t.upper() for t in titles), "its heading comes too"
+
+
+def test_filtering_on_nothing_that_matches_keeps_everything() -> None:
+    """questionary's own behaviour, preserved: a filter that matches
+    nothing shows the whole list rather than an empty one, so a typo is
+    not a dead end."""
+    from newsprint.pickerui import _choices, _matching_choices
+
+    choices = _choices(_axios_picklist(), width=100)
+    assert _matching_choices(choices, "zzzznothing") == []
+
+
+class _FakeControl(InquirerControl):
+    pass
+
+
+def test_the_live_control_is_given_group_aware_filtering() -> None:
+    """The pure function above is only useful if the running prompt
+    actually uses it, and questionary offers no hook - so the control's
+    class is swapped after the prompt is built, the same reach through
+    the layout that keeps a heading on screen."""
+    from newsprint.pickerui import _configure_prompt, _GroupAwareControl
+
+    control = InquirerControl([questionary.Choice(title="a", value=1)])
+    window = Window(content=control)
+    question = _FakeQuestionWithLayout(window)
+
+    _configure_prompt(question)
+
+    assert isinstance(control, _GroupAwareControl)
+
+
+def test_escape_clears_the_filter_in_one_keystroke() -> None:
+    """Backspacing out of a long filter one character at a time is the
+    complaint. Escape empties it outright, and puts the cursor back on
+    the first selectable row so the restored list is navigable."""
+    from newsprint.pickerui import _configure_prompt
+
+    control = InquirerControl(
+        [questionary.Separator("— AXIOS MACRO —"), questionary.Choice("a", value=1)]
+    )
+    control.search_filter = "axios"
+    window = Window(content=control)
+    question = _FakeQuestionWithLayout(window)
+
+    _configure_prompt(question)
+    _press_escape(question)
+
+    assert control.search_filter is None
+
+
+def test_the_control_filters_by_group_when_asked() -> None:
+    """The property itself, on a control with a filter set - the pure
+    function is only half the story, and this is the half the running
+    prompt actually calls."""
+    from newsprint.pickerui import _choices, _GroupAwareControl
+
+    control = InquirerControl(_choices(_axios_picklist(), width=100))
+    control.__class__ = _GroupAwareControl
+
+    control.search_filter = "axios"
+    titles = [str(c.title) for c in control.filtered_choices]
+    assert any("Rock-solid jobs" in t for t in titles)
+    assert not any("Something else entirely" in t for t in titles)
+    assert control.found_in_search is True
+
+    control.search_filter = "zzzznothing"
+    assert len(list(control.filtered_choices)) == len(control.choices), "whole list"
+    assert control.found_in_search is False
+
+    control.search_filter = None
+    assert len(list(control.filtered_choices)) == len(control.choices)
+
+
+def test_a_layout_with_no_choice_list_is_left_alone() -> None:
+    """The same silent no-op the heading tweak makes: a stand-in question
+    whose layout holds no choice list gets no Escape binding, rather than
+    an exception."""
+    from newsprint.pickerui import _configure_prompt
+
+    question = _FakeQuestionWithLayout(Window())
+    _configure_prompt(question)
+    assert question.application.key_bindings.bindings == []

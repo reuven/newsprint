@@ -155,12 +155,17 @@ reaches back a few weeks and the list runs to a hundred:
 
 | key | what it does |
 | --- | --- |
-| any letter | narrows the list to rows containing what you have typed |
-| backspace | deletes one character; past the first, the whole list is back |
+| any letter | narrows the list to publications and subjects matching what you typed |
+| esc | clears the filter outright |
+| backspace | deletes one character of it |
 | space | toggles the row under the cursor |
 | ↑ ↓ | move the cursor (`j`/`k` cannot navigate here — they are filter text) |
 | enter | confirm |
 | ctrl-c | cancel, selecting nothing |
+
+Filtering matches **the publication as well as the subject**, and keeps
+whole groups: typing `axios` brings up every Axios newsletter, not only the
+ones that happen to repeat "Axios" in their own headline.
 
 What you have already ticked stays ticked while you filter, so the way to
 pick from several publications is to filter, tick, backspace out, and filter
