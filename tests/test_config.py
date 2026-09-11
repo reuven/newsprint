@@ -510,3 +510,40 @@ def test_a_config_that_cannot_be_read_is_left_to_the_loader(tmp_path: Path) -> N
     from newsprint.config import rename_folder_key
 
     assert rename_folder_key(tmp_path / "not-here.toml") is False
+
+
+def test_two_a_side_reads_at_a_larger_default_size(tmp_path: Path) -> None:
+    """A cell twice the size at the same type size does not give larger
+    type, it gives longer lines - 88 characters, where 55 is comfortable.
+    Measured on a real packet, 14pt puts the landscape cell back at the
+    same 55 characters the four-up default gets."""
+    path = tmp_path / "config.toml"
+    path.write_text("[print]\ncells_per_side = 2\n")
+    assert load_config(path).layout.font_size_pt == pytest.approx(14.0)
+
+
+def test_the_flag_gets_the_larger_default_too(tmp_path: Path) -> None:
+    """--cells-per-side 2 is how the layout is usually tried for the first
+    time, and it is exactly the case where nothing has been written down
+    to size the type. The default has to follow the layout actually being
+    printed, not the one in the file."""
+    path = tmp_path / "config.toml"
+    path.write_text("[print]\ncells_per_side = 4\n")
+    config = load_config(path, cells_override=2)
+    assert config.layout.font_size_pt == pytest.approx(14.0)
+
+
+def test_a_font_size_written_down_is_never_overridden(tmp_path: Path) -> None:
+    """The larger size is a default, not a policy. Someone who sets 11
+    gets 11."""
+    path = tmp_path / "config.toml"
+    path.write_text("[print]\ncells_per_side = 2\n\n[layout]\nfont_size_pt = 11.0\n")
+    assert load_config(path).layout.font_size_pt == pytest.approx(11.0)
+
+
+def test_four_a_side_keeps_the_smaller_default(tmp_path: Path) -> None:
+    """The default layout is unchanged: 9pt in an A6 cell is already the
+    55-character measure."""
+    path = tmp_path / "config.toml"
+    path.write_text("[print]\ncells_per_side = 4\n")
+    assert load_config(path).layout.font_size_pt == pytest.approx(9.0)

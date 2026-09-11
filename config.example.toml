@@ -35,8 +35,12 @@ duplex  = "two-sided-long-edge"
 
 [layout]
 margin_mm   = 9.0
-font_size_pt = 9.0
 line_height = 1.35
+# font_size_pt = 9.0             # left unset on purpose: the default
+                                  # follows the layout, 9pt four a side
+                                  # and 14pt two a side, both of which
+                                  # give about 55 characters to the line.
+                                  # Set it here to override both.
 
 [window]
 fallback_days = 7                # how far back to look with no previous run

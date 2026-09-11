@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from bs4 import BeautifulSoup, Tag
 
 from newsprint.clean import clean_document
 from newsprint.models import Document, Origin
@@ -3214,3 +3215,122 @@ def test_a_height_with_two_decimal_points_is_not_a_number() -> None:
         f"<p>{_PROSE}</p></div></body></html>"
     )
     assert clean_document(document(html)).images_kept == 0
+
+
+_PROSE_PARAGRAPHS = "".join(
+    f"<p>{sentence}</p>"
+    for sentence in (
+        (
+            "During my entire life I have only had two jobs, and in the "
+            "first one I played a role in developing software to empower "
+            "people."
+        ),
+        (
+            "In my second, which I started full time in 2008, I am giving "
+            "away the wealth I made with the goal of a healthier, better "
+            "educated and more equitable world."
+        ),
+        (
+            "Both of these experiences inform my perspective on artificial "
+            "intelligence, and on the turbulent era it is bringing with it."
+        ),
+    )
+)
+
+
+def test_a_layout_table_is_unwrapped_so_its_text_can_break_across_pages() -> None:
+    """Bulk mail nests everything in tables, and WeasyPrint will not split
+    one across a page. The Gates Notes article arrived inside a single
+    two-column table - one gutter cell, one content cell - so when it fit
+    on a page by itself it moved there whole, leaving the page before it
+    empty below the masthead. A table carrying one column of content is a
+    wrapper, and unwrapping it lets the text page like any other text."""
+    html = (
+        "<html><body><table><tr>"
+        '<td class="gutter"></td>'
+        f"<td>{_PROSE_PARAGRAPHS}</td>"
+        "</tr></table></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "<table" not in cleaned.html
+    assert "<td" not in cleaned.html
+    assert "only had two jobs" in cleaned.html
+    assert "turbulent era" in cleaned.html
+
+
+def _table(html: str) -> Tag:
+    """The first <table> in `html`, parsed the way clean_document parses."""
+    found = BeautifulSoup(html, "lxml").find("table")
+    assert isinstance(found, Tag)
+    return found
+
+
+def test_a_table_with_real_columns_is_not_a_layout_table() -> None:
+    """Two cells in a row that both carry text is a table saying something
+    by its arrangement. Unwrapping that would run the columns together
+    into one paragraph and lose what the reader is meant to compare."""
+    from newsprint.clean import is_layout_table
+
+    assert not is_layout_table(
+        _table(
+            "<table>"
+            "<tr><td>Nvidia</td><td>up four percent on the day</td></tr>"
+            "<tr><td>Intel</td><td>down two percent on the day</td></tr>"
+            "</table>"
+        )
+    )
+
+
+def test_an_empty_gutter_cell_does_not_make_a_table_two_columns() -> None:
+    """The case that forced counting content rather than cells: bulk mail
+    pads its layout tables with empty cells for margins, and a table with
+    one article and one empty gutter beside it is a one-column table."""
+    from newsprint.clean import is_layout_table
+
+    assert is_layout_table(
+        _table(
+            '<table><tr><td class="gutter"></td>'
+            "<td><p>The turbulent AI era is here.</p></td></tr></table>"
+        )
+    )
+
+
+def test_a_wrapper_around_a_real_table_is_still_a_wrapper() -> None:
+    """Only a table's own rows decide what it is. Counting the rows of a
+    table nested inside it would make every wrapper look like whatever it
+    happened to be wrapping."""
+    from newsprint.clean import is_layout_table
+
+    outer = _table(
+        "<table><tr><td>"
+        "<table>"
+        "<tr><td>Nvidia</td><td>up four percent on the day</td></tr>"
+        "</table>"
+        "</td></tr></table>"
+    )
+    assert is_layout_table(outer)
+    assert not is_layout_table(outer.find("table"))
+
+
+def test_unwrapping_an_outer_layout_table_spares_a_real_one_inside_it() -> None:
+    """The wrapper goes, the table it was wrapping stays. Unwrapping every
+    tr and td below the outer table - rather than only its own - would
+    flatten the inner one along with it."""
+    from bs4 import BeautifulSoup
+
+    from newsprint.clean import _unwrap_layout_tables
+
+    soup = BeautifulSoup(
+        "<html><body><table><tr><td>"
+        "<p>Here is how the two of them did this week.</p>"
+        "<table>"
+        "<tr><td>Nvidia</td><td>up four percent on the day</td></tr>"
+        "<tr><td>Intel</td><td>down two percent on the day</td></tr>"
+        "</table>"
+        "</td></tr></table></body></html>",
+        "lxml",
+    )
+    assert _unwrap_layout_tables(soup.body) == 1
+    assert len(soup.find_all("table")) == 1
+    assert len(soup.find_all("tr")) == 2, "the inner table keeps both rows"
+    assert "Nvidia" in soup.get_text() and "Intel" in soup.get_text()

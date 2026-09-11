@@ -247,15 +247,16 @@ packet:
 | two a side | 14 | 55 |
 | two a side | 18 | 44 — getting choppy |
 
-So the pair that buys you the 4-up measure at half again the type size is:
+So the type size follows the layout by itself — 9pt four a side, 14pt two
+a side, both about 55 characters to the line. All you set is the layout:
 
 ```toml
 [print]
 cells_per_side = 2
-
-[layout]
-font_size_pt = 14
 ```
+
+or `--cells-per-side 2` for one run. Set `font_size_pt` under `[layout]`
+only to override that, in either direction.
 
 Half as many newsletters to a side means twice as many sheets for the same
 reading, which is the trade.

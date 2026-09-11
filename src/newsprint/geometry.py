@@ -71,12 +71,13 @@ class Paper:
         which keeps the separating fold in the same place and makes the
         cell A5 for an A4 sheet rather than a tall half-column.
 
-        A wider cell is not by itself larger type. Measured: at the
-        default 9pt an A5 cell runs about 116 characters to the line,
-        well past the 45-75 that reads comfortably, where an A6 cell at
-        the same size gives 55. Two a side is the *room* for larger type;
-        layout.font_size_pt is what spends it, and around 18pt brings the
-        measure back to 61.
+        A bigger cell is not by itself larger type. Measured: at the
+        four-up default of 9pt a landscape A5 cell runs about 88
+        characters to the line, past the 45-75 that reads comfortably,
+        where an A6 cell at the same size gives 55. Two a side is the
+        *room* for larger type; layout.font_size_pt is what spends it,
+        and 14pt brings the measure back to 55 - which is why config.py
+        defaults this layout to 14pt rather than 9pt.
         """
         if self.cells_per_side in (2, 4):
             sheet = self.sheet

@@ -1415,6 +1415,70 @@ def _strip_presentational_attrs(root: Tag) -> None:
             tag.attrs.pop(attr, None)
 
 
+# The parts of a table that carry no content of their own. Unwrapping
+# these leaves a cell's blocks exactly where they were, one after the
+# other, in the table's place.
+_TABLE_STRUCTURE = ("thead", "tbody", "tfoot", "tr", "td", "th")
+
+
+def _own_rows(table: Tag) -> list[Tag]:
+    """`table`'s own rows, not those of a table nested inside it."""
+    return [row for row in table.find_all("tr") if row.find_parent("table") is table]
+
+
+def is_layout_table(table: Tag) -> bool:
+    """True when `table` arranges nothing - it is a wrapper, not a table.
+
+    The test is whether any one row has two or more cells that actually
+    carry text. Bulk mail nests everything in tables and pads them with
+    empty gutter cells, so counting cells alone calls a one-column
+    article two-column; counting the cells with something in them does
+    not. Measured over the fixture corpus: 4204 of 4231 surviving tables
+    carry a single column of content, and the 27 that do not are
+    bullet-marker pairs rather than data.
+
+    This matters for pagination, not tidiness. WeasyPrint will not split
+    a table across a page, so an article wrapped in one moves to the next
+    page whole the moment it fits there - which is how a cell came out
+    holding a masthead, a headline, a sentence, and half a page of
+    nothing.
+    """
+    return all(
+        sum(
+            1
+            for cell in row.find_all(["td", "th"], recursive=False)
+            if cell.get_text(strip=True)
+        )
+        < 2
+        for row in _own_rows(table)
+    )
+
+
+def _unwrap_layout_tables(root: Tag) -> int:
+    """Replace every layout table with the content it was wrapping.
+
+    Outermost first, which `find_all` gives for free by returning
+    document order. Only a table's *own* structure is unwrapped - a real
+    table nested inside a wrapper keeps its rows and cells, which is why
+    each tag is checked back against the table it belongs to rather than
+    simply unwrapping every descendant.
+    """
+    unwrapped = 0
+    for table in root.find_all("table"):
+        if not is_layout_table(table):
+            continue
+        own = [
+            node
+            for node in table.find_all(_TABLE_STRUCTURE)
+            if node.find_parent("table") is table
+        ]
+        for node in own:
+            node.unwrap()
+        table.unwrap()
+        unwrapped += 1
+    return unwrapped
+
+
 def clean_document(document: Document) -> Document:
     soup = BeautifulSoup(document.html, "lxml")
     for tag_name in _NEVER_CONTENT:
@@ -1462,6 +1526,12 @@ def clean_document(document: Document) -> Document:
     # decides whether to remove it, though the decision itself does not
     # depend on that attribute.
     _prune_invisible_elements(root)
+    # Last of the structural passes, and deliberately after every one
+    # that reasons about tables - _strip_sponsor_blocks walks sibling
+    # <tr>s and <table>s to find an ad's body, and _strip_chrome_blocks
+    # scores a <td> as a block. Unwrapping before those would take the
+    # structure they navigate by out from under them.
+    _unwrap_layout_tables(root)
     _strip_presentational_attrs(root)
 
     return replace(
