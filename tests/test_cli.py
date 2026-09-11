@@ -188,7 +188,10 @@ def test_the_config_path_is_reported_before_anything_else(
     anything appears. The config path - known before any network call -
     must be the very first thing printed, so a run gives feedback
     immediately."""
-    monkeypatch.setattr("newsprint.cli.fetch_queue", lambda config, no_pick: ([], None))
+    monkeypatch.setattr(
+        "newsprint.cli.fetch_queue",
+        lambda config, no_pick, since_override=None: ([], None),
+    )
     config_path = tmp_path / "absent.toml"
 
     result = CliRunner().invoke(main, ["--config", str(config_path)])
@@ -198,7 +201,10 @@ def test_the_config_path_is_reported_before_anything_else(
 
 
 def test_an_empty_queue_says_so(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("newsprint.cli.fetch_queue", lambda config, no_pick: ([], None))
+    monkeypatch.setattr(
+        "newsprint.cli.fetch_queue",
+        lambda config, no_pick, since_override=None: ([], None),
+    )
     result = CliRunner().invoke(main, ["--config", str(tmp_path / "absent.toml")])
     assert result.exit_code == 0
     assert "Nothing starred" in result.output
@@ -226,7 +232,7 @@ def test_dry_run_never_prints_and_never_retires(monkeypatch, tmp_path: Path) -> 
     retired: list[list[int]] = []
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([document], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([document], "INBOX/Trash"),
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: spooled.append(pdf))
     monkeypatch.setattr(
@@ -261,7 +267,7 @@ def test_declining_the_prompt_prints_nothing(monkeypatch, tmp_path: Path) -> Non
     spooled: list[Path] = []
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([document], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([document], "INBOX/Trash"),
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: spooled.append(pdf))
     monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "x")
@@ -297,7 +303,7 @@ def test_accepting_prints_then_retires_in_that_order(
     events: list[str] = []
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "newsprint.cli.spool",
@@ -327,7 +333,7 @@ def test_no_retire_spools_but_never_calls_retire_printed(
     retired: list[list[int]] = []
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "newsprint.cli.spool",
@@ -359,7 +365,7 @@ def test_no_retire_records_the_outcome_as_printed_kept(
     recorded: list[dict] = []
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr(
@@ -392,7 +398,7 @@ def test_dry_run_wins_when_combined_with_no_retire(monkeypatch, tmp_path: Path) 
     spooled: list[Path] = []
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: spooled.append(pdf))
 
@@ -418,7 +424,7 @@ def test_paper_letter_propagates_end_to_end(monkeypatch, tmp_path: Path) -> None
 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
 
     result = CliRunner().invoke(
@@ -473,7 +479,7 @@ def test_a_url_sourced_document_prints_without_ever_calling_retire(
     retired: list[list[int]] = []
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([document], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([document], "INBOX/Trash"),
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr(
@@ -500,7 +506,7 @@ def test_a_print_failure_leaves_mail_untouched(monkeypatch, tmp_path: Path) -> N
 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("newsprint.cli.spool", explode)
     monkeypatch.setattr(
@@ -545,7 +551,7 @@ def test_a_retire_failure_after_printing_is_reported_not_crashed(
 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
 
@@ -574,7 +580,7 @@ def test_an_imap_readonly_error_from_retire_is_reported_not_crashed(
 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
 
@@ -615,7 +621,7 @@ def test_a_retire_connection_failure_after_printing_is_reported_not_crashed(
 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr("newsprint.cli.Mailbox", _ExplodingMailbox)
@@ -646,7 +652,7 @@ def test_retirement_outcome_is_logged(monkeypatch, tmp_path: Path) -> None:
     recorded: list[dict] = []
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr(
@@ -675,7 +681,7 @@ def test_a_partial_retirement_outcome_is_logged(monkeypatch, tmp_path: Path) -> 
     recorded: list[dict] = []
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: (
+        lambda config, no_pick, since_override=None: (
             [
                 _queued(identifier="<d@example.com>", uid=4),
                 _queued("<g@example.com>", 7),
@@ -717,7 +723,7 @@ def test_an_unrecoverable_message_is_named_in_the_run_log(
     recorded: list[dict] = []
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr(
@@ -764,7 +770,7 @@ def test_image_counts_are_reported(monkeypatch, tmp_path: Path) -> None:
     )
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([document], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([document], "INBOX/Trash"),
     )
 
     result = CliRunner().invoke(
@@ -804,7 +810,7 @@ def test_kept_images_are_counted_and_a_fetch_failure_is_reported_distinctly(
     )
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([document], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([document], "INBOX/Trash"),
     )
 
     result = CliRunner().invoke(
@@ -832,7 +838,7 @@ def test_a_dropped_chrome_block_is_reported(monkeypatch, tmp_path: Path) -> None
     )
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([document], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([document], "INBOX/Trash"),
     )
 
     result = CliRunner().invoke(
@@ -873,7 +879,7 @@ def test_a_dropped_duplicate_title_is_reported_distinctly(
     )
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([document], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([document], "INBOX/Trash"),
     )
 
     result = CliRunner().invoke(
@@ -892,7 +898,8 @@ def test_a_document_that_cannot_be_built_is_reported(
 ) -> None:
     """A newsletter that cleans down to nothing is named, not silently lost."""
     monkeypatch.setattr(
-        "newsprint.cli.fetch_queue", lambda config, no_pick: ([_empty()], None)
+        "newsprint.cli.fetch_queue",
+        lambda config, no_pick, since_override=None: ([_empty()], None),
     )
     result = CliRunner().invoke(
         main, ["--no-preview", "--config", str(tmp_path / "absent.toml")]
@@ -942,7 +949,8 @@ def test_a_teaser_is_reported_on_stdout_with_subject_and_word_count(
     it must be on stdout (Click's non-error stream), not buried on
     stderr the way an ordinary build failure is."""
     monkeypatch.setattr(
-        "newsprint.cli.fetch_queue", lambda config, no_pick: ([_teaser()], None)
+        "newsprint.cli.fetch_queue",
+        lambda config, no_pick, since_override=None: ([_teaser()], None),
     )
     result = CliRunner().invoke(
         main, ["--no-preview", "--config", str(tmp_path / "absent.toml")]
@@ -963,7 +971,7 @@ def test_a_skipped_teaser_is_not_retired(monkeypatch, tmp_path: Path) -> None:
     retired: list[list[int]] = []
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_teaser()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_teaser()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "newsprint.cli.retire_printed",
@@ -986,7 +994,10 @@ def test_a_skipped_teaser_is_excluded_from_uids_alongside_a_real_build(
     that actually reached the PDF."""
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued(), _teaser()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: (
+            [_queued(), _teaser()],
+            "INBOX/Trash",
+        ),
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
 
@@ -1012,7 +1023,10 @@ def test_skipped_teasers_are_recorded_in_the_run_log(
     recorded: list[dict] = []
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued(), _teaser()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: (
+            [_queued(), _teaser()],
+            "INBOX/Trash",
+        ),
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
     monkeypatch.setattr(
@@ -1096,7 +1110,7 @@ def test_fetch_queue_reuses_one_connection_for_starred_and_unstarred(
     monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "newsprint.cli.window_since",
-        lambda fallback_days, today: date(2026, 9, 1),
+        lambda fallback_days, today, override=None: date(2026, 9, 1),
     )
     # Force the non-interactive branch deterministically, regardless of
     # whether this test process happens to have a real tty on stdin.
@@ -1374,7 +1388,7 @@ def test_password_never_appears_in_the_output(monkeypatch, mail_config) -> None:
     )
     monkeypatch.setattr(
         "newsprint.cli.window_since",
-        lambda fallback_days, today: date(2026, 9, 1),
+        lambda fallback_days, today, override=None: date(2026, 9, 1),
     )
 
     result = CliRunner().invoke(
@@ -1493,7 +1507,7 @@ def test_a_partial_retire_failure_is_reported_accurately(
 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: (
+        lambda config, no_pick, since_override=None: (
             [
                 _queued(identifier="<d@example.com>", uid=4),
                 _queued("<g@example.com>", 7),
@@ -1525,7 +1539,7 @@ def test_preview_open_failure_does_not_crash_the_run(
     echoed, which is enough to open it by hand."""
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
 
     def missing(command, **kw):
@@ -1551,7 +1565,7 @@ def test_preview_falls_back_to_xdg_open_when_open_is_missing(
 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("newsprint.cli.subprocess.run", fake_run)
 
@@ -1573,7 +1587,7 @@ def test_the_progress_bar_leaves_no_artifacts_in_captured_output(
     bar itself."""
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
 
     result = CliRunner().invoke(
@@ -1594,7 +1608,10 @@ def test_a_failing_document_among_others_is_still_reported_not_swallowed(
     get lost because the bar consumed the iteration."""
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued(), _empty()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: (
+            [_queued(), _empty()],
+            "INBOX/Trash",
+        ),
     )
 
     result = CliRunner().invoke(
@@ -1616,7 +1633,7 @@ def test_contents_non_convergence_is_reported_not_silently_shipped(
     silently print numbers that might be wrong."""
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "newsprint.cli.build_contents",
@@ -1640,7 +1657,7 @@ def test_the_finishing_phase_is_reported_in_order(monkeypatch, tmp_path: Path) -
     multi-second silence."""
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
 
     result = CliRunner().invoke(
@@ -1661,7 +1678,7 @@ def test_a_successful_run_opens_the_pdf_in_preview(monkeypatch, tmp_path: Path) 
     opened: list[list[str]] = []
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "newsprint.cli.subprocess.run",
@@ -1692,7 +1709,7 @@ def test_summary_disabled_by_default_never_touches_build_summary_pages(
 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("newsprint.cli.build_summary_pages", explode)
 
@@ -1714,7 +1731,7 @@ def test_summary_flag_enables_it_even_though_config_says_off(
     calls: list[object] = []
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "newsprint.cli.build_summary_pages",
@@ -1756,7 +1773,7 @@ def test_no_summary_flag_disables_it_even_though_config_says_on(
 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("newsprint.cli.build_summary_pages", explode)
 
@@ -1783,7 +1800,7 @@ def test_summary_flag_absent_lets_config_decide(monkeypatch, tmp_path: Path) -> 
     calls: list[object] = []
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "newsprint.cli.build_summary_pages",
@@ -1866,7 +1883,7 @@ def test_summary_enabled_success_inserts_pages_and_reports_cost(
 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "newsprint.cli.build_summary_pages",
@@ -1925,7 +1942,7 @@ def test_summary_success_without_token_counts_omits_the_token_clause(
 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "newsprint.cli.build_summary_pages",
@@ -1961,7 +1978,7 @@ def test_summary_failure_is_reported_on_stdout_and_the_packet_still_prints(
 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "newsprint.cli.build_summary_pages",
@@ -2001,7 +2018,7 @@ def test_an_empty_summary_outcome_prints_no_summary_line_at_all(
 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "newsprint.cli.build_summary_pages",
@@ -2068,7 +2085,7 @@ def test_summary_pages_shift_the_contents_starting_numbers(
 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
 
     baseline = CliRunner().invoke(
@@ -2151,7 +2168,7 @@ def test_an_unconfigured_picker_is_skipped_with_a_message_not_a_crash(
     monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "newsprint.cli.window_since",
-        lambda fallback_days, today: date(2026, 9, 1),
+        lambda fallback_days, today, override=None: date(2026, 9, 1),
     )
 
     result = CliRunner().invoke(
@@ -2182,7 +2199,7 @@ def test_dry_run_shows_the_unstarred_window_and_skips_the_prompt(
     monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "newsprint.cli.window_since",
-        lambda fallback_days, today: date(2026, 9, 1),
+        lambda fallback_days, today, override=None: date(2026, 9, 1),
     )
 
     result = CliRunner().invoke(
@@ -2242,7 +2259,7 @@ def test_dry_run_still_prompts_when_stdin_is_a_terminal(
     monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "newsprint.cli.window_since",
-        lambda fallback_days, today: date(2026, 9, 1),
+        lambda fallback_days, today, override=None: date(2026, 9, 1),
     )
     monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: True)
     monkeypatch.setattr("newsprint.cli.questionary_prompt", _pick_by_title("Pick One"))
@@ -2283,7 +2300,7 @@ def test_a_non_interactive_run_skips_the_prompt_and_does_not_hang(
     monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "newsprint.cli.window_since",
-        lambda fallback_days, today: date(2026, 9, 1),
+        lambda fallback_days, today, override=None: date(2026, 9, 1),
     )
 
     result = CliRunner().invoke(
@@ -2301,7 +2318,7 @@ def test_no_candidates_in_the_window_says_so_and_skips_the_prompt(
     monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "newsprint.cli.window_since",
-        lambda fallback_days, today: date(2026, 9, 1),
+        lambda fallback_days, today, override=None: date(2026, 9, 1),
     )
 
     result = CliRunner().invoke(
@@ -2333,7 +2350,7 @@ def test_a_capped_non_interactive_listing_says_how_many_were_omitted(
     monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "newsprint.cli.window_since",
-        lambda fallback_days, today: date(2026, 9, 1),
+        lambda fallback_days, today, override=None: date(2026, 9, 1),
     )
 
     result = CliRunner().invoke(
@@ -2362,7 +2379,7 @@ def test_selecting_two_rows_adds_exactly_those_newsletters(
     monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "newsprint.cli.window_since",
-        lambda fallback_days, today: date(2026, 9, 1),
+        lambda fallback_days, today, override=None: date(2026, 9, 1),
     )
     monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: True)
     monkeypatch.setattr(
@@ -2407,7 +2424,7 @@ def test_selected_picks_shift_the_contents_starting_numbers(
     monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "newsprint.cli.window_since",
-        lambda fallback_days, today: date(2026, 9, 1),
+        lambda fallback_days, today, override=None: date(2026, 9, 1),
     )
     # Both non-dry-run invocations below decline the print confirm, which
     # calls runlog.record("cancelled") for real - route it to tmp_path, not
@@ -2471,7 +2488,7 @@ def test_confirming_with_nothing_checked_skips_selection(
     monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "newsprint.cli.window_since",
-        lambda fallback_days, today: date(2026, 9, 1),
+        lambda fallback_days, today, override=None: date(2026, 9, 1),
     )
     monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: True)
     monkeypatch.setattr("newsprint.cli.questionary_prompt", _pick_nothing)
@@ -2511,7 +2528,7 @@ def test_a_picked_newsletter_is_retired_like_any_other(
     monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "newsprint.cli.window_since",
-        lambda fallback_days, today: date(2026, 9, 1),
+        lambda fallback_days, today, override=None: date(2026, 9, 1),
     )
     monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: True)
     monkeypatch.setattr("newsprint.cli.questionary_prompt", _pick_by_title("Pick"))
@@ -2560,7 +2577,7 @@ def test_picker_trash_is_used_when_the_starred_queue_was_empty(
     monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "newsprint.cli.window_since",
-        lambda fallback_days, today: date(2026, 9, 1),
+        lambda fallback_days, today, override=None: date(2026, 9, 1),
     )
     monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: True)
     monkeypatch.setattr("newsprint.cli.questionary_prompt", _pick_by_title("Pick"))
@@ -2632,7 +2649,7 @@ def test_fetch_queue_merges_a_pick_between_two_starred_documents_by_date(
     monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
     monkeypatch.setattr(
         "newsprint.cli.window_since",
-        lambda fallback_days, today: date(2026, 9, 1),
+        lambda fallback_days, today, override=None: date(2026, 9, 1),
     )
     monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: True)
     monkeypatch.setattr(
@@ -2720,7 +2737,7 @@ def test_the_summary_announces_itself_before_the_wait(
 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "newsprint.cli.build_summary_pages",
@@ -2752,7 +2769,7 @@ def test_the_summary_notice_warns_that_it_takes_a_while(
 
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr(
         "newsprint.cli.build_summary_pages",
@@ -2793,7 +2810,7 @@ def test_no_summary_notice_when_summaries_are_disabled(tmp_path: Path) -> None:
 def _no_mail(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
     )
     monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: tmp_path / "r")
 
@@ -2938,7 +2955,7 @@ def test_dry_run_is_exactly_no_print_plus_no_retire(
         events: dict[str, object] = {"spool": 0, "retire": 0, "runlog": []}
         monkeypatch.setattr(
             "newsprint.cli.fetch_queue",
-            lambda config, no_pick: ([_queued()], "INBOX/Trash"),
+            lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
         )
         monkeypatch.setattr(
             "newsprint.cli.spool",
@@ -3208,7 +3225,7 @@ def test_setup_flag_runs_the_wizard_and_builds_nothing(
     monkeypatch.setattr("newsprint.cli.run_setup", lambda path: called.append(path))
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
-        lambda config, no_pick: (_ for _ in ()).throw(
+        lambda config, no_pick, since_override=None: (_ for _ in ()).throw(
             AssertionError("--setup must not fetch mail")
         ),
     )
@@ -4022,3 +4039,52 @@ def test_a_rename_that_finds_no_line_says_nothing(monkeypatch, tmp_path) -> None
     )
     assert "Renamed" not in result.output
     assert config.read_text() == 'mail = { folder = "INBOX/reading", trash = "auto" }\n'
+
+
+def test_since_sets_the_unstarred_window_from_the_command_line(
+    monkeypatch, mail_config
+) -> None:
+    """--since names the first day the unstarred review should include,
+    instead of letting the last successful run decide it. The date the
+    user typed is what reaches the server's search."""
+    searched: list[date] = []
+
+    class _Box(_QueueBox):
+        unstarred_uids = (20,)
+        extra_messages: ClassVar[dict[int, bytes]] = {
+            20: _candidate_raw(20, "Money Stuff", "Extra Issue")
+        }
+
+        def search_unflagged_since(self, since):
+            searched.append(since)
+            return super().search_unflagged_since(since)
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", _Box)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--dry-run",
+            "--no-preview",
+            "--since",
+            "2026-08-01",
+            "--config",
+            str(mail_config.path),
+        ],
+    )
+    assert result.exit_code == 0
+    assert searched == [date(2026, 8, 1)]
+    assert "since 1 Aug 2026" in result.output
+
+
+def test_since_rejects_something_that_is_not_a_date(mail_config) -> None:
+    """Click does the parsing, so the failure is a usage error before any
+    connection is opened - no mail is touched to find out the date was
+    a typo."""
+    result = CliRunner().invoke(
+        main,
+        ["--since", "last tuesday", "--config", str(mail_config.path)],
+    )
+    assert result.exit_code == 2
+    assert "2026-08-01" in result.output or "%Y-%m-%d" in result.output

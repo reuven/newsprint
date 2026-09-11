@@ -45,6 +45,54 @@ def test_window_since_uses_the_last_successful_runs_date(tmp_path: Path) -> None
     assert since == date(2026, 8, 28)
 
 
+def test_an_explicit_since_beats_the_last_run(tmp_path: Path) -> None:
+    """The whole point of asking for a date is to look further back than
+    the last run did - so a prior run, which would otherwise decide the
+    window, must not override the date the user typed."""
+    runlog.record(
+        {"outcome": "printed", "at": "2026-09-10T15:00:00+00:00"}, state_dir=tmp_path
+    )
+    since = window_since(
+        fallback_days=7,
+        today=date(2026, 9, 11),
+        state_dir=tmp_path,
+        override=date(2026, 8, 1),
+    )
+    assert since == date(2026, 8, 1)
+
+
+def test_an_explicit_since_beats_the_fallback_with_no_prior_run(
+    tmp_path: Path,
+) -> None:
+    """And with no run to beat, it still decides - a first run on a new
+    machine should be able to reach back past fallback_days."""
+    since = window_since(
+        fallback_days=7,
+        today=date(2026, 9, 11),
+        state_dir=tmp_path / "never-created",
+        override=date(2026, 8, 1),
+    )
+    assert since == date(2026, 8, 1)
+
+
+def test_an_explicit_since_may_be_narrower_than_the_last_run(
+    tmp_path: Path,
+) -> None:
+    """It is a threshold the user set, not a floor on the usual window:
+    asking for a later date than the last run is how you say "just show
+    me today's"."""
+    runlog.record(
+        {"outcome": "printed", "at": "2026-09-01T15:00:00+00:00"}, state_dir=tmp_path
+    )
+    since = window_since(
+        fallback_days=7,
+        today=date(2026, 9, 11),
+        state_dir=tmp_path,
+        override=date(2026, 9, 10),
+    )
+    assert since == date(2026, 9, 10)
+
+
 def test_window_since_ignores_a_no_retire_rehearsal(tmp_path: Path) -> None:
     """printed-kept must not advance the window - a --no-retire rehearsal
     never counts as a successful run, so repeated rehearsing must not make

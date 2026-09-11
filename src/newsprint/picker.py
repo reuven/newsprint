@@ -187,16 +187,27 @@ def source_label(publication: str, source_host: str | None) -> str | None:
 
 
 def window_since(
-    fallback_days: int, today: date, state_dir: Path | None = None
+    fallback_days: int,
+    today: date,
+    state_dir: Path | None = None,
+    override: date | None = None,
 ) -> date:
     """The first day the unstarred review window should include.
 
-    `last_successful_run` already distinguishes `printed` (a genuine run)
-    from `printed-kept` (a --no-retire rehearsal, which deliberately does
-    not count) - see runlog.last_successful_run's own docstring. That
-    means a rehearsal never advances this window, so the user does not
-    lose track of what they have already been shown.
+    `override` is a date the user named on the command line, and it wins
+    outright - in both directions. Asking for an earlier date than the
+    last run is the point of asking at all; asking for a later one is how
+    you say "just today's, never mind the backlog". Neither is second
+    -guessed here.
+
+    Failing that, `last_successful_run` already distinguishes `printed`
+    (a genuine run) from `printed-kept` (a --no-retire rehearsal, which
+    deliberately does not count) - see runlog.last_successful_run's own
+    docstring. That means a rehearsal never advances this window, so the
+    user does not lose track of what they have already been shown.
     """
+    if override is not None:
+        return override
     last = last_successful_run(state_dir=state_dir)
     if last is not None:
         return last.date()

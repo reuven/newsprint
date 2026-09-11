@@ -257,7 +257,7 @@ def _offer_picks(
 
 
 def fetch_queue(
-    config: Config, no_pick: bool = False
+    config: Config, no_pick: bool = False, since_override: date | None = None
 ) -> tuple[list[Document], str | None]:
     """Fetch the starred queue and, unless no_pick, offer this week's
     unstarred newsletters to add - both on the SAME read-only IMAP
@@ -319,7 +319,11 @@ def fetch_queue(
             if not no_pick:
                 try:
                     today = datetime.now(UTC).date()
-                    since = window_since(config.fallback_days, today)
+                    since = window_since(
+                        config.fallback_days,
+                        today,
+                        override=since_override,
+                    )
                     picked, picked_uids = _offer_picks(box, config, names, since, today)
                     collected += picked
                 except MailError as error:
@@ -717,6 +721,20 @@ def about() -> str:
     help=("Skip the prompt to add this week's unstarred newsletters, for a fast run."),
 )
 @click.option(
+    "--since",
+    "since_override",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    default=None,
+    help=(
+        "The first day the unstarred review should include, as YYYY-MM-DD. "
+        "Without it the window opens at your last successful run, or "
+        "[window] fallback_days back if there has not been one. An earlier "
+        "date reaches further back than that; a later one narrows it to "
+        "just the last day or two. Does not affect starred messages, which "
+        "are always collected however old they are."
+    ),
+)
+@click.option(
     "--summary/--no-summary",
     "summary",
     default=None,
@@ -741,6 +759,7 @@ def main(
     unretire: bool,
     no_preview: bool,
     no_pick: bool,
+    since_override: datetime | None,
     summary: bool | None,
 ) -> None:
     """Print this week's starred newsletters, four to a side, duplex."""
@@ -766,7 +785,9 @@ def main(
             paper_override=paper,
             cells_override=int(cells_per_side) if cells_per_side else None,
         )
-        documents, trash = fetch_queue(config, no_pick)
+        documents, trash = fetch_queue(
+            config, no_pick, since_override.date() if since_override else None
+        )
     except (MailError, ConfigError) as error:
         raise click.ClickException(str(error)) from error
 

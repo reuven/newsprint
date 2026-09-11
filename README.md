@@ -214,6 +214,11 @@ Preview for a look, and asks before printing. Useful flags:
 - `--cells-per-side 2` / `--cells-per-side 4` — override how many
   newsletters go on each side of a sheet. See [Bigger
   type](#bigger-type).
+- `--since YYYY-MM-DD` — the first day the unstarred review should
+  include, instead of letting the last successful run decide. Reach
+  further back after a few weeks away (`--since 2026-08-01`), or narrow it
+  to the last day or two. Starred messages are unaffected — those are
+  always collected, however old.
 - `--config PATH` — use a config file other than the default.
 
 Run `newsprint --help` for the full list, and `newsprint --version` for the
