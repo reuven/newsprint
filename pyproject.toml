@@ -54,6 +54,12 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+# mutmut builds its mutated copy of the project in mutants/, tests and
+# all. Left to itself pytest collects that as a second copy of every test
+# module and fails on the duplicate basenames, so a mutation run in the
+# background breaks every ordinary test run beside it.
+testpaths = ["tests"]
+norecursedirs = ["mutants"]
 filterwarnings = [
     "error",
     "ignore:builtin type .* has no __module__ attribute:DeprecationWarning",

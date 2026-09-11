@@ -406,7 +406,12 @@ missing sentence, all three required:
   fluidly.
 
 A kept image is fetched at print time, converted to grayscale, and resized
-down to the cell's text column — 87mm at 200dpi, so 685px. Nothing else is
+down to the cell's text column — 87mm at 200dpi, so 685px. A chart set on
+a dark ground is turned over, so it prints as ink on white like the type
+around it: white-on-black is a screen convention, and on paper it is a
+page of toner. The test is the image's median grey level — Apricitas
+Economics' charts measure 41 of 255 against an ordinary chart's 240, so
+nothing real sits near the line. Nothing else is
 ever fetched: a dropped image's URL is recorded for the run report and
 never requested, which is also why tracking pixels never phone home.
 

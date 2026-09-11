@@ -710,3 +710,55 @@ def test_a_margin_wider_than_the_cell_still_gives_a_usable_image_cap(config) -> 
     )
     # One millimetre of column, which at 200dpi is eight pixels.
     assert _cap_width_px(absurd) == 8
+
+
+def _chart(background: int, ink: int, size: tuple[int, int] = (200, 100)) -> bytes:
+    """A chart-shaped image: a solid ground with a bar drawn on it, so the
+    ground is the clear majority of the pixels and decides the median."""
+    from PIL import ImageDraw
+
+    image = Image.new("L", size, color=background)
+    ImageDraw.Draw(image).rectangle((10, 10, 60, size[1] - 10), fill=ink)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_a_chart_on_a_dark_ground_is_inverted() -> None:
+    """Apricitas sets its charts white-on-black. Printed as sent, a page
+    of them is a page of toner - and on paper the convention is the other
+    way round anyway. Measured on the real thing: median level 41 of 255.
+    """
+    from newsprint.render import _grayscale_and_cap
+
+    processed = _grayscale_and_cap(_chart(background=20, ink=230), max_width_px=600)
+    with Image.open(BytesIO(processed)) as result:
+        assert result.getpixel((150, 50)) > 200, "the ground came out light"
+        assert result.getpixel((30, 50)) < 60, "the bar came out dark"
+
+
+def test_a_chart_on_a_light_ground_is_left_alone() -> None:
+    """Most charts are already black-on-white, and inverting those would
+    be the bug this feature is meant to fix, pointed the other way."""
+    from newsprint.render import _grayscale_and_cap
+
+    processed = _grayscale_and_cap(_chart(background=240, ink=15), max_width_px=600)
+    with Image.open(BytesIO(processed)) as result:
+        assert result.getpixel((150, 50)) > 200, "the ground stayed light"
+        assert result.getpixel((30, 50)) < 60, "the bar stayed dark"
+
+
+def test_mid_grey_is_light_enough_to_leave_alone() -> None:
+    """The threshold is "darker than mid-grey", so a ground at exactly
+    mid-grey is not dark. An image with no clear ground at all is the
+    case this pins down: inverting it would be a coin flip either way, so
+    the rule has to land somewhere on purpose."""
+    from newsprint.render import _grayscale_and_cap
+
+    flat = Image.new("L", (100, 100), color=128)
+    buffer = BytesIO()
+    flat.save(buffer, format="PNG")
+
+    processed = _grayscale_and_cap(buffer.getvalue(), max_width_px=600)
+    with Image.open(BytesIO(processed)) as result:
+        assert result.getpixel((50, 50)) == 128
