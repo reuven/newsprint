@@ -1,5 +1,5 @@
 import re
-from datetime import UTC, date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import ClassVar, Self
 
@@ -427,7 +427,7 @@ def test_paper_letter_propagates_end_to_end(monkeypatch, tmp_path: Path) -> None
     pdf_path = next(
         line.strip()
         for line in result.output.splitlines()
-        if line.strip().endswith("sheets.pdf")
+        if line.strip().endswith(".pdf") and "newsprint-" in line
     )
     with pymupdf.open(pdf_path) as document:
         rect = document[0].rect
@@ -2828,7 +2828,12 @@ def test_output_to_a_directory_names_the_file_by_date(
     )
     assert result.exit_code == 0
     today = datetime.now(UTC).date().isoformat()
-    assert (folder / f"newsprint-{today}.pdf").is_file(), result.output
+    written = list(folder.glob("*.pdf"))
+    assert len(written) == 1, result.output
+    # Dated, and stamped with the hour so a second build the same day
+    # sits beside the first rather than replacing it.
+    assert written[0].name.startswith(f"newsprint-{today}-")
+    assert re.fullmatch(rf"newsprint-{today}-\d{{4}}\.pdf", written[0].name)
 
 
 def test_no_print_asks_before_retiring_and_never_spools(
@@ -3512,3 +3517,72 @@ def test_a_picked_newsletter_gets_the_readers_own_publication_name(
     _result, listed = _offer(_Box(), mail_config, names=names)
     assert "The Renamed Weekly" in listed
     assert "Alpha Weekly" not in listed
+
+
+# ---------------------------------------------------------------------------
+# What the finished packet is called.
+# ---------------------------------------------------------------------------
+
+
+def test_a_packet_is_named_for_its_date_and_the_hour_it_was_built() -> None:
+    """The file a reader ends up holding - in Preview, in their Downloads
+    folder - is named after what it is. "sheets.pdf" tells them nothing,
+    and two of them in one folder tell them less than nothing.
+
+    The time is in there because a packet can be built twice in a day: a
+    print that jams, or a second look after starring one more thing."""
+    from newsprint.cli import packet_filename
+
+    assert (
+        packet_filename(
+            "", date(2026, 9, 11), datetime(2026, 9, 11, 14, 32, tzinfo=UTC)
+        )
+        == "newsprint-2026-09-11-1432.pdf"
+    )
+
+
+def test_a_packet_title_names_the_file_when_there_is_one() -> None:
+    """packet.title is what the reader calls this thing, so it is what
+    the file should be called too - reduced to something a file name can
+    hold without quoting."""
+    from newsprint.cli import packet_filename
+
+    assert (
+        packet_filename(
+            "Family Shabbat Reading",
+            date(2026, 9, 11),
+            datetime(2026, 9, 11, 8, 5, tzinfo=UTC),
+        )
+        == "family-shabbat-reading-2026-09-11-0805.pdf"
+    )
+
+
+def test_a_title_that_is_all_punctuation_falls_back_to_the_tool_name() -> None:
+    """Nothing survives the reduction, so there is no name in it to use -
+    and a file called "-2026-09-11-1432.pdf" is worse than one that says
+    what built it."""
+    from newsprint.cli import packet_filename
+
+    assert (
+        packet_filename(
+            "!!! ???", date(2026, 9, 11), datetime(2026, 9, 11, 14, 32, tzinfo=UTC)
+        )
+        == "newsprint-2026-09-11-1432.pdf"
+    )
+
+
+def test_a_very_long_title_is_cut_to_a_usable_length() -> None:
+    """A title is free text and a file name is not. The cut lands on a
+    word boundary rather than mid-word, and never leaves a trailing
+    dash."""
+    from newsprint.cli import packet_filename
+
+    name = packet_filename(
+        "The Very Long Weekly Reading Packet For All Of Us Here At Home",
+        date(2026, 9, 11),
+        datetime(2026, 9, 11, 14, 32, tzinfo=UTC),
+    )
+    stem = name.removesuffix("-2026-09-11-1432.pdf")
+    assert len(stem) <= 40
+    assert not stem.endswith("-")
+    assert name.endswith("-2026-09-11-1432.pdf")

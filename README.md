@@ -166,8 +166,12 @@ Preview for a look, and asks before printing. Useful flags:
   stay starred and will be reprinted next run). Useful for checking that a
   real printout looks right without consuming the print queue.
 - `--output PATH` — write the finished PDF somewhere you can find it
-  instead of a temp directory. An existing directory gets a dated file
-  inside it (`newsprint-2026-09-11.pdf`).
+  instead of a temp directory. An existing directory gets a dated and
+  timed file inside it (`newsprint-2026-09-11-1432.pdf`), so building a
+  second packet the same day sits beside the first rather than replacing
+  it. Set `title` under `[packet]` and that name is used instead
+  (`family-shabbat-reading-2026-09-11-1432.pdf`). Anything that is not an
+  existing directory is taken as the file path to write.
 - `--no-print` — build the PDF but do not send it to a printer; print it
   yourself from the file. Still offers to retire the mail, after asking
   whether the printing actually worked. `--no-print --output ~/reading/` is
