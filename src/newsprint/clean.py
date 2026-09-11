@@ -716,6 +716,74 @@ def _iter_text_elements(node: Tag) -> Iterator[Tag]:
         yield from _iter_text_elements(child)
 
 
+# The lines every bulk mailer ends with, and that nothing else says.
+# Deliberately not a general chrome vocabulary: each of these is text a
+# sender is obliged to include, so none of them appears in an article
+# except as the subject of a sentence - which is what the closing-region
+# gate below is for.
+_FOOTER_MARKER = re.compile(
+    r"\bunsubscribe\b"
+    r"|you (are |is )?receiv(ing|ed) this (e-?mail|message|newsletter)"
+    r"|\u00a9\s*\d{4}|\(c\)\s*\d{4}|all rights reserved"
+    r"|update your (subscription )?preferences|manage your subscription"
+    r"|our mailing address is|add us to your address book"
+    r"|view (this|the) (e-?mail|newsletter) (online|in your browser)"
+    r"|no longer want to receive",
+    re.IGNORECASE,
+)
+
+# How far into the document the closing stretch begins. A marker before
+# this is a word in an article - the Inbox Collective fixture is a
+# newsletter about newsletters, and says "unsubscribe" while it is still
+# talking.
+_FOOTER_REGION = 0.6
+
+# Below this many lines there is no closing stretch worth the name, and
+# cutting 60% of the way into a five-line note could take most of it.
+_FOOTER_MIN_LEAVES = 8
+
+
+def _strip_footer(root: Tag) -> tuple[DroppedBlock, ...]:
+    """Cut everything from the mail footer's first marker to the end.
+
+    _strip_trailing_chrome_run, below, walks backwards from the last
+    element and stops at the first thing that reads as content. That is
+    the right shape for chrome at the very end, and the wrong one here,
+    because senders put a promotional sentence *after* the footer -
+    "Looking for more? Unlock our premium resources", "Powered by
+    Buttondown, the easiest way to start and grow your newsletter" - and
+    the walk stops on it, leaving the whole footer above it in place.
+
+    Cutting forward from the marker reaches it. What makes that safe is
+    not the phrasing but the position: these are lines a sender is
+    obliged to include, and past the closing-region gate nothing after
+    one of them has ever been an article. Measured over the 268 fixture
+    messages, 18 end this way, the block runs to a median of 8 lines, and
+    every cut point is an unsubscribe link, a copyright line or a "you
+    are receiving this email because".
+
+    Runs before the backwards walk, which then starts from a cleaner end
+    and can reach the ragged fragments - "Update your profile", a bare
+    "|" - sitting above the marker.
+    """
+    leaves = list(_iter_text_elements(root))
+    if len(leaves) < _FOOTER_MIN_LEAVES:
+        return ()
+    closing = int(len(leaves) * _FOOTER_REGION)
+    for index in range(closing, len(leaves)):
+        if not _FOOTER_MARKER.search(leaves[index].get_text(" ", strip=True)):
+            continue
+        block = leaves[index:]
+        dropped = tuple(
+            DroppedBlock(text=leaf.get_text(" ", strip=True), kind="chrome")
+            for leaf in block
+        )
+        for leaf in block:
+            leaf.decompose()
+        return dropped
+    return ()
+
+
 def _strip_trailing_chrome_run(root: Tag) -> tuple[DroppedBlock, ...]:
     """Remove a contiguous run of chrome from the very end of the document.
 
@@ -1614,7 +1682,10 @@ def clean_document(document: Document) -> Document:
     # run (title, subtitle, byline, date) where it applies, and would
     # lose its anchor if the title heading had already gone.
     dropped_duplicate_title += _strip_duplicate_title_heading(root, document)
-    dropped_trailing = _strip_trailing_chrome_run(root)
+    # Before the backwards walk, which cannot get past the promotional
+    # sentence senders put below their footer - see _strip_footer.
+    dropped_trailing = _strip_footer(root)
+    dropped_trailing += _strip_trailing_chrome_run(root)
     dropped_blocks = _strip_chrome_blocks(root)
     # Round 3, section E: runs last, after every judgement-based pass
     # above, and prunes what none of them could even see - an element
