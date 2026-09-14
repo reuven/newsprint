@@ -922,27 +922,78 @@ def test_the_trim_list_says_what_each_newsletter_costs() -> None:
     picklist = build_trim_picklist(entries)
 
     assert picklist.total == 3
-    by_publication = {group.publication: group for group in picklist.groups}
-    assert set(by_publication) == {"Paul Krugman", "Axios Markets"}
-    krugman = by_publication["Paul Krugman"]
-    assert [row.length for row in krugman.rows] == ["14 cells", "7 cells"]
-    assert by_publication["Axios Markets"].rows[0].length == "1 cell"
+    rows = [row for group in picklist.groups for row in group.rows]
+    assert [row.length for row in rows] == ["14 cells", "7 cells", "1 cell"]
 
 
-def test_the_trim_list_puts_the_longest_first() -> None:
-    """Ordered by what it costs, heaviest first - the unstarred picker
-    sorts by date because the question there is "what arrived"; here the
-    question is "what is making this packet fifty sheets"."""
+def test_the_trim_list_is_in_packet_order_by_default() -> None:
+    """The order they will appear in the packet, which is the order they
+    arrived - so a reader scanning the editor is scanning the thing they
+    are about to hold, not a rearrangement of it."""
     from newsprint.picker import build_trim_picklist
 
     entries = [
-        (_doc("Axios Markets", "Short one", "2026-09-11", uid=1), 1),
-        (_doc("Paul Krugman", "Long one", "2026-09-10", uid=2), 14),
+        (_doc("Paul Krugman", "Long one", "2026-09-10", uid=1), 14),
+        (_doc("Axios Markets", "Short one", "2026-09-12", uid=2), 1),
         (_doc("Noahpinion", "Middling", "2026-09-11", uid=3), 8),
     ]
     picklist = build_trim_picklist(entries)
-    assert [group.publication for group in picklist.groups] == [
-        "Paul Krugman",
-        "Noahpinion",
-        "Axios Markets",
+
+    rows = [row for group in picklist.groups for row in group.rows]
+    assert [row.document.title for row in rows] == [
+        "Long one",
+        "Middling",
+        "Short one",
     ]
+    # The publication belongs on the row now, because a date-ordered list
+    # cannot carry it in a per-publication heading.
+    assert rows[0].label is not None and "Paul Krugman" in rows[0].label
+    assert all(row.when for row in rows), "every row carries its date"
+
+
+def test_the_trim_list_can_be_sorted_by_length() -> None:
+    from newsprint.picker import build_trim_picklist
+
+    entries = [
+        (_doc("Axios Markets", "Short one", "2026-09-12", uid=1), 1),
+        (_doc("Paul Krugman", "Long one", "2026-09-10", uid=2), 14),
+        (_doc("Noahpinion", "Middling", "2026-09-11", uid=3), 8),
+    ]
+    rows = [
+        row
+        for group in build_trim_picklist(entries, order="length").groups
+        for row in group.rows
+    ]
+    assert [row.document.title for row in rows] == ["Long one", "Middling", "Short one"]
+
+
+def test_the_trim_list_can_be_grouped_by_publication() -> None:
+    """The one order where a heading earns its place: sorted by name, a
+    publication's issues sit together, so it groups the way the unstarred
+    picker does and the rows drop the publication they no longer need."""
+    from newsprint.picker import build_trim_picklist
+
+    entries = [
+        (_doc("Paul Krugman", "Second", "2026-09-11", uid=1), 7),
+        (_doc("Axios Markets", "Short one", "2026-09-12", uid=2), 1),
+        (_doc("Paul Krugman", "First", "2026-09-10", uid=3), 14),
+    ]
+    picklist = build_trim_picklist(
+        entries, order="publication", today=date(2026, 9, 12)
+    )
+
+    assert [group.publication for group in picklist.groups] == [
+        "Axios Markets",
+        "Paul Krugman",
+    ]
+    assert picklist.total == 3
+    krugman = picklist.groups[1]
+    assert [row.document.title for row in krugman.rows] == ["First", "Second"]
+    assert all(row.label is None for row in krugman.rows)
+    # Grouping does not excuse the row of saying what it costs or when it
+    # arrived - those are the two things the editor is read for.
+    assert [row.length for row in krugman.rows] == ["14 cells", "7 cells"]
+    assert all(row.when and "Sep" in row.when for row in krugman.rows)
+    # And "today" is relative to the run, not to the clock: the date is
+    # passed in so a packet built at midnight does not relabel itself.
+    assert "yesterday" in krugman.rows[1].when, krugman.rows[1].when

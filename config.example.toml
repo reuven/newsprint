@@ -33,8 +33,11 @@ printer = ""                     # empty means your system default printer
 paper   = "A4"                   # or "Letter"; override per run with --paper
 duplex  = "two-sided-long-edge"
 trim_above_sheets = 20           # past this many sheets a run stops and
-                                  # lets you uncheck newsletters before
+                                  # lets you untick newsletters before
                                   # printing. 0 never asks.
+trim_order = "date"              # how that list is ordered: "date" is the
+                                  # order it will print in, "publication"
+                                  # groups by name, "length" longest first.
 
 [layout]
 margin_mm   = 9.0

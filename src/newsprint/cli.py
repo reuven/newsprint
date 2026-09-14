@@ -263,7 +263,9 @@ def _offer_picks(
     return picked, picked_uids
 
 
-def _offer_trim(built: list[Built], config: Config, summary_cells: int) -> list[Built]:
+def _offer_trim(
+    built: list[Built], config: Config, summary_cells: int
+) -> list[Built] | None:
     """Say what the packet costs, and above a threshold let it be cut.
 
     Sheets, not cells or sides: paper is what a reader carries, and the
@@ -293,16 +295,15 @@ def _offer_trim(built: list[Built], config: Config, summary_cells: int) -> list[
     if limit <= 0 or sheets <= limit or not _stdin_is_tty():
         return built
 
-    click.echo(
-        f"  That is over the {limit}-sheet mark. Uncheck anything you would "
-        "rather not print."
-    )
+    click.echo(f"  That is over the {limit}-sheet mark.")
     picklist = build_trim_picklist(
-        [(item.document, item.cells) for item in built], today=None
+        [(item.document, item.cells) for item in built],
+        order=config.printing.trim_order,
+        today=None,
     )
-    chosen = questionary_prompt(picklist)
+    chosen = questionary_prompt(picklist, preselected=True)
     if chosen is None:
-        return built
+        return None
     keep = {id(document) for document in chosen}
     trimmed = [item for item in built if id(item.document) in keep]
     dropped = len(built) - len(trimmed)
@@ -989,7 +990,12 @@ def main(
         )
 
     summary_cells = sum(item.cells for item in summary_pages)
-    built = _offer_trim(built, config, summary_cells)
+    kept = _offer_trim(built, config, summary_cells)
+    if kept is None:
+        click.echo("\nCancelled; nothing printed.")
+        runlog.record({"outcome": "cancelled", "reason": "cancelled at the editor"})
+        return
+    built = kept
     if not built:
         click.echo("\nNothing left to print.")
         runlog.record({"outcome": "cancelled", "reason": "trimmed to nothing"})
