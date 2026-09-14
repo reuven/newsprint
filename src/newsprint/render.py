@@ -16,15 +16,18 @@ rule reads more clearly than two.
 """
 
 import hashlib
+import socket
 import tempfile
 from bisect import bisect_left
 from collections.abc import Callable
 from html import escape
 from io import BytesIO
+from ipaddress import ip_address
 from itertools import accumulate
 from pathlib import Path
 from string import Template
-from typing import Protocol
+from typing import Any, Protocol
+from urllib.parse import urlparse
 
 from PIL import Image, ImageOps
 
@@ -217,6 +220,78 @@ def _grayscale_and_cap(data: bytes, max_width_px: int) -> bytes:
     return buffer.getvalue()
 
 
+# The only schemes that reach the network. Every kept image across the
+# 268-message fixture corpus is https, so this costs nothing real.
+_NETWORK_SCHEMES = frozenset({"http", "https"})
+
+# Carried in the URL itself and decoded in place: nothing leaves this
+# machine, so there is nothing here to point somewhere it should not go.
+# Refusing these would drop a legitimate inline chart for no gain.
+_INERT_SCHEMES = frozenset({"data"})
+
+Resolver = Callable[[str, object], list[Any]]
+
+
+def _refuse_unless_public(url: str, resolve: Resolver | None = None) -> None:
+    """Raise unless `url` is an ordinary web address on the public internet.
+
+    A kept image's URL is written by whoever sent the mail, and it used to
+    go to WeasyPrint's fetcher unexamined. Two things followed, both
+    confirmed by doing them rather than by reading the code: a newsletter
+    could make this machine request any address it could reach - a
+    listener on 127.0.0.1 received the request - and a file:// URL was
+    read off the disk and embedded into the rendered PDF.
+
+    So: http and https only, and only to addresses that are public. A
+    name is resolved first, because a name is the ordinary way to reach a
+    private address without writing one down - any domain an attacker
+    controls can point at 127.0.0.1. Every address the name answers with
+    must be public, and a name that will not resolve is refused rather
+    than tried, because a URL we cannot place is one we should not fetch.
+
+    Known limit, stated rather than papered over: the name is resolved
+    here and again by whatever does the fetching, so a server that
+    answers differently between the two calls could still be reached.
+    Closing that needs the connection pinned to the address checked,
+    which urllib does not offer; the addresses above are what an attacker
+    actually wants, and they are closed.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme in _INERT_SCHEMES:
+        return
+    if parsed.scheme not in _NETWORK_SCHEMES:
+        raise ValueError(f"refusing {parsed.scheme or 'schemeless'} URL {url!r}")
+    host = parsed.hostname
+    if not host:
+        raise ValueError(f"refusing URL with no host {url!r}")
+    try:
+        address = ip_address(host)
+    except ValueError:
+        resolver = resolve if resolve is not None else socket.getaddrinfo
+        try:
+            answers = resolver(host, None)
+        except OSError as error:
+            raise ValueError(f"refusing unresolvable host {host!r}") from error
+        found = {info[4][0] for info in answers}
+        if not found:
+            raise ValueError(f"refusing unresolvable host {host!r}")
+        addresses = {ip_address(str(a).split("%")[0]) for a in found}
+    else:
+        addresses = {address}
+    if not all(a.is_global for a in addresses):
+        raise ValueError(f"refusing non-public address for {host!r}")
+
+
+def _public_only(fetcher: ImageFetcher) -> ImageFetcher:
+    """`fetcher`, but it never leaves this machine for a private address."""
+
+    def fetch(url: str) -> URLFetcherResponse:
+        _refuse_unless_public(url)
+        return fetcher(url)
+
+    return fetch
+
+
 def _fetch_and_process(
     base_fetcher: ImageFetcher,
     max_width_px: int,
@@ -337,7 +412,7 @@ def render(
     base_fetcher = (
         url_fetcher
         if url_fetcher is not None
-        else URLFetcher(timeout=_IMAGE_FETCH_TIMEOUT_S)
+        else _public_only(URLFetcher(timeout=_IMAGE_FETCH_TIMEOUT_S))
     )
     failures = image_fetch_failures if image_fetch_failures is not None else []
     fetcher = _fetch_and_process(

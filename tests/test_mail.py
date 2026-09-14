@@ -1560,3 +1560,33 @@ def test_the_default_factory_is_the_verifying_one() -> None:
     default = inspect.signature(Mailbox.__init__).parameters["imap_factory"].default
     assert default is _imap_ssl
     assert default is not imaplib.IMAP4_SSL
+
+
+def test_the_default_factory_hands_the_verified_context_to_imaplib() -> None:
+    """The context and the factory are both right on their own; this is
+    the line that puts one into the other, and it is the only line that
+    actually protects the password. Checked without a connection by
+    standing in for IMAP4_SSL."""
+    import ssl
+
+    from newsprint import mail
+
+    captured: dict[str, object] = {}
+
+    class _Stub:
+        def __init__(self, host: str, **kwargs: object) -> None:
+            captured["host"] = host
+            captured.update(kwargs)
+
+    original = mail.imaplib.IMAP4_SSL
+    mail.imaplib.IMAP4_SSL = _Stub  # type: ignore[misc, assignment]
+    try:
+        mail._imap_ssl("mail.example.com")
+    finally:
+        mail.imaplib.IMAP4_SSL = original  # type: ignore[misc]
+
+    assert captured["host"] == "mail.example.com"
+    context = captured["ssl_context"]
+    assert isinstance(context, ssl.SSLContext)
+    assert context.verify_mode is ssl.CERT_REQUIRED
+    assert context.check_hostname is True
