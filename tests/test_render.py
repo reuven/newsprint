@@ -902,3 +902,81 @@ def test_an_inline_data_url_is_left_alone() -> None:
     from newsprint.render import _refuse_unless_public
 
     _refuse_unless_public("data:image/png;base64,iVBORw0KGgo=")
+
+
+def _flat_ground_chart(background: int = 20, ink: int = 230) -> bytes:
+    """A chart: one flat ground with a few marks on it, so a single grey
+    level owns most of the pixels."""
+    from PIL import ImageDraw
+
+    image = Image.new("L", (300, 200), color=background)
+    draw = ImageDraw.Draw(image)
+    for x in (20, 70, 120, 170):
+        draw.rectangle((x, 40, x + 30, 180), fill=ink)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _continuous_tone_photograph() -> bytes:
+    """A photograph: continuous tone, so no single level owns much. A
+    smooth gradient stands in for one - the statistic being tested is
+    how the levels are spread, not what the picture is of."""
+    image = Image.new("L", (300, 200))
+    image.putdata([min(120, (x + y) // 4) for y in range(200) for x in range(300)])
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_a_dark_chart_is_still_turned_over() -> None:
+    """The case inversion exists for: a flat dark ground with marks on
+    it, which prints as a page of toner otherwise."""
+    from newsprint.render import _grayscale_and_cap
+
+    processed = _grayscale_and_cap(_flat_ground_chart(), max_width_px=600)
+    with Image.open(BytesIO(processed)) as result:
+        assert result.getpixel((250, 100)) > 200, "the ground came out light"
+
+
+def test_a_dark_photograph_is_left_as_it_is() -> None:
+    """A photograph of a person inverted is a film negative, which is
+    what a reader saw looking at a law professor in a suit. A photograph
+    has no flat ground - its tone is continuous - and that is what tells
+    it apart from a chart without anything having to recognise a face.
+
+    Measured over a real packet: among images dark enough to be
+    considered, photographs put at most 16.3% of their pixels on any one
+    grey level and charts at least 46.1%.
+    """
+    from newsprint.render import _grayscale_and_cap
+
+    original = Image.open(BytesIO(_continuous_tone_photograph())).convert("L")
+    processed = _grayscale_and_cap(_continuous_tone_photograph(), max_width_px=600)
+    with Image.open(BytesIO(processed)) as result:
+        assert result.getpixel((10, 10)) == original.getpixel((10, 10))
+        assert result.getpixel((290, 190)) == original.getpixel((290, 190))
+
+
+def test_exactly_the_flat_ground_share_counts_as_flat() -> None:
+    """Forty percent is the least an image may put on one level and still
+    be drawn rather than photographed, not the most that fails."""
+    from newsprint.render import _FLAT_GROUND_SHARE, _has_a_flat_ground
+
+    assert _FLAT_GROUND_SHARE == 0.40
+    image = Image.new("L", (10, 1))
+    # Four of ten pixels on one level, the rest all different.
+    image.putdata([0, 0, 0, 0, 40, 80, 120, 160, 200, 240])
+    assert _has_a_flat_ground(image) is True
+
+    image.putdata([0, 0, 0, 30, 40, 80, 120, 160, 200, 240])
+    assert _has_a_flat_ground(image) is False
+
+
+def test_an_image_with_no_pixels_has_no_ground() -> None:
+    """Nothing to be flat, and nothing to divide by. A zero-sized image
+    is not something the fetcher should ever produce, but it is the one
+    input that turns this check into a crash rather than an answer."""
+    from newsprint.render import _has_a_flat_ground
+
+    assert _has_a_flat_ground(Image.new("L", (0, 0))) is False

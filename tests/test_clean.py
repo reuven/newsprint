@@ -4269,3 +4269,27 @@ def test_a_sentence_ending_on_the_headline_is_not_a_repeat() -> None:
         )
     )
     assert "journalist friend" in cleaned.html
+
+
+def test_a_personalised_recommendations_promo_is_a_pitch() -> None:
+    """The Economist closes with "The Economist for You / A selection of
+    stories based on what you like to read / Get personalised article
+    recommendations based on your reading history and favourite topics /
+    Sign up" - a product advert for a different product, four lines from
+    the end of the issue."""
+    body = "".join(f"<p>Paragraph {n} of the article.</p>" for n in range(12))
+    cleaned = clean_document(
+        _with_title(
+            f"<div>{body}"
+            "<p>A selection of stories based on what you like to read</p>"
+            "<p>Get personalised article recommendations based on your "
+            "reading history and favourite topics</p>"
+            '<p><a href="https://example.com/s">Sign up</a></p>'
+            "</div>",
+            title="An Issue",
+        )
+    )
+    assert "personalised article recommendations" not in cleaned.html
+    assert "based on what you like to read" not in cleaned.html
+    assert "Sign up" not in cleaned.html
+    assert "Paragraph 0" in cleaned.html

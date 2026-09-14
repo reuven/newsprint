@@ -1430,7 +1430,9 @@ _SUBSCRIPTION_PITCH = re.compile(
     r"|without our [\w+]+ members"
     r"|thanks to our [\w+]+ members"
     r"|help us spread the word"
-    r"|exclusively for members of)",
+    r"|exclusively for members of"
+    r"|personalis(ed|ing)|personaliz(ed|ing)"
+    r"|based on (what you like to read|your reading history))",
     re.IGNORECASE,
 )
 
@@ -1447,7 +1449,7 @@ _SUBSCRIPTION_PITCH_MAX_CHARS = 400
 # can follow, so the line costs space and gives nothing back.
 _LINK_CALL_TO_ACTION = re.compile(
     r"^(read|see|view|watch|listen|go|keep reading|continue reading"
-    r"|share|learn|find out|dive|check)\b",
+    r"|share|learn|find out|dive|check|sign up|subscribe|register)\b",
     re.IGNORECASE,
 )
 

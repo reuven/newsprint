@@ -193,6 +193,31 @@ def _median_level(image: Image.Image) -> int:
     return bisect_left(cumulative, cumulative[-1] / 2)
 
 
+# How much of an image has to sit on one grey level before it counts as
+# drawn on a flat ground rather than photographed. A chart is marks on a
+# background, so the background owns most of the pixels; a photograph has
+# continuous tone and owns nothing.
+#
+# Measured over a real packet, among images dark enough to be considered
+# for inversion: photographs put at most 16.3% of their pixels on any one
+# level, charts at least 46.1%, and the two Apricitas-style chart sets
+# run 51% to 77%. The line sits in the gap, nearer the photographs,
+# because the two failures are not equal - a dark chart left alone costs
+# toner, and a photograph turned over makes a person look like a film
+# negative, which is what a reader found looking at a law professor in a
+# suit.
+_FLAT_GROUND_SHARE = 0.40
+
+
+def _has_a_flat_ground(image: Image.Image) -> bool:
+    """True when one grey level owns enough of `image` to be a ground."""
+    histogram = image.histogram()
+    total = sum(histogram)
+    if not total:
+        return False
+    return max(histogram) / total >= _FLAT_GROUND_SHARE
+
+
 def _grayscale_and_cap(data: bytes, max_width_px: int) -> bytes:
     """Convert a fetched image's raw bytes to 8-bit grayscale PNG, resized
     down if wider than `max_width_px`. Real pixel-level work, not CSS: see
@@ -210,7 +235,7 @@ def _grayscale_and_cap(data: bytes, max_width_px: int) -> bytes:
             (max_width_px, max(1, round(grayscale.height * ratio))),
             Image.Resampling.LANCZOS,
         )
-    if _median_level(grayscale) < _DARK_GROUND_MEDIAN:
+    if _median_level(grayscale) < _DARK_GROUND_MEDIAN and _has_a_flat_ground(grayscale):
         # White-on-black is a screen convention. On paper it is a page of
         # toner, and the reader expects ink on white like everything
         # around it - so a chart set on a dark ground is turned over.
