@@ -1525,3 +1525,38 @@ def test_the_folder_read_back_is_the_one_that_selected() -> None:
     plain = FakeIMAP("h")
     with mailbox(plain) as box:
         assert box.folder == "INBOX/toprint"
+
+
+def test_the_imap_connection_verifies_the_servers_certificate() -> None:
+    """imaplib.IMAP4_SSL with no ssl_context does not verify anything.
+
+    It builds ssl._create_stdlib_context(), not ssl.create_default_context(),
+    and the stdlib context is CERT_NONE with check_hostname off - so the
+    connection is encrypted to whoever answers, which is not the same as
+    encrypted to your server. The password goes over that connection.
+
+    Checked by offering a self-signed certificate for the configured
+    hostname to both contexts: the stdlib one completed the handshake,
+    the default one refused it as self-signed.
+    """
+    import ssl
+
+    from newsprint.mail import _verified_context
+
+    context = _verified_context()
+    assert context.verify_mode is ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+
+
+def test_the_default_factory_is_the_verifying_one() -> None:
+    """A verifying context helps nobody if the default connection does
+    not use it - imaplib's own IMAP4_SSL is what must not be the
+    default."""
+    import imaplib
+    import inspect
+
+    from newsprint.mail import Mailbox, _imap_ssl
+
+    default = inspect.signature(Mailbox.__init__).parameters["imap_factory"].default
+    assert default is _imap_ssl
+    assert default is not imaplib.IMAP4_SSL
