@@ -786,3 +786,119 @@ def test_the_median_level_counts_every_pixel_including_the_brightest() -> None:
     skewed = Image.new("L", (100, 1))
     skewed.putdata([0] * 40 + [255] * 60)
     assert _median_level(skewed) == 255
+
+
+def test_only_public_web_addresses_are_fetched() -> None:
+    """A kept image's URL is written by whoever sent the mail, and it was
+    handed to WeasyPrint's fetcher with no check at all. Two things
+    followed, both confirmed by doing them: a newsletter could make this
+    machine request any address it could reach - a listener on 127.0.0.1
+    received the request - and a file:// URL was read off the disk and
+    embedded in the rendered PDF.
+
+    Every kept image across the 268-message corpus is https, so nothing
+    real is lost by refusing the rest.
+    """
+    from newsprint.render import _refuse_unless_public
+
+    refused = [
+        "file:///etc/passwd",
+        "ftp://example.com/chart.png",
+        "http://127.0.0.1:8080/internal",
+        "http://[::1]/internal",
+        "http://169.254.169.254/latest/meta-data/",  # cloud credentials
+        "http://10.0.0.5/router",
+        "http://192.168.1.1/admin",
+        "https://172.16.4.4/private",
+    ]
+    for url in refused:
+        with pytest.raises(ValueError, match="refusing"):
+            _refuse_unless_public(url)
+
+
+def test_a_public_address_is_still_fetched() -> None:
+    """The rule has to leave ordinary charts alone. An address literal,
+    so the test needs no DNS and no network."""
+    from newsprint.render import _refuse_unless_public
+
+    _refuse_unless_public("https://93.184.216.34/chart.png")
+    _refuse_unless_public("http://93.184.216.34/chart.png")
+
+
+def test_a_host_name_is_resolved_before_it_is_judged() -> None:
+    """A name is the usual way to reach a private address without naming
+    one: any attacker-controlled domain can point at 127.0.0.1. So the
+    name is resolved and every address it answers with must be public."""
+    from newsprint.render import _refuse_unless_public
+
+    def resolves_to(address: str):
+        def resolve(host: str, port: object) -> list:
+            return [(0, 0, 0, "", (address, 0))]
+
+        return resolve
+
+    _refuse_unless_public(
+        "https://cdn.example.com/c.png", resolve=resolves_to("93.184.216.34")
+    )
+    with pytest.raises(ValueError, match="refusing"):
+        _refuse_unless_public(
+            "https://evil.example.com/c.png", resolve=resolves_to("127.0.0.1")
+        )
+
+
+def test_a_name_that_does_not_resolve_is_refused() -> None:
+    """Failing closed: if we cannot tell where a URL points, we do not
+    fetch it."""
+    from newsprint.render import _refuse_unless_public
+
+    def fails(host: str, port: object) -> list:
+        raise OSError("no such host")
+
+    with pytest.raises(ValueError, match="refusing"):
+        _refuse_unless_public("https://nowhere.invalid/c.png", resolve=fails)
+
+
+def test_a_url_with_no_host_is_refused() -> None:
+    """ "http:///chart.png" parses with a scheme and no host. There is
+    nothing to check, so there is nothing to trust."""
+    from newsprint.render import _refuse_unless_public
+
+    with pytest.raises(ValueError, match="no host"):
+        _refuse_unless_public("http:///chart.png")
+
+
+def test_a_name_that_resolves_to_nothing_is_refused() -> None:
+    """A resolver can answer successfully with an empty list. Treating
+    that as "no private addresses among them" would wave the URL
+    through on a technicality."""
+    from newsprint.render import _refuse_unless_public
+
+    with pytest.raises(ValueError, match="unresolvable"):
+        _refuse_unless_public(
+            "https://empty.example.com/c.png", resolve=lambda host, port: []
+        )
+
+
+def test_the_guard_passes_a_public_url_to_the_fetcher_it_wraps() -> None:
+    """The wrapper has to still fetch. Checking the refusals alone would
+    pass just as well if it refused everything."""
+    from newsprint.render import _public_only
+
+    asked = []
+
+    def fetcher(url: str):
+        asked.append(url)
+        return "the response"
+
+    assert _public_only(fetcher)("https://93.184.216.34/c.png") == "the response"
+    assert asked == ["https://93.184.216.34/c.png"]
+
+
+def test_an_inline_data_url_is_left_alone() -> None:
+    """A data: URL carries its own bytes and is decoded in place - no
+    request leaves the machine, so there is nothing to point anywhere it
+    should not go. Refusing it would drop a legitimate inline chart and
+    buy nothing."""
+    from newsprint.render import _refuse_unless_public
+
+    _refuse_unless_public("data:image/png;base64,iVBORw0KGgo=")

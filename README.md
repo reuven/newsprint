@@ -432,6 +432,14 @@ missing sentence, all three required:
   own dimensions through the mail template while chrome is laid out
   fluidly.
 
+A kept image's URL is written by whoever sent the mail, so it is checked
+before anything is fetched: **http and https only, and only to public
+addresses**. A newsletter cannot make your machine probe your router, a
+service on localhost, or a cloud metadata endpoint, and cannot read a file
+off your disk with a `file://` URL. A `data:` image, which carries its own
+bytes and never touches the network, is left alone. Every kept image across
+the 268-newsletter archive is https, so nothing real is turned away.
+
 A kept image is fetched at print time, converted to grayscale, and resized
 down to the cell's text column — 87mm at 200dpi, so 685px. A chart set on
 a dark ground is turned over, so it prints as ink on white like the type

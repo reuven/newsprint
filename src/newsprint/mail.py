@@ -8,6 +8,7 @@ job has reached the print queue.
 
 import imaplib
 import re
+import ssl
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -17,6 +18,26 @@ from typing import Any, Self, cast
 import keyring
 
 IMAPFactory = Callable[[str], imaplib.IMAP4]
+
+
+def _verified_context() -> ssl.SSLContext:
+    """A TLS context that checks the server is who it says it is.
+
+    imaplib.IMAP4_SSL, given no ssl_context, builds one with
+    ssl._create_stdlib_context() - which is CERT_NONE with check_hostname
+    off. The connection is then encrypted to whoever answers, which is
+    not the same as encrypted to your mail server, and the password goes
+    over it. Offering a self-signed certificate for the configured
+    hostname to both contexts: the stdlib one completes the handshake,
+    this one refuses it as self-signed.
+    """
+    return ssl.create_default_context()
+
+
+def _imap_ssl(host: str) -> imaplib.IMAP4:
+    """The default connection: IMAP over TLS, certificate checked."""
+    return imaplib.IMAP4_SSL(host, ssl_context=_verified_context())
+
 
 _TRASH_LINE = re.compile(rb'\\Trash\b[^"]*"[^"]*"\s+"?([^"]+?)"?\s*$')
 
@@ -278,7 +299,7 @@ class Mailbox:
         user: str,
         password: str,
         folder: str,
-        imap_factory: IMAPFactory = imaplib.IMAP4_SSL,
+        imap_factory: IMAPFactory = _imap_ssl,
         notify: Callable[[str], None] | None = None,
     ) -> None:
         self._host = host
