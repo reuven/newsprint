@@ -153,6 +153,24 @@ the reason rather than re-derive it.
 - **`cast(...)`** - `typing.cast` does nothing at runtime, so every
   mutation of its first argument survives by construction. All eight of
   `_rendered_lines`' survivors are this.
+- **`_move_message`'s `return str(status)` in its two failure
+  branches** - both sit inside `if status != "OK":`, and every caller
+  asks only `!= "OK"`, so returning a *different* non-OK string is the
+  same answer. The third one, in the MOVE branch, returns "OK" on success
+  and is not equivalent; it is killed.
+- **`Mailbox.__init__`'s `_uidvalidity = None`** and **`_reconnect`'s
+  `_imap = None`** - both are overwritten before anything reads them,
+  the latter on the very next line.
+- **`_search`'s `uid("SEARCH", None, criteria)`** - imaplib's own
+  `_command` does `if arg is None: continue`, so dropping the charset
+  argument sends the identical command.
+- **`select(..., readonly=False)`** in `retire` and `unretire` -
+  imaplib's `select` already defaults `readonly` to False.
+- **`_truncate_to_width`'s `budget <= 0`** - with `budget == 0` the
+  fall-through path trims to nothing and returns the ellipsis alone,
+  which is exactly what the branch returns.
+- **`_truncate_to_width`'s `if trimmed else _ELLIPSIS`** - when `trimmed`
+  is empty, `f"{trimmed}{_ELLIPSIS}"` *is* `_ELLIPSIS`.
 - **`split_mbox`'s `zip(..., strict=True)`** - the two sequences are
   `starts` and `[*starts[1:], len(data)]`, which are the same length by
   construction, so `strict` has nothing to catch and every value of it
