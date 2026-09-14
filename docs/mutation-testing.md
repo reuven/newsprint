@@ -153,6 +153,14 @@ the reason rather than re-derive it.
 - **`cast(...)`** - `typing.cast` does nothing at runtime, so every
   mutation of its first argument survives by construction. All eight of
   `_rendered_lines`' survivors are this.
+- **`_prose_follows`'s `get_text` arguments** - the result is passed
+  through `" ".join(...split())` before its length is measured, so every
+  `strip=` value gives the same string, and the separator only changes
+  the width of the gaps between text nodes - a few characters on a
+  caption, nowhere near the threshold it is compared against. The
+  normalization is deliberate: a caption wrapped over several indented
+  lines in a mail template carries enough whitespace to pass for a
+  paragraph if the raw text is what gets counted.
 - **`_move_message`'s `return str(status)` in its two failure
   branches** - both sit inside `if status != "OK":`, and every caller
   asks only `!= "OK"`, so returning a *different* non-OK string is the
