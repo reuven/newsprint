@@ -32,6 +32,9 @@ trash   = "auto"                 # "auto" discovers the \Trash folder;
 printer = ""                     # empty means your system default printer
 paper   = "A4"                   # or "Letter"; override per run with --paper
 duplex  = "two-sided-long-edge"
+trim_above_sheets = 20           # past this many sheets a run stops and
+                                  # lets you uncheck newsletters before
+                                  # printing. 0 never asks.
 
 [layout]
 margin_mm   = 9.0

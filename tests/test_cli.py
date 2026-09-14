@@ -4118,3 +4118,114 @@ def test_a_silent_reconnect_still_leaves_a_trace(monkeypatch, mail_config) -> No
 
     assert result.exit_code == 0
     assert "reconnected after the server hung up" in result.output
+
+
+def test_a_big_packet_says_how_much_paper_it_is(monkeypatch, mail_config) -> None:
+    """Before anything is printed, in sheets rather than cells or sides -
+    paper is what a reader carries, and fifty sheets is a decision."""
+    monkeypatch.setattr("newsprint.cli.Mailbox", _QueueBox)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(mail_config.path)]
+    )
+    assert result.exit_code == 0
+    assert "sheet" in result.output.lower()
+
+
+def test_a_packet_over_the_threshold_offers_the_editor(
+    monkeypatch, mail_config
+) -> None:
+    """Above the configured size the run stops and hands over the same
+    checklist the unstarred newsletters use, every newsletter with its
+    length, so the reader can drop what is making the packet large."""
+    offered: list[object] = []
+
+    def fake_prompt(picklist):
+        offered.append(picklist)
+        # Keep nothing: the strongest signal that the answer is used.
+        return []
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", _QueueBox)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+    monkeypatch.setattr("newsprint.cli.questionary_prompt", fake_prompt)
+    monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: True)
+    # The arithmetic has its own tests in test_picker; what is being
+    # checked here is that a packet over the mark reaches the editor.
+    monkeypatch.setattr("newsprint.cli.packet_sheets", lambda cells, paper: 50)
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(mail_config.path)]
+    )
+
+    assert result.exit_code == 0
+    assert offered, "the editor was never offered"
+    rows = [row for group in offered[0].groups for row in group.rows]
+    assert rows and all("cell" in row.length for row in rows)
+    assert "Nothing left to print" in result.output
+
+
+def test_a_small_packet_is_never_interrupted(monkeypatch, mail_config) -> None:
+    """Under the threshold the run just prints. The editor exists for the
+    week that got away from you, not for every week."""
+    offered: list[object] = []
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", _QueueBox)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+    monkeypatch.setattr(
+        "newsprint.cli.questionary_prompt", lambda picklist: offered.append(picklist)
+    )
+    monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: True)
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(mail_config.path)]
+    )
+    assert result.exit_code == 0
+    assert not offered, "one newsletter is not fifty sheets"
+
+
+def test_cancelling_the_editor_keeps_the_whole_packet(monkeypatch, mail_config) -> None:
+    """ctrl-c out of the editor means "never mind", not "print nothing".
+    In the unstarred picker a cancel selects nothing, because nothing was
+    going to be added; here everything was already going to be printed,
+    so the same keystroke has to leave it alone."""
+    monkeypatch.setattr("newsprint.cli.Mailbox", _QueueBox)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+    monkeypatch.setattr("newsprint.cli.questionary_prompt", lambda picklist: None)
+    monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr("newsprint.cli.packet_sheets", lambda cells, paper: 50)
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(mail_config.path)]
+    )
+    assert result.exit_code == 0
+    assert "Nothing left to print" not in result.output
+    assert "Dropped" not in result.output
+    assert "Test Weekly" in result.output
+
+
+def test_keeping_everything_in_the_editor_says_nothing_about_dropping(
+    monkeypatch, mail_config
+) -> None:
+    """Unchecking nothing is a perfectly ordinary answer, and reporting
+    "dropped 0" would be noise on a run that changed nothing."""
+    seen: list[object] = []
+
+    def keep_all(picklist):
+        rows = [row.document for group in picklist.groups for row in group.rows]
+        seen.extend(rows)
+        return rows
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", _QueueBox)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+    monkeypatch.setattr("newsprint.cli.questionary_prompt", keep_all)
+    monkeypatch.setattr("newsprint.cli._stdin_is_tty", lambda: True)
+    monkeypatch.setattr("newsprint.cli.packet_sheets", lambda cells, paper: 50)
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(mail_config.path)]
+    )
+    assert result.exit_code == 0
+    assert seen, "the editor was offered"
+    assert "Dropped" not in result.output
+    assert "Nothing left to print" not in result.output

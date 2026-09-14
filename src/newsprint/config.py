@@ -25,6 +25,10 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "paper": "A4",
         "duplex": "two-sided-long-edge",
         "cells_per_side": 4,
+        # Above this many sheets a run stops and offers the editor. 20 is
+        # a packet that no longer fits in a pocket; the author's own
+        # weekly run came to 50. 0 never asks.
+        "trim_above_sheets": 20,
     },
     "layout": {"margin_mm": 9.0, "font_size_pt": 9.0, "line_height": 1.35},
     "window": {"fallback_days": 7},
@@ -71,7 +75,9 @@ class ConfigError(Exception):
 # different directions; this is the one behavior applied everywhere.
 _SECTION_KEYS: dict[str, frozenset[str]] = {
     "mail": frozenset({"host", "user", "folder", "trash", "folders"}),
-    "print": frozenset({"printer", "paper", "duplex", "cells_per_side"}),
+    "print": frozenset(
+        {"printer", "paper", "duplex", "cells_per_side", "trim_above_sheets"}
+    ),
     "layout": frozenset({"margin_mm", "font_size_pt", "line_height"}),
     "window": frozenset({"fallback_days"}),
     "packet": frozenset({"title", "min_words"}),
@@ -162,6 +168,7 @@ class PrintConfig:
     printer: str
     paper: Paper
     duplex: str
+    trim_above_sheets: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,6 +431,7 @@ def load_config(
                 printer=data["print"]["printer"],
                 paper=replace(paper_by_name(paper_name), cells_per_side=cells),
                 duplex=data["print"]["duplex"],
+                trim_above_sheets=data["print"]["trim_above_sheets"],
             ),
             layout=LayoutConfig(
                 **{

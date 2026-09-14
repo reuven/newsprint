@@ -19,6 +19,7 @@ from typing import Literal
 
 from wcwidth import wcwidth
 
+from .geometry import Paper
 from .mail import _IMAP_MONTHS as _MONTHS
 from .models import Document
 from .runlog import last_successful_run
@@ -255,6 +256,60 @@ class Picklist:
 
     groups: tuple[PickGroup, ...]
     total: int
+
+
+def packet_sheets(cells: int, paper: Paper) -> int:
+    """How many sheets of paper `cells` comes to, printed duplex.
+
+    Sides, then sheets: what a reader carries is paper, and the number
+    that means anything to them before they agree to print is neither
+    the cell count nor the side count.
+    """
+    per_side = paper.cells_per_side
+    sides = -(-cells // per_side)
+    return -(-sides // 2)
+
+
+def build_trim_picklist(
+    entries: Sequence[tuple[Document, int]], today: date | None = None
+) -> Picklist:
+    """The built packet as a picklist, each row labelled with its length.
+
+    The unstarred picker sorts by date, because the question it answers
+    is "what arrived this week". This one answers "what is making this
+    packet fifty sheets", so the heaviest publication comes first and
+    each row says how many cells it costs. Everything else - the
+    grouping, the filter, the way a heading stays on screen - is the
+    same prompt, because it is the same act of choosing.
+    """
+    grouped: dict[str, list[tuple[Document, int]]] = {}
+    for document, cells in entries:
+        grouped.setdefault(document.publication, []).append((document, cells))
+    for rows in grouped.values():
+        rows.sort(key=lambda row: (-row[1], row[0].date))
+
+    order = sorted(
+        grouped,
+        key=lambda publication: (
+            -sum(cells for _, cells in grouped[publication]),
+            publication,
+        ),
+    )
+    groups = tuple(
+        PickGroup(
+            publication=publication,
+            rows=tuple(
+                PickRow(
+                    document=document,
+                    when=format_pick_date(document.date.date(), today),
+                    length=f"{cells} cell{'s' if cells != 1 else ''}",
+                )
+                for document, cells in grouped[publication]
+            ),
+        )
+        for publication in order
+    )
+    return Picklist(groups=groups, total=len(entries))
 
 
 def build_picklist(

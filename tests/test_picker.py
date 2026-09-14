@@ -885,3 +885,64 @@ def test_a_width_with_room_for_nothing_but_the_ellipsis_gets_it() -> None:
     exactly = _display_width(_ELLIPSIS)
     assert _truncate_to_width("Hello world", exactly) == _ELLIPSIS
     assert _truncate_to_width("Hello world", exactly + 1) == "H" + _ELLIPSIS
+
+
+# ---------------------------------------------------------------------------
+# The trim editor: what a built packet costs, and choosing what to drop.
+# ---------------------------------------------------------------------------
+
+
+def test_sheets_counts_both_sides_of_the_paper() -> None:
+    """What a reader actually carries is sheets, not cells or sides. Four
+    a side duplex puts eight cells on one sheet; two a side puts four."""
+    from dataclasses import replace
+
+    from newsprint.geometry import A4
+    from newsprint.picker import packet_sheets
+
+    four_up, two_up = A4, replace(A4, cells_per_side=2)
+    assert packet_sheets(8, four_up) == 1
+    assert packet_sheets(9, four_up) == 2, "one cell over needs another sheet"
+    assert packet_sheets(4, two_up) == 1
+    assert packet_sheets(5, two_up) == 2
+    assert packet_sheets(0, four_up) == 0
+
+
+def test_the_trim_list_says_what_each_newsletter_costs() -> None:
+    """The editor's whole job: every newsletter with its length, so a
+    reader can see where fifty sheets went before agreeing to print
+    them."""
+    from newsprint.picker import build_trim_picklist
+
+    entries = [
+        (_doc("Paul Krugman", "Trade, Peace and War", "2026-09-10", uid=1), 14),
+        (_doc("Paul Krugman", "Interest Rates", "2026-09-11", uid=2), 7),
+        (_doc("Axios Markets", "Go big or go home", "2026-09-11", uid=3), 1),
+    ]
+    picklist = build_trim_picklist(entries)
+
+    assert picklist.total == 3
+    by_publication = {group.publication: group for group in picklist.groups}
+    assert set(by_publication) == {"Paul Krugman", "Axios Markets"}
+    krugman = by_publication["Paul Krugman"]
+    assert [row.length for row in krugman.rows] == ["14 cells", "7 cells"]
+    assert by_publication["Axios Markets"].rows[0].length == "1 cell"
+
+
+def test_the_trim_list_puts_the_longest_first() -> None:
+    """Ordered by what it costs, heaviest first - the unstarred picker
+    sorts by date because the question there is "what arrived"; here the
+    question is "what is making this packet fifty sheets"."""
+    from newsprint.picker import build_trim_picklist
+
+    entries = [
+        (_doc("Axios Markets", "Short one", "2026-09-11", uid=1), 1),
+        (_doc("Paul Krugman", "Long one", "2026-09-10", uid=2), 14),
+        (_doc("Noahpinion", "Middling", "2026-09-11", uid=3), 8),
+    ]
+    picklist = build_trim_picklist(entries)
+    assert [group.publication for group in picklist.groups] == [
+        "Paul Krugman",
+        "Noahpinion",
+        "Axios Markets",
+    ]
