@@ -44,7 +44,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libffi8
+            libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
+            libharfbuzz-subset0 libffi8
 
       - name: Install WeasyPrint's native libraries (macOS)
         if: runner.os == 'macOS'
@@ -59,6 +60,12 @@ jobs:
       # whichever Python the runner image happens to ship.
       - name: Sync the environment
         run: uv sync --locked --python ${{ matrix.python-version }}
+
+      # The matrix claims to test the floor this package declares. Print
+      # what actually got built, so "supports 3.12" is a claim with
+      # evidence behind it rather than a line in a YAML file.
+      - name: Say which Python this is
+        run: uv run python -c "import sys; print(sys.version)"
 
       - name: Format
         run: uv run ruff format --check src tests scripts assets
@@ -102,7 +109,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libffi8
+            libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
+            libharfbuzz-subset0 libffi8
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
