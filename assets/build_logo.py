@@ -14,11 +14,12 @@ Run: uv run --with cairosvg python assets/build_logo.py
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
-from fontTools.pens.svgPathPen import SVGPathPen
-from fontTools.ttLib import TTFont
+# fontTools and cairosvg ship no type information; this script is not
+# part of the package and is checked only for its own sake.
+from fontTools.pens.svgPathPen import SVGPathPen  # type: ignore[import-untyped]
+from fontTools.ttLib import TTFont  # type: ignore[import-untyped]
 
 HERE = Path(__file__).parent
 INK = "#14110f"
@@ -29,7 +30,9 @@ WORDMARK_FONT = "/System/Library/Fonts/Supplemental/Arial Black.ttf"
 TAGLINE_FONT = "/System/Library/Fonts/Supplemental/Georgia Italic.ttf"
 
 
-def outline(text: str, font_path: str, size: float, tracking: float = 0.0) -> tuple[str, float]:
+def outline(
+    text: str, font_path: str, size: float, tracking: float = 0.0
+) -> tuple[str, float]:
     """`text` as SVG path data, and how wide it came out."""
     font = TTFont(font_path)
     scale = size / font["head"].unitsPerEm
@@ -107,10 +110,16 @@ def lockup(*, ground: str | None) -> str:
 
 FILES = {
     # the full mark, for anywhere it is shown at size
-    "mark.svg": square(mark(stroke=14, rules=5, rule_h=16, line_h=11, gap=30), ground=PAPER),
-    "mark-bare.svg": square(mark(stroke=14, rules=5, rule_h=16, line_h=11, gap=30), ground=None),
+    "mark.svg": square(
+        mark(stroke=14, rules=5, rule_h=16, line_h=11, gap=30), ground=PAPER
+    ),
+    "mark-bare.svg": square(
+        mark(stroke=14, rules=5, rule_h=16, line_h=11, gap=30), ground=None
+    ),
     # fewer, heavier lines: what survives a favicon
-    "icon.svg": square(mark(stroke=20, rules=3, rule_h=22, line_h=16, gap=44), ground=PAPER),
+    "icon.svg": square(
+        mark(stroke=20, rules=3, rule_h=22, line_h=16, gap=44), ground=PAPER
+    ),
     "logo.svg": lockup(ground=PAPER),
     "logo-bare.svg": lockup(ground=None),
 }
@@ -121,15 +130,17 @@ PNGS = {"mark.svg": (512,), "icon.svg": (32, 64, 128, 256), "logo.svg": (1010,)}
 def main() -> None:
     for name, svg in FILES.items():
         (HERE / name).write_text(svg)
-    import cairosvg
+    import cairosvg  # type: ignore[import-not-found]
 
     for name, sizes in PNGS.items():
         for size in sizes:
             stem = Path(name).stem
             out = HERE / (f"{stem}.png" if len(sizes) == 1 else f"{stem}-{size}.png")
             cairosvg.svg2png(url=str(HERE / name), write_to=str(out), output_width=size)
-    print(f"wrote {len(FILES)} svg and "
-          f"{sum(len(s) for s in PNGS.values())} png into {HERE}")
+    print(
+        f"wrote {len(FILES)} svg and "
+        f"{sum(len(s) for s in PNGS.values())} png into {HERE}"
+    )
 
 
 if __name__ == "__main__":
