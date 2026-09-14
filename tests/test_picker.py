@@ -885,3 +885,115 @@ def test_a_width_with_room_for_nothing_but_the_ellipsis_gets_it() -> None:
     exactly = _display_width(_ELLIPSIS)
     assert _truncate_to_width("Hello world", exactly) == _ELLIPSIS
     assert _truncate_to_width("Hello world", exactly + 1) == "H" + _ELLIPSIS
+
+
+# ---------------------------------------------------------------------------
+# The trim editor: what a built packet costs, and choosing what to drop.
+# ---------------------------------------------------------------------------
+
+
+def test_sheets_counts_both_sides_of_the_paper() -> None:
+    """What a reader actually carries is sheets, not cells or sides. Four
+    a side duplex puts eight cells on one sheet; two a side puts four."""
+    from dataclasses import replace
+
+    from newsprint.geometry import A4
+    from newsprint.picker import packet_sheets
+
+    four_up, two_up = A4, replace(A4, cells_per_side=2)
+    assert packet_sheets(8, four_up) == 1
+    assert packet_sheets(9, four_up) == 2, "one cell over needs another sheet"
+    assert packet_sheets(4, two_up) == 1
+    assert packet_sheets(5, two_up) == 2
+    assert packet_sheets(0, four_up) == 0
+
+
+def test_the_trim_list_says_what_each_newsletter_costs() -> None:
+    """The editor's whole job: every newsletter with its length, so a
+    reader can see where fifty sheets went before agreeing to print
+    them."""
+    from newsprint.picker import build_trim_picklist
+
+    entries = [
+        (_doc("Paul Krugman", "Trade, Peace and War", "2026-09-10", uid=1), 14),
+        (_doc("Paul Krugman", "Interest Rates", "2026-09-11", uid=2), 7),
+        (_doc("Axios Markets", "Go big or go home", "2026-09-11", uid=3), 1),
+    ]
+    picklist = build_trim_picklist(entries)
+
+    assert picklist.total == 3
+    rows = [row for group in picklist.groups for row in group.rows]
+    assert [row.length for row in rows] == ["14 cells", "7 cells", "1 cell"]
+
+
+def test_the_trim_list_is_in_packet_order_by_default() -> None:
+    """The order they will appear in the packet, which is the order they
+    arrived - so a reader scanning the editor is scanning the thing they
+    are about to hold, not a rearrangement of it."""
+    from newsprint.picker import build_trim_picklist
+
+    entries = [
+        (_doc("Paul Krugman", "Long one", "2026-09-10", uid=1), 14),
+        (_doc("Axios Markets", "Short one", "2026-09-12", uid=2), 1),
+        (_doc("Noahpinion", "Middling", "2026-09-11", uid=3), 8),
+    ]
+    picklist = build_trim_picklist(entries)
+
+    rows = [row for group in picklist.groups for row in group.rows]
+    assert [row.document.title for row in rows] == [
+        "Long one",
+        "Middling",
+        "Short one",
+    ]
+    # The publication belongs on the row now, because a date-ordered list
+    # cannot carry it in a per-publication heading.
+    assert rows[0].label is not None and "Paul Krugman" in rows[0].label
+    assert all(row.when for row in rows), "every row carries its date"
+
+
+def test_the_trim_list_can_be_sorted_by_length() -> None:
+    from newsprint.picker import build_trim_picklist
+
+    entries = [
+        (_doc("Axios Markets", "Short one", "2026-09-12", uid=1), 1),
+        (_doc("Paul Krugman", "Long one", "2026-09-10", uid=2), 14),
+        (_doc("Noahpinion", "Middling", "2026-09-11", uid=3), 8),
+    ]
+    rows = [
+        row
+        for group in build_trim_picklist(entries, order="length").groups
+        for row in group.rows
+    ]
+    assert [row.document.title for row in rows] == ["Long one", "Middling", "Short one"]
+
+
+def test_the_trim_list_can_be_grouped_by_publication() -> None:
+    """The one order where a heading earns its place: sorted by name, a
+    publication's issues sit together, so it groups the way the unstarred
+    picker does and the rows drop the publication they no longer need."""
+    from newsprint.picker import build_trim_picklist
+
+    entries = [
+        (_doc("Paul Krugman", "Second", "2026-09-11", uid=1), 7),
+        (_doc("Axios Markets", "Short one", "2026-09-12", uid=2), 1),
+        (_doc("Paul Krugman", "First", "2026-09-10", uid=3), 14),
+    ]
+    picklist = build_trim_picklist(
+        entries, order="publication", today=date(2026, 9, 12)
+    )
+
+    assert [group.publication for group in picklist.groups] == [
+        "Axios Markets",
+        "Paul Krugman",
+    ]
+    assert picklist.total == 3
+    krugman = picklist.groups[1]
+    assert [row.document.title for row in krugman.rows] == ["First", "Second"]
+    assert all(row.label is None for row in krugman.rows)
+    # Grouping does not excuse the row of saying what it costs or when it
+    # arrived - those are the two things the editor is read for.
+    assert [row.length for row in krugman.rows] == ["14 cells", "7 cells"]
+    assert all(row.when and "Sep" in row.when for row in krugman.rows)
+    # And "today" is relative to the run, not to the clock: the date is
+    # passed in so a packet built at midnight does not relabel itself.
+    assert "yesterday" in krugman.rows[1].when, krugman.rows[1].when

@@ -658,3 +658,45 @@ def test_clearing_a_filter_over_nothing_selectable_terminates() -> None:
 
     assert control.search_filter is None
     assert not control.is_selection_valid(), "there was never a row to land on"
+
+
+def test_rows_can_start_checked() -> None:
+    """The trim editor starts with everything in the packet, so every row
+    begins ticked and the reader unticks what they do not want. Enter
+    then means "print these", which is what a reader reaches for to say
+    yes - where before, agreeing to the packet as built meant pressing
+    ctrl-c, which reads as "get me out of here"."""
+    picklist = build_picklist(
+        [_doc("Money Stuff", "Issue A", "2026-09-02", uid=1)], sizes={1: 20_000}
+    )
+
+    calls: list[tuple] = []
+    questionary_prompt(
+        picklist,
+        checkbox=_fake_checkbox(calls, result=[]),
+        terminal_size=_fixed_width(80),
+        preselected=True,
+    )
+
+    _message, choices, _options = calls[0]
+    rows = [c for c in choices if not isinstance(c, questionary.Separator)]
+    assert rows and all(c.checked for c in rows)
+
+
+def test_rows_are_unchecked_by_default() -> None:
+    """The unstarred picker asks what to add, so nothing starts ticked -
+    the two prompts ask opposite questions and must not share a default."""
+    picklist = build_picklist(
+        [_doc("Money Stuff", "Issue A", "2026-09-02", uid=1)], sizes={1: 20_000}
+    )
+
+    calls: list[tuple] = []
+    questionary_prompt(
+        picklist,
+        checkbox=_fake_checkbox(calls, result=[]),
+        terminal_size=_fixed_width(80),
+    )
+
+    _message, choices, _options = calls[0]
+    rows = [c for c in choices if not isinstance(c, questionary.Separator)]
+    assert rows and not any(c.checked for c in rows)

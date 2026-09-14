@@ -64,9 +64,19 @@ _MESSAGE = (
     "space to toggle, enter to confirm, ctrl-c to cancel)"
 )
 
+# The trim editor asks the opposite question, so it needs the opposite
+# wording: everything is already in the packet and enter prints it. Before
+# the rows started checked, agreeing to the packet as built meant pressing
+# ctrl-c, which reads as "get me out of here" rather than "yes, go ahead".
+_TRIM_MESSAGE = (
+    "Printing all of these - untick any you would rather not "
+    "(type to filter, esc to clear; space to untick, enter to print, "
+    "ctrl-c to cancel the run)"
+)
+
 
 def _choices(
-    picklist: Picklist, width: int
+    picklist: Picklist, width: int, preselected: bool = False
 ) -> list[questionary.Separator | questionary.Choice]:
     """Map picker.layout_picklist's plain-data lines onto questionary's
     own objects - no formatting decision of its own: a "blank" or
@@ -80,7 +90,11 @@ def _choices(
     for line in layout_picklist(picklist, width):
         if line.kind == "row":
             assert line.document is not None  # guaranteed by layout_picklist
-            choices.append(questionary.Choice(title=line.text, value=line.document))
+            choices.append(
+                questionary.Choice(
+                    title=line.text, value=line.document, checked=preselected
+                )
+            )
         else:
             choices.append(questionary.Separator(line.text))
     return choices
@@ -307,6 +321,7 @@ def questionary_prompt(
     picklist: Picklist,
     checkbox: CheckboxFactory = questionary.checkbox,
     terminal_size: TerminalSizeFactory = shutil.get_terminal_size,
+    preselected: bool = False,
 ) -> list[Document] | None:
     """Show the scrollable checkbox and return what got picked.
 
@@ -318,11 +333,11 @@ def questionary_prompt(
     case it ever matters.
     """
     width = terminal_size().columns
-    choices = _choices(picklist, width)
+    choices = _choices(picklist, width, preselected)
     if not choices:
         return []
     question = checkbox(
-        _MESSAGE,
+        _TRIM_MESSAGE if preselected else _MESSAGE,
         choices,
         # --since can open the window to weeks, and a window that wide
         # runs to a hundred candidates - more than anyone wants to scroll

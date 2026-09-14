@@ -19,6 +19,7 @@ from typing import Literal
 
 from wcwidth import wcwidth
 
+from .geometry import Paper
 from .mail import _IMAP_MONTHS as _MONTHS
 from .models import Document
 from .runlog import last_successful_run
@@ -229,6 +230,11 @@ class PickRow:
     document: Document
     when: str
     length: str
+    # What to show instead of the document's own title. None means the
+    # title, which is right whenever a heading above the row already
+    # names the publication. A list ordered by date cannot have such a
+    # heading, so its rows carry the publication themselves.
+    label: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,6 +261,93 @@ class Picklist:
 
     groups: tuple[PickGroup, ...]
     total: int
+
+
+def packet_sheets(cells: int, paper: Paper) -> int:
+    """How many sheets of paper `cells` comes to, printed duplex.
+
+    Sides, then sheets: what a reader carries is paper, and the number
+    that means anything to them before they agree to print is neither
+    the cell count nor the side count.
+    """
+    per_side = paper.cells_per_side
+    sides = -(-cells // per_side)
+    return -(-sides // 2)
+
+
+TrimOrder = Literal["date", "publication", "length"]
+
+
+def build_trim_picklist(
+    entries: Sequence[tuple[Document, int]],
+    order: TrimOrder = "date",
+    today: date | None = None,
+) -> Picklist:
+    """The built packet as a picklist, each row labelled with its length.
+
+    "date" is the order the packet itself is in, which is the order the
+    newsletters arrived - so a reader scanning the editor is scanning the
+    thing they are about to hold rather than a rearrangement of it. It is
+    one flat list, because a per-publication heading cannot survive a
+    date ordering; the rows carry their publication instead.
+
+    "publication" is the one order where a heading earns its place, and
+    groups exactly the way the unstarred picker does. "length" answers
+    "what is making this fifty sheets", longest first.
+    """
+    if order == "publication":
+        return _trim_by_publication(entries, today)
+    ordered = sorted(
+        entries,
+        key=(
+            (lambda entry: (-entry[1], entry[0].date))
+            if order == "length"
+            else (lambda entry: entry[0].date)
+        ),
+    )
+    rows = tuple(
+        PickRow(
+            document=document,
+            when=format_pick_date(document.date.date(), today),
+            length=_cells_label(cells),
+            label=f"{document.publication} - {document.title}",
+        )
+        for document, cells in ordered
+    )
+    heading = "longest first" if order == "length" else "in the order they will print"
+    return Picklist(
+        groups=(PickGroup(publication=heading, rows=rows),), total=len(entries)
+    )
+
+
+def _cells_label(cells: int) -> str:
+    return f"{cells} cell{'' if cells == 1 else 's'}"
+
+
+def _trim_by_publication(
+    entries: Sequence[tuple[Document, int]], today: date | None
+) -> Picklist:
+    """Grouped and alphabetical, each publication's issues oldest first."""
+    grouped: dict[str, list[tuple[Document, int]]] = {}
+    for document, cells in entries:
+        grouped.setdefault(document.publication, []).append((document, cells))
+    for rows in grouped.values():
+        rows.sort(key=lambda row: row[0].date)
+    groups = tuple(
+        PickGroup(
+            publication=publication,
+            rows=tuple(
+                PickRow(
+                    document=document,
+                    when=format_pick_date(document.date.date(), today),
+                    length=_cells_label(cells),
+                )
+                for document, cells in grouped[publication]
+            ),
+        )
+        for publication in sorted(grouped)
+    )
+    return Picklist(groups=groups, total=len(entries))
 
 
 def build_picklist(
@@ -527,7 +620,7 @@ def layout_picklist(picklist: Picklist, width: int) -> tuple[PickLine, ...]:
                 PickLine(
                     kind="row",
                     text=_row_text(
-                        row.document.title,
+                        row.label or row.document.title,
                         row.when,
                         row.length,
                         subject_width,

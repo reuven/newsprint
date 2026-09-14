@@ -43,7 +43,13 @@ from .mail import (
     password_for,
 )
 from .models import Document, Verdict
-from .picker import DISPLAY_LIMIT, build_picklist, window_since
+from .picker import (
+    DISPLAY_LIMIT,
+    build_picklist,
+    build_trim_picklist,
+    packet_sheets,
+    window_since,
+)
 from .pickerui import questionary_prompt
 from .pipeline import Built, Failure, TeaserSkippedError, build_one
 from .printer import PrintError, spool
@@ -255,6 +261,59 @@ def _offer_picks(
     picked = fetch_picked(box, picked_uids, names)
     click.echo(f"  Added {len(picked)} newsletter(s) from the unstarred list.")
     return picked, picked_uids
+
+
+def _offer_trim(
+    built: list[Built], config: Config, summary_cells: int
+) -> list[Built] | None:
+    """Say what the packet costs, and above a threshold let it be cut.
+
+    Sheets, not cells or sides: paper is what a reader carries, and the
+    run that prompted this came to fifty of them. Past
+    [print] trim_above_sheets the same checklist the unstarred
+    newsletters use is offered, each row labelled with what it costs, so
+    the reader can see where the paper went and drop what they will not
+    read.
+
+    Only with a terminal, and only above the threshold. A small packet is
+    never interrupted - the editor is for the week that got away, not for
+    every week - and with 0 configured nothing is ever asked.
+    """
+    cells = summary_cells + sum(item.cells for item in built)
+    sheets = packet_sheets(cells, config.printing.paper)
+
+    def plural(count: int, noun: str) -> str:
+        return f"{count} {noun}{'' if count == 1 else 's'}"
+
+    # Deliberately not "cells - ": the packet total printed at the end of
+    # a run uses that, and a test reads the output by looking for it.
+    click.echo(
+        f"\n  {plural(len(built), 'newsletter')}, {plural(cells, 'cell')}, "
+        f"about {plural(sheets, 'sheet')} of paper."
+    )
+    limit = config.printing.trim_above_sheets
+    if limit <= 0 or sheets <= limit or not _stdin_is_tty():
+        return built
+
+    click.echo(f"  That is over the {limit}-sheet mark.")
+    picklist = build_trim_picklist(
+        [(item.document, item.cells) for item in built],
+        order=config.printing.trim_order,
+        today=None,
+    )
+    chosen = questionary_prompt(picklist, preselected=True)
+    if chosen is None:
+        return None
+    keep = {id(document) for document in chosen}
+    trimmed = [item for item in built if id(item.document) in keep]
+    dropped = len(built) - len(trimmed)
+    if dropped:
+        remaining = packet_sheets(
+            summary_cells + sum(item.cells for item in trimmed),
+            config.printing.paper,
+        )
+        click.echo(f"  Dropped {dropped}; about {plural(remaining, 'sheet')} now.")
+    return trimmed
 
 
 def fetch_queue(
@@ -930,13 +989,24 @@ def main(
             "key and adds time to the run)."
         )
 
+    summary_cells = sum(item.cells for item in summary_pages)
+    kept = _offer_trim(built, config, summary_cells)
+    if kept is None:
+        click.echo("\nCancelled; nothing printed.")
+        runlog.record({"outcome": "cancelled", "reason": "cancelled at the editor"})
+        return
+    built = kept
+    if not built:
+        click.echo("\nNothing left to print.")
+        runlog.record({"outcome": "cancelled", "reason": "trimmed to nothing"})
+        return
+
     # Contents, stamping, and imposing were the one stretch left silent
     # after the fetch and build bars were added - measured at up to several
     # seconds with nothing printed, none of it broken into a per-item loop
     # a progress bar could wrap. Each step announces itself instead, so the
     # packet total never appears out of a multi-second silence.
     click.echo("\n  Building the contents page...")
-    summary_cells = sum(item.cells for item in summary_pages)
     contents_built, contents_converged = build_contents(
         built,
         config,

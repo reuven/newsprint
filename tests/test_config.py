@@ -548,3 +548,21 @@ def test_four_a_side_keeps_the_smaller_default(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     path.write_text("[print]\ncells_per_side = 4\n")
     assert load_config(path).layout.font_size_pt == pytest.approx(9.0)
+
+
+def test_the_trim_threshold_has_a_default(tmp_path: Path) -> None:
+    """Above this many sheets the run stops and offers an editor. 20 is
+    a packet that no longer fits in a pocket - the author's own weekly
+    run came to 50 - and it is a number worth arguing with, which is why
+    it is in the file."""
+    path = tmp_path / "config.toml"
+    path.write_text("[print]\npaper = 'A4'\n")
+    assert load_config(path).printing.trim_above_sheets == 20
+
+
+def test_the_trim_threshold_can_be_turned_off(tmp_path: Path) -> None:
+    """0 never asks, for anyone who would rather print whatever the week
+    brought and sort it out on paper."""
+    path = tmp_path / "config.toml"
+    path.write_text("[print]\ntrim_above_sheets = 0\n")
+    assert load_config(path).printing.trim_above_sheets == 0
