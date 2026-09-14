@@ -33,6 +33,15 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
+    # Every uv invocation in this job, not just the sync. Without it,
+    # `uv sync --python 3.12` built a 3.12 environment and then the next
+    # `uv run` read .python-version (3.14), decided the environment was
+    # the wrong one, and rebuilt it - so ruff, mypy and pytest all ran on
+    # 3.14 and the 3.12 half of this matrix tested nothing. The floor
+    # this package declares was a claim with no evidence behind it.
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+
     steps:
       - uses: actions/checkout@v5
 
@@ -59,7 +68,7 @@ jobs:
       # uv installs the interpreter itself, so this does not depend on
       # whichever Python the runner image happens to ship.
       - name: Sync the environment
-        run: uv sync --locked --python ${{ matrix.python-version }}
+        run: uv sync --locked
 
       # The matrix claims to test the floor this package declares. Print
       # what actually got built, so "supports 3.12" is a claim with
