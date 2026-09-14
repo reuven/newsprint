@@ -4088,3 +4088,33 @@ def test_since_rejects_something_that_is_not_a_date(mail_config) -> None:
     )
     assert result.exit_code == 2
     assert "2026-08-01" in result.output or "%Y-%m-%d" in result.output
+
+
+def test_a_silent_reconnect_still_leaves_a_trace(monkeypatch, mail_config) -> None:
+    """mail.Mailbox replaces a dropped connection without telling the
+    caller - the fetch simply succeeds - and the notifier is the only
+    reason that recovery is visible at all. Its own docstring says why:
+    the root cause is still unknown, so the next occurrence has to leave
+    a trace rather than be absorbed.
+
+    Nothing was checking that cli.py passes one. Drop it and every
+    reconnect goes silent again, which is the state that made the
+    original problem so hard to see.
+    """
+
+    class _ReconnectingBox(_QueueBox):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            notify = kwargs.get("notify")
+            assert notify is not None, "cli.py has to hand Mailbox a notifier"
+            notify("reconnected after the server hung up")
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", _ReconnectingBox)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    result = CliRunner().invoke(
+        main, ["--dry-run", "--no-preview", "--config", str(mail_config.path)]
+    )
+
+    assert result.exit_code == 0
+    assert "reconnected after the server hung up" in result.output

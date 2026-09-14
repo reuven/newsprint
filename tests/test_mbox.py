@@ -364,3 +364,75 @@ def test_the_header_check_starts_at_the_line_after_the_separator(
     messages = list(split_mbox(_write(tmp_path, NORMAL, SECOND)))
     assert len(messages) == 2
     assert messages[1].startswith(b"From other@example.com")
+
+
+# ---------------------------------------------------------------------------
+# The two boundary helpers, tested directly.
+#
+# A "From " at the start of a line is only a message separator when a
+# blank line comes before it and a header line after it - otherwise it is
+# a sentence in somebody's prose. Both checks are arithmetic on byte
+# offsets, and every off-by-one in them either splits a message in half
+# or silently welds two together. Nothing was pinning the edges.
+# ---------------------------------------------------------------------------
+
+
+def test_two_bytes_in_is_far_enough_for_a_unix_blank_line() -> None:
+    """ "\\n\\nFrom " - the separator begins at offset 2, which is the
+    first offset where a Unix blank line can fit behind it."""
+    from newsprint.mbox import _preceded_by_blank_line
+
+    assert _preceded_by_blank_line(b"\n\nFrom a@b\n", 2) is True
+
+
+def test_one_byte_in_is_not_far_enough() -> None:
+    """A single newline is a line ending, not a blank line: there is no
+    room behind offset 1 for the line that would have to be empty."""
+    from newsprint.mbox import _preceded_by_blank_line
+
+    assert _preceded_by_blank_line(b"\nFrom a@b\n", 1) is False
+
+
+def test_three_bytes_in_is_far_enough_for_a_windows_blank_line() -> None:
+    """ "\\n\\r\\nFrom " - CRLF needs one byte more behind it than LF does,
+    and offset 3 is exactly that."""
+    from newsprint.mbox import _preceded_by_blank_line
+
+    assert _preceded_by_blank_line(b"\n\r\nFrom a@b\n", 3) is True
+
+
+def test_a_bare_crlf_at_the_start_is_not_a_blank_line() -> None:
+    """ "\\r\\nFrom " ends a line that was never there. Two bytes is room
+    for the CRLF and nothing before it."""
+    from newsprint.mbox import _preceded_by_blank_line
+
+    assert _preceded_by_blank_line(b"\r\nFrom a@b\n", 2) is False
+
+
+def test_an_ordinary_line_ending_is_not_a_blank_line() -> None:
+    """The common case, and the one that decides whether prose gets cut
+    in half: a "From " that simply follows a line of text."""
+    from newsprint.mbox import _preceded_by_blank_line
+
+    assert _preceded_by_blank_line(b"...and then\nFrom what I saw\n", 12) is False
+
+
+def test_a_from_line_with_nothing_after_it_is_not_a_separator() -> None:
+    """A file ending mid-line: there is no newline after the "From ", so
+    there is no header line after it either. Looking for one anyway
+    would read from the top of the file and find the first message's own
+    headers - a match, and the wrong one."""
+    from newsprint.mbox import _followed_by_header
+
+    data = b"Return-Path: x@y\nbody text From here"
+    assert data.find(b"\n", 23) == -1, "the fixture has to have no newline left"
+    assert _followed_by_header(data, 23) is False
+
+
+def test_the_header_is_looked_for_right_after_the_newline() -> None:
+    """One byte past the newline, not two. A single-letter header name is
+    what tells them apart: "X: v" is a header, and ": v" is not, because
+    a header name cannot be empty."""
+    from newsprint.mbox import _followed_by_header
+
+    assert _followed_by_header(b"From a@b\nX: v\n", 0) is True

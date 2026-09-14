@@ -153,6 +153,19 @@ the reason rather than re-derive it.
 - **`cast(...)`** - `typing.cast` does nothing at runtime, so every
   mutation of its first argument survives by construction. All eight of
   `_rendered_lines`' survivors are this.
+- **`split_mbox`'s `zip(..., strict=True)`** - the two sequences are
+  `starts` and `[*starts[1:], len(data)]`, which are the same length by
+  construction, so `strict` has nothing to catch and every value of it
+  behaves alike.
+- **`click.confirm(..., default=False)` in cli.py** - click's own default
+  for that parameter is already `False`, so removing it changes nothing.
+  Worth distinguishing from setup.py's, which is *not* equivalent: there
+  `confirm` is injected, so the explicit default is observable by the
+  caller and a test asserts it.
+- **`getattr(usage, "input_tokens", None)`'s default** - only reachable
+  with a usage object that carries no token counts, which neither the
+  SDK nor any fake produces. The same mutation on `response` *is*
+  reachable, and is tested.
 - **`run_setup`'s prompt copy** - a whole class rather than one mutant,
   and the largest group of survivors in the package. mutmut rewrites the
   text inside every `echo(...)` and `ask(...)`: case changes, `XX`

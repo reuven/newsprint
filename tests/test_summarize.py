@@ -524,12 +524,21 @@ def test_default_caller_raises_on_refusal(monkeypatch) -> None:
             return self
 
         def stream(self, **kwargs):
+            # Carries usable text as well as the refusal. With empty
+            # content this test passed for the wrong reason: any change
+            # to the refusal check fell through to "response had no text
+            # content", which is also a SummaryError, so the assertion
+            # could not tell the two apart.
             return _FakeStreamContext(
-                _FakeMessage(content=[], usage=_FakeUsage(0, 0), stop_reason="refusal")
+                _FakeMessage(
+                    content=[_FakeBlock(type="text", text='{"topics": []}')],
+                    usage=_FakeUsage(0, 0),
+                    stop_reason="refusal",
+                )
             )
 
     monkeypatch.setattr(summarize_module.anthropic, "Anthropic", RefusingAnthropic)
-    with pytest.raises(SummaryError):
+    with pytest.raises(SummaryError, match="declined to answer"):
         _default_caller("sk-test", "claude-opus-5", "prompt", 10.0, _SCHEMA)
 
 
@@ -631,3 +640,85 @@ def test_the_two_summary_pages_are_identified_and_kept_apart(
     # the contents page cannot sort it beside them.
     assert topics.document.date.tzinfo is not None
     assert topics.document.date.date() == PACKET_DATE
+
+
+def test_the_request_asks_for_what_the_caller_needs(monkeypatch) -> None:
+    """The arguments that shape the API call, none of which anything was
+    looking at: an output cap, the JSON schema the answer is parsed
+    against, and a retry budget. Every one of them could go missing and
+    the fake client would answer just the same - while the real one
+    returned prose instead of JSON, or ran unbounded, or retried a
+    failing call more times than intended at full cost."""
+    import newsprint.summarize as summarize_module
+
+    seen: dict[str, object] = {}
+
+    class WatchingAnthropic:
+        def __init__(self, api_key, **kwargs):
+            seen["api_key"] = api_key
+            seen.update(kwargs)
+            self.messages = self
+
+        def with_options(self, timeout):
+            seen["timeout"] = timeout
+            return self
+
+        def stream(self, **kwargs):
+            seen.update(kwargs)
+            return _FakeStreamContext(
+                _FakeMessage(
+                    content=[_FakeBlock(type="text", text='{"topics": []}')],
+                    usage=_FakeUsage(11, 22),
+                )
+            )
+
+    monkeypatch.setattr(summarize_module.anthropic, "Anthropic", WatchingAnthropic)
+    _default_caller("sk-test", "claude-opus-5", "the prompt", 30.0, _SCHEMA)
+
+    assert seen["api_key"] == "sk-test"
+    assert seen["model"] == "claude-opus-5"
+    assert seen["timeout"] == 30.0
+    assert isinstance(seen["max_tokens"], int) and seen["max_tokens"] > 0
+    # One retry, not the SDK's default of two: a summary is one call over
+    # a whole packet, and a second retry doubles the wait before the run
+    # gives up and prints without it.
+    assert seen["max_retries"] == 1
+    assert seen["output_config"] == {
+        "format": {"type": "json_schema", "schema": _SCHEMA},
+        "effort": "medium",
+    }
+    assert seen["messages"] == [{"role": "user", "content": "the prompt"}]
+
+
+def test_a_response_missing_usage_and_stop_reason_is_still_read(
+    monkeypatch,
+) -> None:
+    """Both are read with getattr and a default, because an SDK object is
+    not guaranteed to carry them - a streamed message, a future version,
+    a different model. Every fake here is a dataclass that always has
+    them, so the defaults were never used: drop them and the code raises
+    AttributeError on a response it is meant to cope with."""
+    import newsprint.summarize as summarize_module
+
+    class Bare:
+        """Only what the reader genuinely requires: the content blocks."""
+
+        def __init__(self) -> None:
+            self.content = [_FakeBlock(type="text", text='{"topics": []}')]
+
+    class BareAnthropic:
+        def __init__(self, api_key, **kwargs):
+            self.messages = self
+
+        def with_options(self, timeout):
+            return self
+
+        def stream(self, **kwargs):
+            return _FakeStreamContext(Bare())
+
+    monkeypatch.setattr(summarize_module.anthropic, "Anthropic", BareAnthropic)
+    answer = _default_caller("sk-test", "claude-opus-5", "prompt", 10.0, _SCHEMA)
+
+    assert answer.text == '{"topics": []}'
+    assert answer.input_tokens is None
+    assert answer.output_tokens is None
