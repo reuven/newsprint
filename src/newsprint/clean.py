@@ -1375,6 +1375,93 @@ def _is_short_date_line(line: str) -> bool:
 _DUPLICATE_HEADING_TAGS = frozenset({"h1", "h2"})
 
 
+# Substack's standing pitch, which it prints under the headline, between
+# sections and in the footer alike - sometimes more than once in an
+# issue. Matched by the template's own shape rather than by the words
+# loose in prose: the invitation is what makes it the pitch, so a
+# sentence about reader-supported publishing survives.
+_SUBSCRIPTION_PITCH = re.compile(
+    r"(reader-supported (publication|newsletter)"
+    r"|this (substack|newsletter) is reader-supported"
+    r"|to receive new posts and support my work"
+    r"|consider becoming a (free or )?paid subscriber"
+    r"|consider (becoming|upgrading to) a paid subscri)",
+    re.IGNORECASE,
+)
+
+# Long enough that the line is the pitch and not a sentence that happens
+# to touch it. Every real one runs well past this; the shortest measured
+# is 92 characters.
+_SUBSCRIPTION_PITCH_MAX_CHARS = 400
+
+
+def _strip_subscription_pitch(root: Tag) -> tuple[DroppedBlock, ...]:
+    """Remove the standing "become a paid subscriber" pitch, anywhere.
+
+    Unlike the footer, this is not a position: measured over the 268
+    fixtures it appears near the top in 6 messages, mid-article in 6 and
+    at the end in 13, so a rule keyed to the closing stretch reaches half
+    of it. What identifies it is the template wording, which the platform
+    writes and the author does not.
+
+    Capped by length so that a long passage which merely quotes the
+    phrase - an article about how newsletters make money - is not taken
+    for the template. The pitch itself is one or two sentences.
+    """
+    dropped = []
+    for leaf in list(_iter_text_elements(root)):
+        text = leaf.get_text(" ", strip=True)
+        if len(text) > _SUBSCRIPTION_PITCH_MAX_CHARS:
+            continue
+        if not _SUBSCRIPTION_PITCH.search(text):
+            continue
+        dropped.append(DroppedBlock(text=text, kind="chrome"))
+        leaf.decompose()
+    return tuple(dropped)
+
+
+def _strip_stamped_repeats(root: Tag, document: Document) -> tuple[DroppedBlock, ...]:
+    """Remove leading lines that only repeat what render.py has stamped.
+
+    Every cell opens with "PUBLICATION . DATE" and then the Subject as an
+    <h1>, both printed by render.py from the message's own headers. A
+    body line that is exactly one of those is that line printed twice -
+    the headline again, or the byline again, which is what Substack puts
+    under most headlines.
+
+    Exact equality, once normalized, and nothing looser. That is what
+    makes this safe where _strip_duplicate_title_block needs a date line
+    to confirm itself: the false positive that pass guards against is a
+    *prefix* - a section name like "Money Talks" that begins a longer
+    Subject - and an exact match cannot be one. A sentence that merely
+    starts with the Subject stays, because a sentence is a sentence.
+
+    _strip_duplicate_title_heading, below, stays as well: a heading may
+    repeat the Subject and go on ("The turbulent AI era is here. The
+    choices we make now are critical."), which is a repeat too, and only
+    a heading is safe to remove on that looser match.
+    """
+    stamped = {
+        _normalize_title_text(text)
+        for text in (document.title, document.publication)
+        if text
+    }
+    stamped.discard("")
+    if not stamped:
+        return ()
+    leaves = list(_iter_text_elements(root))
+    dropped = []
+    for leaf in leaves[:_DUPLICATE_TITLE_LEAD_WINDOW]:
+        text = leaf.get_text(" ", strip=True)
+        if _normalize_title_text(text) not in stamped:
+            continue
+        if len(leaves) < 2:
+            break
+        dropped.append(DroppedBlock(text=text, kind="duplicate_title"))
+        leaf.decompose()
+    return tuple(dropped)
+
+
 def _strip_duplicate_title_heading(
     root: Tag, document: Document
 ) -> tuple[DroppedBlock, ...]:
@@ -1746,11 +1833,26 @@ def clean_document(document: Document) -> Document:
     # run (title, subtitle, byline, date) where it applies, and would
     # lose its anchor if the title heading had already gone.
     dropped_duplicate_title += _strip_duplicate_title_heading(root, document)
+    # After both, and last: it is the narrowest of the three - an exact
+    # match on a single line - so anything the other two recognise as
+    # part of a larger header block should be theirs to remove first.
     # Before the backwards walk, which cannot get past the promotional
     # sentence senders put below their footer - see _strip_footer.
     dropped_trailing = _strip_footer(root)
     dropped_trailing += _strip_trailing_chrome_run(root)
     dropped_blocks = _strip_chrome_blocks(root)
+    # Both of these run after the block pass, and the ordering is
+    # load-bearing rather than tidy. They remove single lines, and a
+    # single line is often part of a block the pass above would have
+    # taken whole: The Reframe wraps its publication, headline, byline
+    # and date in one header div that scores as chrome together. Removing
+    # the headline and the publication from inside it first left a
+    # remainder that no longer read as chrome, so the block survived and
+    # the reader got a stray byline and date that used to be removed - a
+    # narrow rule disarming a broad one, which is how the net result got
+    # worse while each rule looked right.
+    dropped_lines += _strip_subscription_pitch(root)
+    dropped_duplicate_title += _strip_stamped_repeats(root, document)
     # Round 3, section E: runs last, after every judgement-based pass
     # above, and prunes what none of them could even see - an element
     # with no visible text is never a judgement call. Also runs before

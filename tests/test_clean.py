@@ -3440,8 +3440,10 @@ def test_only_cells_count_as_cells() -> None:
     )
 
 
-def _with_title(body: str, title: str) -> Document:
-    return document(f"<html><body>{body}</body></html>", title=title)
+def _with_title(body: str, title: str, publication: str = "Test Weekly") -> Document:
+    return document(
+        f"<html><body>{body}</body></html>", title=title, publication=publication
+    )
 
 
 def test_a_heading_repeating_the_stamped_title_goes() -> None:
@@ -3811,3 +3813,183 @@ def test_a_short_newsletter_keeps_its_opening() -> None:
     )
     assert _strip_leading_bar(soup) == ()
     assert "A short note this week" in str(soup)
+
+
+def test_a_line_repeating_the_stamped_publication_goes() -> None:
+    """render.py prints "PUBLICATION · DATE" above every cell, so a body
+    line that is just the publication's name is the byline printed
+    twice. Substack writes one into most issues, usually right under the
+    headline."""
+    cleaned = clean_document(
+        _with_title(
+            "<div><p>Ben Thompson</p>"
+            "<p>Tuesday, September 8, 2026</p>"
+            f"{_PROSE_PARAGRAPHS}</div>",
+            title="Write Things Down",
+            publication="Ben Thompson",
+        )
+    )
+    assert "Ben Thompson" not in cleaned.html
+    assert "only had two jobs" in cleaned.html
+
+
+def test_a_line_repeating_the_stamped_title_goes_even_unstyled() -> None:
+    """The headline again, as a plain paragraph rather than a heading.
+    The heading rule cannot see it, and the block rule wants a bare date
+    line it does not have - but the reader has still been shown it."""
+    cleaned = clean_document(
+        _with_title(
+            "<div><p>INSIDE THE BOX: How Constraints Make Us Better</p>"
+            f"{_PROSE_PARAGRAPHS}</div>",
+            title="INSIDE THE BOX: How Constraints Make Us Better",
+        )
+    )
+    assert "INSIDE THE BOX" not in cleaned.html
+    assert "only had two jobs" in cleaned.html
+
+
+def test_only_an_exact_repeat_goes() -> None:
+    """Exact equality, not a prefix. A section name that merely begins
+    the Subject - the Economist's "Money Talks" - is handled by the
+    heading rule where it is a heading, and left alone where it is a
+    sentence, because a sentence that starts with the Subject is a
+    sentence."""
+    cleaned = clean_document(
+        _with_title(
+            "<div><p>Money Talks is the name of this section, and it goes "
+            "on to say something of its own.</p>"
+            f"{_PROSE_PARAGRAPHS}</div>",
+            title="Money Talks",
+        )
+    )
+    assert "goes on to say something of its own" in cleaned.html
+
+
+def test_a_repeat_far_down_the_article_stays() -> None:
+    """Gated to the leading region like the passes beside it: the same
+    words halfway down are the article referring to itself."""
+    filler = "".join(f"<p>Paragraph {n} of the body.</p>" for n in range(20))
+    cleaned = clean_document(
+        _with_title(
+            f"<div>{filler}<p>Thinking in Bets</p>{_PROSE_PARAGRAPHS}</div>",
+            title="An Issue",
+            publication="Thinking in Bets",
+        )
+    )
+    assert "Thinking in Bets" in cleaned.html
+
+
+def test_the_reader_supported_pitch_goes_wherever_it_sits() -> None:
+    """Substack's standing pitch - "X is a reader-supported publication.
+    To receive new posts and support my work, consider becoming a free
+    or paid subscriber." - printed in 22 of the 268 fixtures, and not
+    only at the end: it turns up under the headline, mid-article and in
+    the footer, sometimes twice in one issue. The footer cut reaches the
+    ones at the bottom and nothing reaches the rest, so this is matched
+    by what it says rather than by where it sits."""
+    body = "".join(f"<p>Paragraph {n} of the article.</p>" for n in range(12))
+    cleaned = clean_document(
+        _with_title(
+            "<div>"
+            "<p>This Substack is reader-supported. To receive new posts and "
+            "support my work, consider becoming a free or paid subscriber.</p>"
+            f"{body}"
+            "<p>Python and Data Analysis Insights is a reader-supported "
+            "publication. To receive new posts, consider becoming a paid "
+            "subscriber.</p>"
+            "</div>",
+            title="An Issue",
+        )
+    )
+    assert "reader-supported" not in cleaned.html
+    assert "Paragraph 0" in cleaned.html
+    assert "Paragraph 11" in cleaned.html
+
+
+def test_an_article_about_reader_support_is_not_a_pitch() -> None:
+    """The words in a sentence of someone's own are not the template.
+    The match is the template's shape - a publication named, then the
+    invitation - not the phrase "reader-supported" loose in prose."""
+    body = "".join(f"<p>Paragraph {n} of the article.</p>" for n in range(12))
+    cleaned = clean_document(
+        _with_title(
+            "<div>"
+            "<p>Whether a reader-supported model can pay for original "
+            "reporting is the question every publisher is now asking "
+            "themselves, and the answers so far are not encouraging.</p>"
+            f"{body}</div>",
+            title="An Issue",
+        )
+    )
+    assert "every publisher is now asking" in cleaned.html
+
+
+def test_a_document_that_is_only_its_own_byline_keeps_it() -> None:
+    """The same guard the passes beside it apply: a repeat is only worth
+    removing while something remains to read."""
+    cleaned = clean_document(
+        _with_title("<p>Ben Thompson</p>", title="An Issue", publication="Ben Thompson")
+    )
+    assert "Ben Thompson" in cleaned.html
+
+
+def test_a_message_with_no_title_or_publication_is_left_alone() -> None:
+    """Nothing was stamped, so nothing in the body can be repeating it.
+    An empty Subject normalizes to an empty string, which must not match
+    every blank-looking line in the document."""
+    from bs4 import BeautifulSoup
+
+    from newsprint.clean import _strip_stamped_repeats
+    from newsprint.models import Document, Origin
+
+    bare = Document(
+        origin=Origin(kind="email", identifier="<x@example.com>"),
+        publication="",
+        title="",
+        date=datetime(2026, 9, 14, tzinfo=UTC),
+        html="<p>...</p>",
+    )
+    soup = BeautifulSoup(f"<html><body>{_PROSE_PARAGRAPHS}</body></html>", "lxml")
+    assert _strip_stamped_repeats(soup, bare) == ()
+    assert "only had two jobs" in str(soup)
+
+
+def test_every_repeat_in_the_window_goes_not_just_the_first() -> None:
+    """Substack prints the publication under the headline and again in a
+    byline line, so a cell can carry two of them before the article
+    starts. Stopping at the first would leave the second."""
+    cleaned = clean_document(
+        _with_title(
+            "<div><p>Ian Krietzberg</p><p>Sep 11, 2026</p>"
+            "<p>Ian Krietzberg</p>"
+            f"{_PROSE_PARAGRAPHS}</div>",
+            title="An Issue",
+            publication="Ian Krietzberg",
+        )
+    )
+    assert "Ian Krietzberg" not in cleaned.html
+    assert "only had two jobs" in cleaned.html
+
+
+def test_a_long_passage_quoting_the_pitch_is_not_the_pitch() -> None:
+    """The length cap. An essay discussing how reader-supported
+    publications work will say the words; the template is one or two
+    sentences, and nothing near four hundred characters."""
+    from bs4 import BeautifulSoup
+
+    from newsprint.clean import _strip_subscription_pitch
+
+    essay = (
+        "Whether a reader-supported publication can pay for original "
+        "reporting is the question every publisher is now asking, and the "
+        "answers so far are not encouraging: the arithmetic that works for "
+        "a writer with a mailing list does not obviously scale to a "
+        "newsroom, where the costs are fixed and large and the audience is "
+        "no bigger than it ever was, which is the part nobody likes to say. "
+        "The writers who have made it work are, almost without exception, "
+        "people who were already well known before they started."
+    )
+    assert len(essay) > 400, "the fixture has to be past the cap to test it"
+    soup = BeautifulSoup(f"<html><body><p>{essay}</p></body></html>", "lxml")
+    assert _strip_subscription_pitch(soup) == ()
+    assert "nobody likes to say" in str(soup)
