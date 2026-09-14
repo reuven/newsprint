@@ -397,11 +397,50 @@ def _is_unintroduced_figure(image: Tag) -> bool:
     height = cast(str, image.get("height", ""))
     if not height.replace(".", "", 1).isdigit():
         return False
-    return all(
-        (text := _nearest_block_text(image, forward=forward)) is not None
-        and len(text) >= _FIGURE_MIN_CONTEXT_CHARS
-        for forward in (False, True)
-    )
+    before = _nearest_block_text(image, forward=False)
+    if before is None or len(before) < _FIGURE_MIN_CONTEXT_CHARS:
+        return False
+    return _prose_follows(image)
+
+
+# How many short blocks may sit between a figure and the paragraph that
+# carries on below it. One: a caption. Ed Conway's charts are followed by
+# "From Trade World, sources in book notes" - forty characters, and the
+# reason those charts were being dropped. A run of short lines under an
+# image is an address block, not a caption, so stepping over more than
+# one would keep every logo sitting on top of a footer.
+_FIGURE_CAPTION_BLOCKS = 1
+
+
+def _prose_follows(image: Tag) -> bool:
+    """True when a paragraph of argument continues below `image`, allowing
+    a caption to sit in between.
+
+    Only forward: a caption goes under a figure, and a short block
+    *above* one is a heading, which says nothing about whether the
+    argument is still running.
+
+    No ancestor check here, unlike _nearest_block_text's backward walk:
+    an ancestor opens before the image, so find_all_next never returns
+    one. Checking anyway would be a line no input could reach.
+    """
+    skipped = 0
+    for node in image.find_all_next():
+        if node.name not in _CAPTION_BLOCK_TAGS:
+            continue
+        # Measured on the words, not on the markup. A mail template
+        # indents deeply, and a caption wrapped over several indented
+        # lines carries enough whitespace to pass for a paragraph if the
+        # raw text is what gets counted.
+        text = " ".join(node.get_text(" ", strip=True).split())
+        if not text:
+            continue
+        if len(text) >= _FIGURE_MIN_CONTEXT_CHARS:
+            return True
+        skipped += 1
+        if skipped > _FIGURE_CAPTION_BLOCKS:
+            return False
+    return False
 
 
 def _figure_placeholder_text(image: Tag, publication: str) -> str | None:

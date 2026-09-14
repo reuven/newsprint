@@ -3993,3 +3993,131 @@ def test_a_long_passage_quoting_the_pitch_is_not_the_pitch() -> None:
     soup = BeautifulSoup(f"<html><body><p>{essay}</p></body></html>", "lxml")
     assert _strip_subscription_pitch(soup) == ()
     assert "nobody likes to say" in str(soup)
+
+
+def test_a_chart_with_a_caption_under_it_is_still_a_figure() -> None:
+    """Ed Conway's charts sit between a paragraph of argument and a
+    source line - "From Trade World, sources in book notes" - which is
+    forty characters, under the threshold for prose. So the rule looked
+    for an argument on both sides, found a caption on one, and dropped
+    the chart.
+
+    A caption is better evidence of a figure than prose is, not worse.
+    One short block is stepped over when looking for the paragraph that
+    carries on below.
+    """
+    prose = (
+        "Britain assembles cars it does not make the parts for, and that "
+        "is highly relevant today for two separate reasons."
+    )
+    more = (
+        "The first is that the supply chain runs through a single plant, "
+        "and the second is that nobody has costed the alternative."
+    )
+    html = (
+        f"<html><body><div><p>{prose}</p>"
+        '<img src="https://example.com/chart.png" alt="" '
+        'width="550" height="331.3">'
+        "<p>From Trade World, sources in book notes</p>"
+        f"<p>{more}</p></div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 1
+
+
+def test_only_one_short_block_is_stepped_over() -> None:
+    """An image above a run of short lines is above a footer, not above a
+    caption. Stepping over the lot would keep every logo sitting on top
+    of an address block."""
+    prose = (
+        "Britain assembles cars it does not make the parts for, and that "
+        "is highly relevant today for two separate reasons."
+    )
+    html = (
+        f"<html><body><div><p>{prose}</p>"
+        '<img src="https://example.com/logo.png" alt="" '
+        'width="550" height="331.3">'
+        "<p>Andrew Moxon</p><p>PO Box 8181</p><p>Kentwood, MI 49508</p>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 0
+
+
+def test_a_run_of_short_lines_then_prose_is_still_not_a_caption() -> None:
+    """The counter, which nothing had pinned. An address block above a
+    sign-off is short line after short line and then more text; only the
+    *first* short block may be a caption, so a figure sitting on top of
+    three of them is sitting on a footer however much prose follows it.
+    """
+    prose = (
+        "Britain assembles cars it does not make the parts for, and that "
+        "is highly relevant today for two separate reasons."
+    )
+    more = (
+        "The first is that the supply chain runs through a single plant, "
+        "and the second is that nobody has costed the alternative at all."
+    )
+    html = (
+        f"<html><body><div><p>{prose}</p>"
+        '<img src="https://example.com/logo.png" alt="" '
+        'width="550" height="331.3">'
+        # Indented the way a real mail template is. The length that
+        # decides "caption or paragraph" has to be the text's, not the
+        # markup's: counted without stripping, this address block reads
+        # as three paragraphs of prose and the logo above it is kept.
+        "\n            <p>\n              Andrew Moxon\n            </p>"
+        "\n            <p>\n              PO Box 8181\n            </p>"
+        "\n            <p>\n              Kentwood, MI\n            </p>"
+        f"<p>{more}</p></div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 0
+
+
+def test_a_figure_with_only_a_caption_below_it_is_not_kept() -> None:
+    """Nothing carries on under this one - a caption and then the end of
+    the document - so the argument it would be interrupting is not
+    there. The caption is deliberately not one of the Source/Credit
+    leads, which the introduced-figure rule keeps on their own."""
+    prose = (
+        "Britain assembles cars it does not make the parts for, and that "
+        "is highly relevant today for two separate reasons."
+    )
+    html = (
+        f"<html><body><div><p>{prose}</p>"
+        "<div>"
+        '<img src="https://example.com/chart.png" alt="" '
+        'width="550" height="331.3">'
+        "<p>Andrew Moxon</p>"
+        "</div>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 0, "nothing carries on below the figure"
+
+
+def test_markup_between_a_figure_and_its_prose_is_stepped_over() -> None:
+    """Real mail does not put a <p> straight after an <img>. There is a
+    <br>, a wrapping <a>, an empty spacer cell - none of which is a
+    block with words in it, and none of which means the article has
+    stopped. Walking only as far as the first such tag drops the figure.
+    """
+    prose = (
+        "Britain assembles cars it does not make the parts for, and that "
+        "is highly relevant today for two separate reasons."
+    )
+    more = (
+        "The first is that the supply chain runs through a single plant, "
+        "and the second is that nobody has costed the alternative at all."
+    )
+    html = (
+        f"<html><body><div><p>{prose}</p>"
+        '<img src="https://example.com/chart.png" alt="" '
+        'width="550" height="331.3">'
+        "<br><span>&nbsp;</span>"  # inline markup, not a block
+        "<p></p>"  # an empty spacer block
+        f"<p>{more}</p></div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert cleaned.images_kept == 1
