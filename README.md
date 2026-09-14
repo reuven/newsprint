@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/reuven/newsprint/main/assets/logo.png"
+       alt="newsprint — your newsletters, on paper" width="620">
+</p>
+
 # newsprint
 
 Turn a week of email newsletters into a small stack of paper.
