@@ -1,4 +1,4 @@
-.PHONY: fixtures test lint audit
+.PHONY: fixtures test lint audit latest
 
 # WeasyPrint needs Pango/Cairo/gdk-pixbuf, installed via Homebrew on macOS.
 # Homebrew's lib directory isn't on the default dlopen search path, so we
@@ -23,8 +23,23 @@ test:
 	uv run pytest --cov=newsprint --cov-report=term-missing --cov-branch
 
 lint:
-	uv run ruff format src tests scripts
-	uv run ruff check src tests scripts
+	uv run ruff format src tests scripts assets
+	uv run ruff check src tests scripts assets
+
+# What a new user actually installs. `make test` runs against uv.lock,
+# which is right for reproducing a result and useless for noticing that a
+# dependency has moved - a user installing from PyPI never sees the lock
+# file. That gap shipped a crash once: WeasyPrint 70 changed the
+# url_fetcher contract while the lock held 69, so the suite passed and a
+# fresh install died on any image that failed to fetch.
+#
+# Leaves uv.lock upgraded on purpose. If the suite passes, commit it; the
+# lock should not sit behind what people are being given.
+latest:
+	uv lock --upgrade
+	uv sync
+	uv run pytest -q --cov=newsprint --cov-branch --cov-fail-under=100
+	git --no-pager diff --stat uv.lock
 
 # Processes the user's full local "toprint" archive (roughly 2,231
 # messages) through extract and clean_document and reports what got

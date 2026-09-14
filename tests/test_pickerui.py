@@ -634,3 +634,27 @@ def test_the_two_halves_of_validity_also_read_the_filtered_list() -> None:
     control.pointed_at = row
     assert control.is_selection_a_separator() is False
     assert control.is_selection_disabled() is None
+
+
+def test_clearing_a_filter_over_nothing_selectable_terminates() -> None:
+    """The bound on the walk, which nothing had exercised.
+
+    questionary cannot build a control with no selectable row - its own
+    _init_choices raises on one - so this reaches the state by taking the
+    rows away afterwards. That is the point of the bound: it does not
+    depend on questionary continuing to refuse, and without it a list
+    with nowhere to land would spin for ever, which on a terminal is a
+    hung prompt with no way out but ctrl-c.
+    """
+    from newsprint.pickerui import _clear_the_filter
+
+    control = InquirerControl(
+        [questionary.Separator("— ONE —"), questionary.Choice("a row", value=1)]
+    )
+    control.choices = [questionary.Separator("— ONE —")]
+    control.search_filter = "anything"
+
+    _clear_the_filter(control)
+
+    assert control.search_filter is None
+    assert not control.is_selection_valid(), "there was never a row to land on"
