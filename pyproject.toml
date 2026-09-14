@@ -30,7 +30,13 @@ dependencies = [
     "pypdf>=6.17.0",
     "questionary>=2.1.1",
     "wcwidth>=0.8.3",
-    "weasyprint>=69.0",
+    # 70 changed the url_fetcher contract: it reads _fail_on_errors off
+    # the fetcher when one raises, so a plain function turns every failed
+    # image fetch into an AttributeError from inside WeasyPrint. render.py
+    # answers that contract now, but a 69 that never asked would also
+    # never have been tested against it here - so the floor moves up
+    # rather than leaving two shapes to support.
+    "weasyprint>=70.0",
 ]
 
 [project.urls]

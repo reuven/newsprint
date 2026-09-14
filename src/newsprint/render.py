@@ -292,6 +292,30 @@ def _public_only(fetcher: ImageFetcher) -> ImageFetcher:
     return fetch
 
 
+class _Fetcher:
+    """A url_fetcher WeasyPrint will still talk to when a fetch fails.
+
+    WeasyPrint 70 reads `_fail_on_errors` off the fetcher the moment one
+    raises, to decide whether the failure is fatal to the whole render.
+    A plain function has no such attribute, so every failed fetch became
+    an AttributeError from inside WeasyPrint rather than the dropped
+    image it is meant to be - a dead URL, a timeout, or a URL this module
+    refuses. 69 never asked, which is why the dev environment, pinned a
+    version behind what a fresh install gets, showed nothing.
+
+    False, because a newsletter with an unreachable image should print
+    without it, which is what this module has always done.
+    """
+
+    _fail_on_errors = False
+
+    def __init__(self, fetch: ImageFetcher) -> None:
+        self._fetch = fetch
+
+    def __call__(self, url: str) -> URLFetcherResponse:
+        return self._fetch(url)
+
+
 def _fetch_and_process(
     base_fetcher: ImageFetcher,
     max_width_px: int,
@@ -415,8 +439,8 @@ def render(
         else _public_only(URLFetcher(timeout=_IMAGE_FETCH_TIMEOUT_S))
     )
     failures = image_fetch_failures if image_fetch_failures is not None else []
-    fetcher = _fetch_and_process(
-        base_fetcher, _cap_width_px(config), failures, image_cache
+    fetcher = _Fetcher(
+        _fetch_and_process(base_fetcher, _cap_width_px(config), failures, image_cache)
     )
     HTML(string=html, url_fetcher=fetcher).write_pdf(output)
     return output
