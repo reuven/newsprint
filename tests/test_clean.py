@@ -4121,3 +4121,151 @@ def test_markup_between_a_figure_and_its_prose_is_stepped_over() -> None:
     )
     cleaned = clean_document(document(html))
     assert cleaned.images_kept == 1
+
+
+def test_a_center_element_does_not_centre_the_article() -> None:
+    """<center> is a layout wrapper from the same era as the layout
+    tables, and it carries its own alignment: nothing in the stylesheet
+    can override the element itself, so an article inside one prints
+    centred, line by line, which is unreadable at length. The Economist
+    and Dan Oshinsky both wrap whole issues in it."""
+    # Not the root: _content_root already descends through a single
+    # wrapper, so the 48 that survive in the corpus are nested ones.
+    html = (
+        "<html><body><div>"
+        "<p>The article opens here, before the template wraps the rest of "
+        "it up inside a centring element of its own.</p>"
+        f"<center><div>{_PROSE_PARAGRAPHS}</div></center>"
+        "</div></body></html>"
+    )
+    cleaned = clean_document(document(html))
+    assert "<center" not in cleaned.html
+    assert "only had two jobs" in cleaned.html
+
+
+def test_wireds_delivery_notice_is_a_footer() -> None:
+    """ "This email was sent to you by WIRED. To ensure delivery to your
+    inbox (not bulk or junk folders), please add ... to your address
+    book" - four of the Wired issues in one packet ended with it."""
+    from bs4 import BeautifulSoup
+
+    from newsprint.clean import _strip_footer
+
+    body = "".join(f"<p>Paragraph {n} of the article.</p>" for n in range(20))
+    soup = BeautifulSoup(
+        f"<html><body><div>{body}"
+        "<p>This email was sent to you by WIRED. To ensure delivery to your "
+        "inbox (not bulk or junk folders), please add "
+        "wired@newsletters.wired.com to your address book.</p>"
+        "</div></body></html>",
+        "lxml",
+    )
+    assert len(_strip_footer(soup)) == 1
+    assert "sent to you by" not in str(soup)
+
+
+def test_a_membership_thank_you_is_a_pitch() -> None:
+    """The Bulwark closes on "We couldn't bring you honest news and
+    analysis without our Bulwark+ members, so thank you. Help us spread
+    the word" - a membership pitch wearing a thank-you, and printed in
+    three different Bulwark newsletters in one packet."""
+    body = "".join(f"<p>Paragraph {n} of the article.</p>" for n in range(12))
+    cleaned = clean_document(
+        _with_title(
+            f"<div>{body}"
+            "<p>We couldn’t bring you honest news and analysis without our "
+            "Bulwark+ members, so thank you. Help us spread the word about "
+            "our community by sharing this post.</p>"
+            "<p>The Triad is home to the most engaged comment section on the "
+            "internet thanks to our Bulwark+ members.</p>"
+            "</div>",
+            title="An Issue",
+        )
+    )
+    assert "Bulwark+" not in cleaned.html
+    assert "Paragraph 0" in cleaned.html
+
+
+def test_a_line_that_is_only_a_link_to_read_more_goes() -> None:
+    """ "Read the full report." is a button. On paper a link is not
+    something a reader can follow, so a line whose whole content is one,
+    saying only that there is more elsewhere, is a line that costs space
+    and gives nothing. 45 of them across the corpus: "Read More Here",
+    "Go deeper", "Keep reading", "FIND OUT MORE"."""
+    cleaned = clean_document(
+        _with_title(
+            f"<div>{_PROSE_PARAGRAPHS}"
+            '<p><a href="https://example.com/r">Read the full report.</a></p>'
+            '<p><a href="https://example.com/d">Go deeper</a></p>'
+            "</div>",
+            title="An Issue",
+        )
+    )
+    assert "Read the full report" not in cleaned.html
+    assert "Go deeper" not in cleaned.html
+    assert "only had two jobs" in cleaned.html
+
+
+def test_a_link_inside_a_sentence_is_left_alone() -> None:
+    """The link has to be the whole line. A sentence that happens to
+    contain one is the article, and reads perfectly well on paper with
+    the link simply not clickable."""
+    cleaned = clean_document(
+        _with_title(
+            "<div><p>You can "
+            '<a href="https://example.com/r">read the full report</a> '
+            "if you want the numbers behind any of this, though the "
+            "summary above is the part that matters.</p>"
+            f"{_PROSE_PARAGRAPHS}</div>",
+            title="An Issue",
+        )
+    )
+    assert "read the full report" in cleaned.html
+
+
+def test_the_headline_after_a_section_prefix_is_still_the_headline() -> None:
+    """The Economist sends "Drum Tower: Can China finally relax?" and
+    prints "Can China finally relax?" in the body. render.py stamps the
+    whole Subject, section name and all, so the body line is the
+    headline again with the section dropped."""
+    cleaned = clean_document(
+        _with_title(
+            f"<div><p>Can China finally relax?</p>{_PROSE_PARAGRAPHS}</div>",
+            title="Drum Tower: Can China finally relax?",
+        )
+    )
+    assert "Can China finally relax?" not in cleaned.html
+    assert "only had two jobs" in cleaned.html
+
+
+def test_a_section_name_run_into_the_headline_is_the_headline() -> None:
+    """The Bulwark's "The Secret PodcastIt's Getting Worse" - a section
+    label and the Subject with no space between them, because they are
+    adjacent elements in the template. Bounded tightly: the nearest
+    thing to it in the corpus that is *not* a repeat carries 30 more
+    characters, and this carries 16."""
+    cleaned = clean_document(
+        _with_title(
+            "<div><p>The Secret PodcastIt’s Getting Worse</p>"
+            f"{_PROSE_PARAGRAPHS}</div>",
+            title="It’s Getting Worse",
+        )
+    )
+    assert "Getting Worse" not in cleaned.html
+    assert "only had two jobs" in cleaned.html
+
+
+def test_a_sentence_ending_on_the_headline_is_not_a_repeat() -> None:
+    """The bound is what keeps this safe. A paragraph that happens to
+    finish on the Subject's words is prose, and every such case measured
+    carries far more than the allowance."""
+    cleaned = clean_document(
+        _with_title(
+            "<div><p>A few weeks back I met a journalist friend of mine "
+            "who asked me, more or less out of nowhere, whether it is "
+            "really true that it’s getting worse</p>"
+            f"{_PROSE_PARAGRAPHS}</div>",
+            title="It’s getting worse",
+        )
+    )
+    assert "journalist friend" in cleaned.html

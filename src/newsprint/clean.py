@@ -775,6 +775,8 @@ _FOOTER_MARKER = re.compile(
     r"|our mailing address is|add us to your address book"
     r"|view (this|the) (e-?mail|newsletter) (online|in your browser)"
     r"|no longer want to receive"
+    r"|this (e-?mail|message) was sent to you by"
+    r"|to your address book"
     r"|you'?re currently a (free|paid) subscriber",
     re.IGNORECASE,
 )
@@ -1424,7 +1426,11 @@ _SUBSCRIPTION_PITCH = re.compile(
     r"|this (substack|newsletter) is reader-supported"
     r"|to receive new posts and support my work"
     r"|consider becoming a (free or )?paid subscriber"
-    r"|consider (becoming|upgrading to) a paid subscri)",
+    r"|consider (becoming|upgrading to) a paid subscri"
+    r"|without our [\w+]+ members"
+    r"|thanks to our [\w+]+ members"
+    r"|help us spread the word"
+    r"|exclusively for members of)",
     re.IGNORECASE,
 )
 
@@ -1432,6 +1438,58 @@ _SUBSCRIPTION_PITCH = re.compile(
 # to touch it. Every real one runs well past this; the shortest measured
 # is 92 characters.
 _SUBSCRIPTION_PITCH_MAX_CHARS = 400
+
+
+# A line that is nothing but a link saying there is more elsewhere.
+# Axios prints "Read the full report." under most items; others send
+# "Read More Here", "Go deeper", "Keep reading", "FIND OUT MORE". On
+# screen these are buttons. On paper a link is not something a reader
+# can follow, so the line costs space and gives nothing back.
+_LINK_CALL_TO_ACTION = re.compile(
+    r"^(read|see|view|watch|listen|go|keep reading|continue reading"
+    r"|share|learn|find out|dive|check)\b",
+    re.IGNORECASE,
+)
+
+# Long enough to be a sentence rather than a button.
+_LINK_CALL_TO_ACTION_MAX_CHARS = 44
+
+
+def _is_link_call_to_action(leaf: Tag) -> bool:
+    """True when `leaf` is a button: one link, and nothing else on the line.
+
+    The link has to be the whole line. A sentence that merely contains
+    one is the article, and reads perfectly well on paper with the link
+    simply not clickable - which is why the anchors' own text is
+    measured against the line's rather than just counted.
+    """
+    text = " ".join(leaf.get_text(" ", strip=True).split())
+    if not text or len(text) > _LINK_CALL_TO_ACTION_MAX_CHARS:
+        return False
+    if not _LINK_CALL_TO_ACTION.match(text):
+        return False
+    links = leaf.find_all("a")
+    if not links:
+        return False
+    linked = " ".join(
+        " ".join(anchor.get_text(" ", strip=True).split()) for anchor in links
+    )
+    return len(linked) >= len(text) - 2
+
+
+def _strip_link_calls_to_action(root: Tag) -> tuple[DroppedBlock, ...]:
+    """Remove the buttons, wherever they sit."""
+    dropped = []
+    for leaf in list(_iter_text_elements(root)):
+        if not _is_link_call_to_action(leaf):
+            continue
+        dropped.append(
+            DroppedBlock(
+                text=" ".join(leaf.get_text(" ", strip=True).split()), kind="chrome"
+            )
+        )
+        leaf.decompose()
+    return tuple(dropped)
 
 
 def _strip_subscription_pitch(root: Tag) -> tuple[DroppedBlock, ...]:
@@ -1459,6 +1517,55 @@ def _strip_subscription_pitch(root: Tag) -> tuple[DroppedBlock, ...]:
     return tuple(dropped)
 
 
+# A Subject of the form "Section: Headline". The Economist sends "Drum
+# Tower: Can China finally relax?" and prints the headline alone in the
+# body; render.py stamps the whole Subject, so the body line is the same
+# headline with the section dropped. Bounded so that a colon inside a
+# sentence does not turn half of it into a heading.
+_SECTION_PREFIX = re.compile(r"^[^:]{1,32}:\s+(?P<headline>.+)$")
+
+# How much a line may carry beyond the Subject and still be a repeat of
+# it. The Bulwark runs a section label straight into the headline - "The
+# Secret PodcastIt's Getting Worse", 16 characters over - because they
+# are adjacent elements with no space between them. Measured over the
+# corpus, the nearest line that is *not* a repeat carries 30, so this
+# sits between the two with room on either side.
+_STAMPED_SUFFIX_SLACK = 24
+
+
+def _stamped_forms(document: Document) -> frozenset[str]:
+    """Every normalized form of what render.py prints above the body."""
+    forms = {document.title or "", document.publication or ""}
+    if match := _SECTION_PREFIX.match(document.title or ""):
+        forms.add(match.group("headline"))
+    normalized = {_normalize_title_text(form) for form in forms}
+    normalized.discard("")
+    return frozenset(normalized)
+
+
+def _repeats_a_stamped_line(text: str, stamped: frozenset[str], title: str) -> bool:
+    """True when `text` says only what has already been stamped.
+
+    Exact equality against any stamped form, or the Subject with a short
+    label run onto the front of it - which is one element butting against
+    another in a template, not a sentence.
+    """
+    normalized = _normalize_title_text(text)
+    if not normalized:
+        return False
+    if normalized in stamped:
+        return True
+    return (
+        len(title) >= _MIN_STAMPED_SUFFIX_CHARS
+        and normalized.endswith(title)
+        and len(normalized) - len(title) <= _STAMPED_SUFFIX_SLACK
+    )
+
+
+# Below this a Subject is too short for "ends with it" to mean anything.
+_MIN_STAMPED_SUFFIX_CHARS = 8
+
+
 def _strip_stamped_repeats(root: Tag, document: Document) -> tuple[DroppedBlock, ...]:
     """Remove leading lines that only repeat what render.py has stamped.
 
@@ -1480,19 +1587,15 @@ def _strip_stamped_repeats(root: Tag, document: Document) -> tuple[DroppedBlock,
     choices we make now are critical."), which is a repeat too, and only
     a heading is safe to remove on that looser match.
     """
-    stamped = {
-        _normalize_title_text(text)
-        for text in (document.title, document.publication)
-        if text
-    }
-    stamped.discard("")
+    stamped = _stamped_forms(document)
     if not stamped:
         return ()
+    title = _normalize_title_text(document.title or "")
     leaves = list(_iter_text_elements(root))
     dropped = []
     for leaf in leaves[:_DUPLICATE_TITLE_LEAD_WINDOW]:
         text = leaf.get_text(" ", strip=True)
-        if _normalize_title_text(text) not in stamped:
+        if not _repeats_a_stamped_line(text, stamped, title):
             continue
         if len(leaves) < 2:
             break
@@ -1809,6 +1912,13 @@ def _unwrap_layout_tables(root: Tag) -> int:
     simply unwrapping every descendant.
     """
     unwrapped = 0
+    # <center> is the same era and the same job as a layout table, and it
+    # carries its own alignment: no stylesheet can override the element
+    # itself, so an article inside one prints centred line by line. 48 of
+    # them survive the other passes across the corpus.
+    for centre in root.find_all("center"):
+        centre.unwrap()
+        unwrapped += 1
     for table in root.find_all("table"):
         if not is_layout_table(table):
             continue
@@ -1891,6 +2001,7 @@ def clean_document(document: Document) -> Document:
     # narrow rule disarming a broad one, which is how the net result got
     # worse while each rule looked right.
     dropped_lines += _strip_subscription_pitch(root)
+    dropped_lines += _strip_link_calls_to_action(root)
     dropped_duplicate_title += _strip_stamped_repeats(root, document)
     # Round 3, section E: runs last, after every judgement-based pass
     # above, and prunes what none of them could even see - an element
