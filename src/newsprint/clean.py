@@ -70,6 +70,7 @@ from .boilerplate import (
     is_definite_chrome_line,
     is_full_line_chrome,
 )
+from .config import ImagePolicy
 from .models import Document, DroppedBlock, DroppedImage
 
 # Removed outright, wherever they appear.
@@ -533,7 +534,27 @@ def _content_root(soup: BeautifulSoup) -> Tag:
         return node
 
 
-def _strip_images(root: Tag, publication: str) -> tuple[int, tuple[DroppedImage, ...]]:
+def _keeps_image(image: Tag, images: ImagePolicy) -> bool:
+    """Whether this image survives, under `images`.
+
+    "none" keeps nothing, for a publication whose pictures are furniture.
+    "all" keeps anything wide enough to be a figure, skipping the
+    judgement about whether the author introduced it - for a publication
+    whose figures the rules keep dropping. Width still applies either
+    way: a tracking pixel is three pixels across and is not a figure at
+    any setting, and nothing this module refuses is ever fetched.
+    """
+    if images == "none":
+        return False
+    if images == "all":
+        width = _image_width_px(image)
+        return width is not None and width >= _ARGUMENT_FIGURE_MIN_WIDTH_PX
+    return _is_argument_figure(image)
+
+
+def _strip_images(
+    root: Tag, publication: str, images: ImagePolicy = "default"
+) -> tuple[int, tuple[DroppedImage, ...]]:
     """Decide each image's fate: kept, given a text placeholder, or
     dropped outright. Most images are still dropped, exactly as before -
     only the small subset _is_argument_figure recognizes as an author's
@@ -559,7 +580,7 @@ def _strip_images(root: Tag, publication: str) -> tuple[int, tuple[DroppedImage,
     kept = 0
     for image in root.find_all("img"):
         src = cast(str, image.get("src", ""))
-        if _is_argument_figure(image):
+        if _keeps_image(image, images):
             kept += 1
             continue
         placeholder_text = _figure_placeholder_text(image, publication)
@@ -1936,7 +1957,7 @@ def _unwrap_layout_tables(root: Tag) -> int:
     return unwrapped
 
 
-def clean_document(document: Document) -> Document:
+def clean_document(document: Document, images: ImagePolicy = "default") -> Document:
     soup = BeautifulSoup(document.html, "lxml")
     for tag_name in _NEVER_CONTENT:
         for tag in soup.find_all(tag_name):
@@ -1947,7 +1968,7 @@ def clean_document(document: Document) -> Document:
     # placeholder judgement inside _strip_images reads the `width`
     # attribute that pass strips. Confirmed here, not assumed - see
     # _strip_images's own docstring.
-    kept, dropped_images = _strip_images(root, document.publication)
+    kept, dropped_images = _strip_images(root, document.publication, images)
     # Round 2, F3: the line-level phrase pass runs first, on the untouched
     # tree. It matches explicit text rather than a score, so running it
     # early is always safe (see _strip_line_chrome's docstring) and can

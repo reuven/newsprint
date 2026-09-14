@@ -347,3 +347,40 @@ def test_a_build_failure_says_what_went_wrong(config, tmp_path: Path) -> None:
     assert str(error) == (
         f"{error.word_count} words, below the {error.min_words}-word threshold"
     )
+
+
+def test_the_per_publication_image_rule_reaches_the_cleaner(
+    config, tmp_path: Path
+) -> None:
+    """The rule is written in the config and applied in clean.py, which
+    never sees a config - so the only thing that can carry it is the
+    build, and nothing was checking that it does."""
+    import dataclasses
+
+    from newsprint.config import ImagesConfig
+
+    prose = (
+        "Demand from AI and heavy industry is driving load growth but also "
+        "outstripping growth in power infrastructure everywhere."
+    )
+    body = "".join(f"<p>{prose} Paragraph {n}.</p>" for n in range(12))
+    html = (
+        "<html><body><div>"
+        f"{body}"
+        # An address render.py refuses outright, so nothing leaves this
+        # machine: images_kept is decided in cleaning, before any fetch,
+        # so the count is the same either way and the test stays offline.
+        '<img src="http://127.0.0.1:1/chart.png" alt="" width="550" '
+        'height="351.3">'
+        f"{body}</div></body></html>"
+    )
+    doc = dataclasses.replace(document(html), publication="Apricitas Economics")
+
+    normal = build([doc], config, tmp_path / "a")[0]
+    assert normal[0].document.images_kept == 1
+
+    silenced = dataclasses.replace(
+        config, images=ImagesConfig(rules=(("apricitas", "none"),))
+    )
+    quiet = build([doc], silenced, tmp_path / "b")[0]
+    assert quiet[0].document.images_kept == 0

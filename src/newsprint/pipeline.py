@@ -78,7 +78,9 @@ def build_one(
     """
     document_dir = out_dir / f"{index:03d}"
     try:
-        cleaned = clean_document(document)
+        cleaned = clean_document(
+            document, config.images.policy_for(document.publication)
+        )
         if not cleaned.html.strip():
             raise EmptyDocumentError(
                 f"{document.publication}: nothing left after cleaning"

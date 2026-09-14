@@ -88,6 +88,10 @@ class _FakeBox:
     def search_flagged(self) -> list[int]:
         return [1, 2]
 
+    def search_all(self) -> list[int]:
+        """Everything in the folder - what --publications scans."""
+        return [1, 2]
+
     def search_unflagged_since(self, since) -> list[int]:
         self.since_arg = since
         return []
@@ -4231,3 +4235,85 @@ def test_keeping_everything_in_the_editor_says_nothing_about_dropping(
     assert seen, "the editor was offered"
     assert "Dropped" not in result.output
     assert "Nothing left to print" not in result.output
+
+
+def test_publications_lists_what_the_folder_actually_holds(
+    monkeypatch, mail_config
+) -> None:
+    """Writing an [images] rule means naming a publication, and the names
+    are the senders' own: 102 distinct ones in a real archive, up to 65
+    characters, some of them "b98e2de85f03865f1d38de74fmc list". Nobody
+    can type those from memory, so the tool says what it sees."""
+    asked: list[tuple[str, str]] = []
+
+    def password(host: str, user: str) -> str:
+        asked.append((host, user))
+        return "secret"
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", _QueueBox)
+    monkeypatch.setattr("newsprint.cli.password_for", password)
+
+    result = CliRunner().invoke(
+        main, ["--publications", "--config", str(mail_config.path)]
+    )
+
+    assert result.exit_code == 0
+    # The keyring is asked for this account's password, not for some
+    # other pair - the entry is keyed on both halves.
+    assert asked == [("imap.example.com", "someone@example.com")]
+    assert "1 publication(s):" in result.output
+    # The name newsprint derives from the fixture's own headers, and how
+    # many messages carry it - the pair a reader needs, and a count that
+    # has to be the real one rather than any number at all.
+    assert "Newsletter  2" in result.output
+    assert "images" in result.output, "it should say what the names are for"
+    assert "Dry run" not in result.output, "it builds nothing and prints nothing"
+
+    # The scan connects with what the config says, the way every other
+    # mode does: a host or a password going missing here would search
+    # somebody else's folder, or nobody's.
+    opened = _FakeBox.instances[-1].kwargs
+    assert opened["host"] == "imap.example.com"
+    assert opened["user"] == "someone@example.com"
+    assert opened["password"] == "secret"
+    assert opened["folder"] == "INBOX/toprint"
+
+
+def test_publications_on_an_empty_folder_says_so(monkeypatch, mail_config) -> None:
+    """An empty folder is a plausible first run, and "0 publication(s):"
+    followed by nothing is a worse answer than a sentence."""
+
+    class _Empty(_FakeBox):
+        def search_all(self) -> list[int]:
+            return []
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", _Empty)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    result = CliRunner().invoke(
+        main, ["--publications", "--config", str(mail_config.path)]
+    )
+    assert result.exit_code == 0
+    assert "No messages" in result.output
+
+
+def test_publications_turns_a_mail_error_into_a_clean_message(
+    monkeypatch, mail_config
+) -> None:
+    """The same courtesy every other mode gets: a server that will not
+    answer is a message, not a traceback."""
+
+    from newsprint.mail import MailError
+
+    def refuse(**kwargs):
+        raise MailError("connection refused")
+
+    monkeypatch.setattr("newsprint.cli.Mailbox", refuse)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+
+    result = CliRunner().invoke(
+        main, ["--publications", "--config", str(mail_config.path)]
+    )
+    assert result.exit_code != 0
+    assert "connection refused" in result.output
+    assert "Traceback" not in result.output

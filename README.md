@@ -245,6 +245,10 @@ Preview for a look, and asks before printing. Useful flags:
   further back after a few weeks away (`--since 2026-08-01`), or narrow it
   to the last day or two. Starred messages are unaffected — those are
   always collected, however old.
+- `--publications` — list the publications in your folder, as newsprint
+  names them, with how many messages each has. Builds nothing and prints
+  nothing; it exists so you can write `[images]` rules without guessing at
+  names.
 - `--config PATH` — use a config file other than the default.
 
 Run `newsprint --help` for the full list, and `newsprint --version` for the
@@ -492,6 +496,31 @@ cut starts from the chrome instead.
 Measured across the 268-newsletter archive: chrome lines reaching the page
 fall from 51 across 25 messages to 4 across 4, and 399 lines go without a
 single message growing by one.
+
+### Images from one publication
+
+Some publications send charts worth the toner; others send the same
+decorative motif every week. `[images]` says what to do about a named one:
+
+```toml
+[images]
+"the bulwark" = "none"    # never keep an image from these
+"apricitas"   = "all"     # keep every image wide enough to be a figure
+```
+
+The key is **any part of the publication's name**, matched without regard
+to case, because the names senders use run to 65 characters — "Benjamin
+Bennett Alexander from Python and Data Analysis Insights" — and one real
+archive holds 102 distinct ones. `"bulwark"` covers all four of the
+Bulwark's newsletters at once. Where two rules match, the longer one wins,
+so a broad rule can be given an exception.
+
+`none` keeps nothing. `all` skips the judgement about whether the author
+introduced the figure, but still refuses anything too narrow to be one — a
+tracking pixel is not a figure at any setting, and nothing that is refused
+is ever fetched. With no entry a publication gets the usual rules.
+
+Run `newsprint --publications` to see the names your own mail uses.
 
 ## Undoing a retirement
 

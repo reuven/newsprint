@@ -1590,3 +1590,13 @@ def test_the_default_factory_hands_the_verified_context_to_imaplib() -> None:
     assert isinstance(context, ssl.SSLContext)
     assert context.verify_mode is ssl.CERT_REQUIRED
     assert context.check_hostname is True
+
+
+def test_search_all_asks_for_every_message_in_the_folder() -> None:
+    """--publications needs the whole folder, not the starred subset or a
+    window: the point is to name every publication that sends here."""
+    fake = FakeIMAP("h")
+    fake.search_results["ALL"] = b"4 7 11"
+    with mailbox(fake) as box:
+        assert box.search_all() == [4, 7, 11]
+    assert ("uid", "SEARCH", None, "ALL") in fake.calls

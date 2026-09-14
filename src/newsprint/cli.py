@@ -14,6 +14,7 @@ import tempfile
 import textwrap
 import time
 import tomllib
+from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from importlib.metadata import metadata, version
@@ -314,6 +315,50 @@ def _offer_trim(
         )
         click.echo(f"  Dropped {dropped}; about {plural(remaining, 'sheet')} now.")
     return trimmed
+
+
+def show_publications(config: Config) -> None:
+    """List the publications in the folder, as newsprint names them.
+
+    Writing an [images] rule means naming a publication, and the names
+    are the senders' own: a real archive holds 102 distinct ones, up to
+    65 characters, a few of them "b98e2de85f03865f1d38de74fmc list".
+    Nobody types those from memory, so the tool says what it sees and the
+    reader copies any part of one.
+
+    Headers only, and read-only - the same scan the unstarred picker
+    already makes, for the same reason: the whole bodies are not needed
+    to answer this and would cost a great deal more.
+    """
+    config.require_mail()
+    click.echo(f"Connecting to {config.mail.host} as {config.mail.user}...")
+    password = password_for(config.mail.host, config.mail.user)
+    names = load_publication_names()
+    counts: Counter[str] = Counter()
+    for folder in config.mail.folders:
+        with Mailbox(
+            host=config.mail.host,
+            user=config.mail.user,
+            password=password,
+            folder=folder,
+        ) as box:
+            uids = box.search_all()
+            click.echo(f"  {box.folder}: {len(uids)} message(s).")
+            for document in _fetch_documents(
+                box, uids, names, items=_HEADER_ITEMS, label="  Scanning"
+            ):
+                counts[document.publication] += 1
+    if not counts:
+        click.echo("\nNo messages, so no publications to name.")
+        return
+    width = max(len(name) for name in counts)
+    click.echo(f"\n{len(counts)} publication(s):")
+    for name, count in sorted(counts.items()):
+        click.echo(f"  {name.ljust(width)}  {count}")
+    click.echo(
+        "\nAny part of a name works in an [images] rule, without regard "
+        "to case - see config.example.toml."
+    )
 
 
 def fetch_queue(
@@ -774,6 +819,17 @@ def about() -> str:
         "trash and re-star them. Builds nothing and prints nothing."
     ),
 )
+@click.option(
+    "--publications",
+    "list_publications",
+    is_flag=True,
+    help=(
+        "List the publications in your folder, as newsprint names them, "
+        "with how many messages each has. Use these to write [images] "
+        "rules - any part of a name will do. Builds nothing and prints "
+        "nothing."
+    ),
+)
 @click.option("--no-preview", is_flag=True, help="Skip opening the PDF in Preview.")
 @click.option(
     "--no-pick",
@@ -817,6 +873,7 @@ def main(
     no_print: bool,
     setup_mode: bool,
     unretire: bool,
+    list_publications: bool,
     no_preview: bool,
     no_pick: bool,
     since_override: datetime | None,
@@ -836,6 +893,17 @@ def main(
                 cells_override=int(cells_per_side) if cells_per_side else None,
             )
             unretire_last(config)
+        except (MailError, ConfigError) as error:
+            raise click.ClickException(str(error)) from error
+        return
+    if list_publications:
+        try:
+            config = load_config(
+                config_path,
+                paper_override=paper,
+                cells_override=int(cells_per_side) if cells_per_side else None,
+            )
+            show_publications(config)
         except (MailError, ConfigError) as error:
             raise click.ClickException(str(error)) from error
         return

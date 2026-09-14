@@ -4293,3 +4293,57 @@ def test_a_personalised_recommendations_promo_is_a_pitch() -> None:
     assert "based on what you like to read" not in cleaned.html
     assert "Sign up" not in cleaned.html
     assert "Paragraph 0" in cleaned.html
+
+
+def _figure_document(publication: str = "Test Weekly") -> Document:
+    """A wide, unnamed, sized image between two paragraphs - the shape
+    the unintroduced-figure rule keeps."""
+    prose = (
+        "Demand from AI and heavy industry is driving load growth but also "
+        "outstripping growth in power infrastructure everywhere."
+    )
+    return document(
+        "<html><body><div>"
+        f"<p>{prose}</p>"
+        '<img src="https://example.com/chart.png" alt="" width="550" '
+        'height="351.3">'
+        f"<p>{prose}</p></div></body></html>",
+        publication=publication,
+    )
+
+
+def test_a_publication_set_to_none_keeps_no_images() -> None:
+    """For a publication whose "charts" are a masthead motif every issue
+    and whose figures the rules keep guessing wrong."""
+    cleaned = clean_document(_figure_document(), images="none")
+    assert cleaned.images_kept == 0
+    assert "<img" not in cleaned.html
+
+
+def test_a_publication_set_to_all_keeps_what_the_rules_would_not() -> None:
+    """The other direction: a publication whose images are worth the
+    toner, where the judgement gates keep dropping real figures. Width
+    still applies - a tracking pixel is not a figure at any setting."""
+    prose = (
+        "Demand from AI and heavy industry is driving load growth but also "
+        "outstripping growth in power infrastructure everywhere."
+    )
+    doc = document(
+        "<html><body><div>"
+        f"<p>{prose}</p>"
+        # Named, so the figure rules refuse it: a masthead, ordinarily.
+        '<img src="https://example.com/wide.png" alt="Masthead" width="550">'
+        '<img src="https://example.com/pixel.gif" alt="" width="1" height="1">'
+        f"<p>{prose}</p></div></body></html>"
+    )
+    assert clean_document(doc).images_kept == 0, "ordinarily neither is kept"
+
+    cleaned = clean_document(doc, images="all")
+    assert cleaned.images_kept == 1, "the wide one, and not the pixel"
+    assert "wide.png" in cleaned.html
+    assert "pixel.gif" not in cleaned.html
+
+
+def test_the_default_policy_is_the_rules_as_they_were() -> None:
+    kept = clean_document(_figure_document(), images="default").images_kept
+    assert kept == clean_document(_figure_document()).images_kept == 1

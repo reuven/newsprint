@@ -459,6 +459,15 @@ class Mailbox:
         payload = data[0] or b""
         return [int(uid) for uid in payload.split()]
 
+    def search_all(self) -> list[int]:
+        """Every message in the folder.
+
+        Only --publications wants this: naming the publications that send
+        here means looking at all of them, not at the starred subset or
+        at a window.
+        """
+        return self._search("ALL")
+
     def search_flagged(self) -> list[int]:
         return self._search("FLAGGED")
 

@@ -7,9 +7,10 @@ time, so it never appears in a config file or in the repository.
 import re
 import sys
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from .geometry import Paper, paper_by_name
 from .picker import TrimOrder
@@ -37,6 +38,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "layout": {"margin_mm": 9.0, "font_size_pt": 9.0, "line_height": 1.35},
     "window": {"fallback_days": 7},
+    "images": {},
     # title empty: the contents page renders nothing above "CONTENTS ·"
     # until the user sets one in their own config file. min_words: measured
     # against a real live queue - a gap of nearly 400 words separates the
@@ -92,6 +94,8 @@ _SECTION_KEYS: dict[str, frozenset[str]] = {
     ),
     "layout": frozenset({"margin_mm", "font_size_pt", "line_height"}),
     "window": frozenset({"fallback_days"}),
+    # Keys here are the reader's own name fragments; only values are checked.
+    "images": frozenset(),
     "packet": frozenset({"title", "min_words"}),
     "output": frozenset({"directory", "keep_days"}),
     "summary": frozenset(
@@ -144,7 +148,12 @@ def _reject_unknown_keys(data: dict[str, dict[str, Any]]) -> None:
             f"unknown section(s): {', '.join(unknown_sections)}. "
             f"Valid sections are: {valid}"
         )
+    # [images] is keyed by publication-name fragments the reader chooses,
+    # so there is no list of valid keys to check against - only the
+    # values are checked, by _images.
     for section, allowed in _SECTION_KEYS.items():
+        if section == "images":
+            continue
         unknown = sorted(set(data.get(section, {})) - allowed)
         if unknown:
             raise ConfigError(f"unknown key(s) in [{section}]: {', '.join(unknown)}")
@@ -173,6 +182,40 @@ class MailConfig:
     folder: str
     trash: str
     folders: list[str]
+
+
+ImagePolicy = Literal["none", "default", "all"]
+_IMAGE_POLICIES: frozenset[str] = frozenset({"none", "default", "all"})
+
+
+@dataclass(frozen=True, slots=True)
+class ImagesConfig:
+    """Per-publication image rules, keyed by a fragment of the name.
+
+    A publication's name is whatever the sender's own headers say, which
+    runs to "Benjamin Bennett Alexander from Python and Data Analysis
+    Insights" and, in one real archive, 102 distinct values. Asking for
+    those verbatim would be asking for typos, so a key is a fragment
+    matched without regard to case: "bulwark" names all four of the
+    Bulwark's newsletters at once.
+    """
+
+    rules: tuple[tuple[str, ImagePolicy], ...] = ()
+
+    def policy_for(self, publication: str) -> ImagePolicy:
+        """The rule for `publication`, or "default" if none matches.
+
+        The longest matching fragment wins. Two can match at once, and
+        the more specific one is what the reader meant - otherwise a
+        broad rule could never be given an exception.
+        """
+        name = publication.casefold()
+        matches = [
+            (fragment, policy) for fragment, policy in self.rules if fragment in name
+        ]
+        if not matches:
+            return "default"
+        return max(matches, key=lambda rule: len(rule[0]))[1]
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,6 +296,7 @@ class Config:
     printing: PrintConfig
     layout: LayoutConfig
     fallback_days: int
+    images: ImagesConfig
     packet: PacketConfig
     output: OutputConfig
     summary: SummaryConfig
@@ -385,6 +429,24 @@ def _font_size_pt(
     return cast(float, layout["font_size_pt"])
 
 
+def _images(section: Mapping[str, Any]) -> ImagesConfig:
+    """Read [images], refusing a value that is not a policy.
+
+    A mistyped value is a rule that silently does nothing, which is
+    worse than one that will not load.
+    """
+    rules: list[tuple[str, ImagePolicy]] = []
+    for fragment, policy in section.items():
+        if not isinstance(policy, str) or policy not in _IMAGE_POLICIES:
+            allowed = ", ".join(sorted(_IMAGE_POLICIES))
+            raise ConfigError(
+                f"[images] {fragment}: {policy!r} is not an image policy. "
+                f"Use one of: {allowed}"
+            )
+        rules.append((fragment.casefold(), cast("ImagePolicy", policy)))
+    return ImagesConfig(rules=tuple(rules))
+
+
 def _merged(path: Path) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     """Overlay the file's tables onto the defaults, key by key.
 
@@ -456,6 +518,7 @@ def load_config(
                 }
             ),
             fallback_days=data["window"]["fallback_days"],
+            images=_images(written.get("images", {})),
             packet=PacketConfig(**data["packet"]),
             output=OutputConfig(
                 directory=Path(data["output"]["directory"]).expanduser(),

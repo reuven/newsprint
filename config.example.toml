@@ -49,6 +49,22 @@ line_height = 1.35
                                   # characters that read comfortably.
                                   # Set it here to override both.
 
+# Per-publication image rules. The key is any part of the publication's
+# name, matched without regard to case - "bulwark" covers all of the
+# Bulwark's newsletters - because the names the senders use run to 65
+# characters and nobody wants to type those. The longest match wins, so a
+# broad rule can be given an exception. Run `newsprint --publications` to
+# see the names your own mail actually uses.
+#
+#   none    - never keep an image from this publication
+#   default - the usual rules (this is what happens with no entry at all)
+#   all     - keep every image wide enough to be a figure, without asking
+#             whether the author introduced it
+#
+# [images]
+# "the bulwark" = "none"
+# "apricitas"   = "all"
+
 [window]
 fallback_days = 7                # how far back to look with no previous run
 

@@ -566,3 +566,49 @@ def test_the_trim_threshold_can_be_turned_off(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     path.write_text("[print]\ntrim_above_sheets = 0\n")
     assert load_config(path).printing.trim_above_sheets == 0
+
+
+def test_an_image_rule_matches_part_of_a_publication_name(tmp_path: Path) -> None:
+    """Publication names are what the sender's own headers say, which
+    runs to "Benjamin Bennett Alexander from Python and Data Analysis
+    Insights" - 65 characters - and there are 102 distinct ones in a
+    single archive. Nobody is going to type those. A fragment, matched
+    without regard to case, is what makes the setting usable: "bulwark"
+    names all four of the Bulwark's newsletters at once."""
+    path = tmp_path / "config.toml"
+    path.write_text('[images]\nbulwark = "none"\n"coding stack" = "all"\n')
+    images = load_config(path).images
+
+    assert images.policy_for("Sarah and JVL - The Bulwark") == "none"
+    assert images.policy_for("Bill Kristol & Andrew Egger - The Bulwark") == "none"
+    assert images.policy_for("Stephen Gruppetta from The Python Coding Stack") == "all"
+    assert images.policy_for("Noahpinion") == "default"
+
+
+def test_the_longest_matching_fragment_wins(tmp_path: Path) -> None:
+    """Two fragments can both match. The more specific one - the longer
+    one - is the one the reader meant, otherwise a broad rule could never
+    have an exception."""
+    path = tmp_path / "config.toml"
+    path.write_text('[images]\neconomist = "none"\n"drum tower" = "all"\n')
+    images = load_config(path).images
+
+    assert images.policy_for("The Economist") == "none"
+    assert images.policy_for("The Economist: Drum Tower") == "all"
+
+
+def test_an_unknown_image_policy_is_refused(tmp_path: Path) -> None:
+    """A typo in a value is a rule that silently does nothing, which is
+    worse than a rule that will not load."""
+    path = tmp_path / "config.toml"
+    path.write_text('[images]\nbulwark = "no"\n')
+    with pytest.raises(ConfigError, match="bulwark"):
+        load_config(path)
+
+
+def test_a_config_with_no_image_rules_treats_everything_normally(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text("[print]\npaper = 'A4'\n")
+    assert load_config(path).images.policy_for("Anything At All") == "default"
