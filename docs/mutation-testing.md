@@ -153,6 +153,19 @@ the reason rather than re-derive it.
 - **`cast(...)`** - `typing.cast` does nothing at runtime, so every
   mutation of its first argument survives by construction. All eight of
   `_rendered_lines`' survivors are this.
+- **`run_setup`'s prompt copy** - a whole class rather than one mutant,
+  and the largest group of survivors in the package. mutmut rewrites the
+  text inside every `echo(...)` and `ask(...)`: case changes, `XX`
+  markers, `None` for the message. Killing them means asserting the exact
+  wording of every prompt, which couples the tests to copy without making
+  the wizard any safer - a reworded prompt would fail a test while
+  working perfectly. The arguments that *do* change behaviour are tested:
+  what the credential check is handed, what reaches the written config,
+  which way the replace prompt defaults, and that the config directory
+  gets created.
+- **`last_retirement`'s `when > newest[0]`** - `>=` differs only when two
+  retirements share a timestamp to the microsecond, which a stamp from
+  `datetime.now(UTC)` does not produce twice.
 - **`_matching_choices`'s `heading_matched = False`** - the flag is only
   ever read in a boolean context (`heading_matched or ...`, and the
   branch in `flush`), so `None` behaves identically.

@@ -175,3 +175,116 @@ def test_the_state_directory_is_made_including_its_parents(tmp_path: Path) -> No
     exist yet on the first run of the day."""
     nested = tmp_path / "work" / "state"
     assert runlog.record({"outcome": "printed"}, state_dir=nested).exists()
+
+
+def test_a_recorded_time_is_utc_not_the_local_clock(tmp_path: Path) -> None:
+    """Every other time in this program is UTC, and the window --since
+    computes is derived from these stamps. A naive local time would read
+    as UTC when parsed back, moving the window by the offset - an hour
+    or thirteen, depending on where the reader is."""
+    path = runlog.record({"outcome": "printed"}, state_dir=tmp_path)
+    at = datetime.fromisoformat(json.loads(path.read_text())["at"])
+    assert at.tzinfo is not None, "a naive stamp is a lie about its own zone"
+    assert at.utcoffset() == UTC.utcoffset(None)
+
+
+def test_the_filenames_sort_into_the_order_the_runs_happened(
+    tmp_path: Path,
+) -> None:
+    """last_retirement walks sorted(glob("*.json")), so the name has to
+    put the runs in order by itself. A stamp that sorts any other way -
+    day before month, a 12-hour clock - would have the reader comparing
+    entries in an order that is not time."""
+    first = runlog.record({"outcome": "printed"}, state_dir=tmp_path)
+    second = runlog.record({"outcome": "printed"}, state_dir=tmp_path)
+
+    assert first.name < second.name, f"{first.name} should sort before {second.name}"
+    # The name and the "at" field have to be the same clock. Comparing
+    # against today's date would not show it: local and UTC share a date
+    # for most of the day, so the test would pass either way for most of
+    # the day - which is the worst kind of passing test.
+    at = datetime.fromisoformat(json.loads(first.read_text())["at"])
+    assert first.stem.startswith(at.astimezone(UTC).strftime("%Y-%m-%d-%H%M")), (
+        f"{first.stem} was stamped on a different clock than {at}"
+    )
+
+
+def test_a_recorded_file_is_readable_by_a_person(tmp_path: Path) -> None:
+    """The run log is where someone looks to find out what a run did, so
+    it is written indented rather than as one long line. Nothing else
+    reads these files but this module and a person."""
+    path = runlog.record(
+        {"outcome": "printed", "documents": [{"id": "<a@b>"}]}, state_dir=tmp_path
+    )
+    text = path.read_text()
+    assert text.count("\n") > 2, "one line is not something to read"
+    assert '\n  "outcome"' in text, "indented, and by a consistent amount"
+
+
+def test_one_unreadable_file_does_not_hide_the_runs_after_it(
+    tmp_path: Path,
+) -> None:
+    """Both readers walk every file and skip what they cannot parse. If
+    a bad file stopped the walk instead of being skipped, a single
+    corrupt entry - a half-written file from a run that was killed -
+    would hide every run filed after it, and --unretire would offer the
+    wrong retirement or none at all.
+
+    The bad file is named so it is read first, which is the case that
+    tells the two apart.
+    """
+    (tmp_path / "0-broken.json").write_text("{ not json at all")
+    # Valid JSON that is not an object: a different skip from the one
+    # above, on a different line, and equally able to stop the walk.
+    (tmp_path / "0-list.json").write_text("[]")
+    (tmp_path / "1-good.json").write_text(
+        json.dumps(
+            {"outcome": "retired", "at": "2026-09-10T10:00:00+00:00", "trash": "NEW"}
+        )
+    )
+    (tmp_path / "2-printed.json").write_text(
+        json.dumps({"outcome": "printed", "at": "2026-09-11T10:00:00+00:00"})
+    )
+
+    entry = runlog.last_retirement(tmp_path)
+    assert entry is not None and entry["trash"] == "NEW"
+
+    when = runlog.last_successful_run(state_dir=tmp_path)
+    assert when == datetime(2026, 9, 11, 10, 0, tzinfo=UTC)
+
+
+def test_the_default_state_directory_is_used_when_none_is_given(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Every other test passes state_dir, so the branch that falls back
+    to DEFAULT_STATE_DIR - which is what the program itself always uses -
+    was never taken."""
+    monkeypatch.setattr(runlog, "DEFAULT_STATE_DIR", tmp_path / "state")
+
+    path = runlog.record({"outcome": "printed"})
+
+    assert path.parent == tmp_path / "state"
+    assert runlog.last_successful_run() is not None
+
+
+def test_a_later_retirement_is_found_past_an_unrelated_run(tmp_path: Path) -> None:
+    """The ordinary shape of a state directory: retire, print a dry run,
+    retire again. The reader has to skip the middle entry and carry on,
+    not stop at it - stopping would hand --unretire last week's
+    retirement while this week's sat one file further along.
+    """
+    for name, entry in (
+        (
+            "0.json",
+            {"outcome": "retired", "at": "2026-09-01T10:00:00+00:00", "trash": "OLD"},
+        ),
+        ("1.json", {"outcome": "printed-kept", "at": "2026-09-05T10:00:00+00:00"}),
+        (
+            "2.json",
+            {"outcome": "retired", "at": "2026-09-10T10:00:00+00:00", "trash": "NEW"},
+        ),
+    ):
+        (tmp_path / name).write_text(json.dumps(entry))
+
+    found = runlog.last_retirement(tmp_path)
+    assert found is not None and found["trash"] == "NEW"

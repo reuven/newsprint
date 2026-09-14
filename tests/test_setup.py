@@ -227,3 +227,128 @@ def test_the_password_prompt_hides_what_is_typed(tmp_path: Path) -> None:
     by_question = {question.strip(): kwargs for question, kwargs in asked}
     assert by_question["Password"] == {"hide_input": True}
     assert by_question["IMAP host"] == {"default": "imap.gmail.com"}
+
+
+def test_the_credentials_checked_are_the_ones_the_user_typed(tmp_path: Path) -> None:
+    """Setup exists to catch a config that looks right and cannot sign
+    in, so the sign-in has to use what was actually typed. Nothing was
+    looking at what reached the mailbox: the host, the user or the
+    password could each go missing and every test still passed, leaving
+    a check that verified nothing and then wrote the file anyway.
+    """
+    path = tmp_path / "config.toml"
+    opened: list[dict[str, object]] = []
+
+    def watch(**kwargs: object) -> FakeBox:
+        opened.append(kwargs)
+        return FakeBox(**kwargs)
+
+    run_setup(
+        path,
+        ask=_answers("imap.example.com", "someone@example.com", "hunter2", ""),
+        confirm=lambda *a, **k: True,
+        choose=lambda question, options, default: (
+            "INBOX.toprint" if "Folder" in question else "A4"
+        ),
+        echo=lambda message: None,
+        open_mailbox=watch,
+        store_password=lambda *a: None,
+    )
+
+    assert opened == [
+        {
+            "host": "imap.example.com",
+            "user": "someone@example.com",
+            "password": "hunter2",
+            # INBOX to list folders with, since the folder being chosen
+            # is the thing this call is finding out.
+            "folder": "INBOX",
+        }
+    ]
+
+
+def test_every_answer_reaches_the_written_config(tmp_path: Path) -> None:
+    """The file is the whole product of this wizard. Each answer was
+    only spot-checked, so a value could go missing from the template and
+    nothing noticed - a config naming no printer, or no user, reads as
+    plausible and fails later, which is the failure setup exists to
+    prevent moved rather than removed."""
+    path = tmp_path / "config.toml"
+
+    run_setup(
+        path,
+        ask=_answers(
+            "imap.example.com", "someone@example.com", "hunter2", "Brother-HL"
+        ),
+        confirm=lambda *a, **k: True,
+        choose=lambda question, options, default: (
+            "INBOX.toprint" if "Folder" in question else "Letter"
+        ),
+        echo=lambda message: None,
+        open_mailbox=lambda **kwargs: FakeBox(**kwargs),
+        store_password=lambda *a: None,
+    )
+
+    written = path.read_text()
+    for expected in (
+        'host    = "imap.example.com"',
+        'user    = "someone@example.com"',
+        'folders = "INBOX.toprint"',
+        'printer = "Brother-HL"',
+        'paper   = "Letter"',
+    ):
+        assert expected in written, expected
+
+
+def test_replacing_an_existing_config_is_not_the_default(tmp_path: Path) -> None:
+    """Someone who hits return at "config.toml exists. Replace it?" must
+    keep the file they have. The prompt is injected in every other test,
+    so the default that a real terminal would apply was never examined -
+    and the wrong one silently overwrites a working config."""
+    path = tmp_path / "config.toml"
+    path.write_text("# mine\n")
+    defaults: list[object] = []
+
+    def remember(question: str, **kwargs: object) -> bool:
+        defaults.append(kwargs.get("default"))
+        return bool(kwargs.get("default"))
+
+    run_setup(
+        path,
+        ask=_answers(),
+        confirm=remember,
+        choose=lambda *a: "A4",
+        echo=lambda message: None,
+        open_mailbox=lambda **kwargs: FakeBox(**kwargs),
+        store_password=lambda *a: None,
+    )
+
+    assert defaults == [False], "replacing must not be what return does"
+    assert path.read_text() == "# mine\n"
+
+
+def test_setup_creates_the_config_directory_that_is_not_there_yet() -> None:
+    """First run, on a machine that has never had this config: nothing
+    along ~/.config/newsprint/ exists. Every other test writes into a
+    tmp_path that already exists, so the one flag that makes the parents
+    was never exercised - on the one occasion this wizard is for."""
+    import tempfile
+
+    root = Path(tempfile.mkdtemp())
+    path = root / "config" / "newsprint" / "config.toml"
+    assert not path.parent.exists()
+
+    run_setup(
+        path,
+        ask=_answers("imap.example.com", "someone@example.com", "hunter2", ""),
+        confirm=lambda *a, **k: True,
+        choose=lambda question, options, default: (
+            "INBOX.toprint" if "Folder" in question else "A4"
+        ),
+        echo=lambda message: None,
+        open_mailbox=lambda **kwargs: FakeBox(**kwargs),
+        store_password=lambda *a: None,
+    )
+
+    assert path.exists(), "the wizard has to make the directory it writes into"
+    assert 'host    = "imap.example.com"' in path.read_text()
