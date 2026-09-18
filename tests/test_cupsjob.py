@@ -6,6 +6,7 @@ hand-written bytes: tests/fixtures/ipp/short-job.ipp is job 8727, the
 as completed.
 """
 
+import io
 import struct
 from pathlib import Path
 
@@ -207,3 +208,53 @@ def test_fetch_posts_the_request_and_decodes_the_reply() -> None:
 
     assert fetch(8727, transport=transport).impressions == 67
     assert sent == [encode_request(8727)]
+
+
+def test_a_message_that_never_ends_is_still_read() -> None:
+    """A response whose end-of-attributes tag is missing: the walk has to
+    stop at the buffer's end rather than run off it."""
+    body = response(integer("job-state", 9), integer("job-impressions-completed", 5))
+    assert decode_response(body[:-1]).impressions == 5
+
+
+def test_a_value_shorter_than_it_claims_is_an_error() -> None:
+    """The length header says four bytes and two arrive. Reading that as
+    the number 5 would be inventing a print run out of a damaged reply."""
+    body = response(integer("job-state", 9), integer("job-impressions-completed", 5))
+    with pytest.raises(IppError, match="truncated"):
+        decode_response(body[:-3])
+
+
+def test_post_sends_ipp_to_the_local_cups(monkeypatch) -> None:
+    import contextlib
+    import urllib.request
+
+    from newsprint import cupsjob
+
+    seen: list[urllib.request.Request] = []
+
+    @contextlib.contextmanager
+    def fake_urlopen(request, timeout):
+        seen.append(request)
+        yield io.BytesIO(fixture("short-job.ipp"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert cupsjob._post(b"body") == fixture("short-job.ipp")
+    assert seen[0].full_url == cupsjob.SERVER
+    assert seen[0].data == b"body"
+    assert seen[0].headers["Content-type"] == cupsjob.CONTENT_TYPE
+
+
+def test_an_unreachable_cups_becomes_an_ipp_error(monkeypatch) -> None:
+    """urllib raises half a dozen different things when a socket fails;
+    the caller only needs to know the state could not be read."""
+    import urllib.request
+
+    from newsprint import cupsjob
+
+    def refuse(request, timeout):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    with pytest.raises(IppError, match="could not reach CUPS"):
+        cupsjob._post(b"body")

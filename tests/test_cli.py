@@ -8,9 +8,34 @@ from click.testing import CliRunner
 
 from newsprint.cli import fetch_queue, main, retire_printed
 from newsprint.config import load_config
+from newsprint.cupsjob import JobState
 from newsprint.mail import RetireResult
 from newsprint.models import Document, Origin
 from newsprint.picker import DISPLAY_LIMIT
+from newsprint.printer import PrintError, PrintOutcome
+
+
+@pytest.fixture(autouse=True)
+def _the_printer_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unless a test says otherwise, every side reached paper.
+
+    Waiting for the job is now part of a printing run, so a test that
+    mocks spool() and nothing else would otherwise poll the developer's
+    own CUPS for a job id it invented. Autouse keeps that out of tests
+    about retirement, which have no opinion about the printer; the tests
+    that do care set their own await_completion afterwards, which wins.
+    """
+
+    def finished(job: str, expected: int, on_progress=None) -> PrintOutcome:
+        state = JobState(
+            state=9, reasons=(), impressions=expected, sheets=expected // 2
+        )
+        if on_progress is not None:
+            on_progress(state)
+        return PrintOutcome(job=job, state=state, expected=expected)
+
+    monkeypatch.setattr("newsprint.cli.await_completion", finished)
+
 
 SAMPLE_CONFIG = """
 [mail]
@@ -303,7 +328,7 @@ def _queued(identifier: str = "<d@example.com>", uid: int = 4):
 def test_accepting_prints_then_retires_in_that_order(
     monkeypatch, tmp_path: Path
 ) -> None:
-    """The invariant: mail is modified only after a job reaches the queue."""
+    """The invariant: mail is modified only after the packet is printed."""
     events: list[str] = []
     monkeypatch.setattr(
         "newsprint.cli.fetch_queue",
@@ -4317,3 +4342,185 @@ def test_publications_turns_a_mail_error_into_a_clean_message(
     assert result.exit_code != 0
     assert "connection refused" in result.output
     assert "Traceback" not in result.output
+
+
+# --- waiting for the printer ---------------------------------------------
+
+
+def _outcome(impressions: int, expected: int, state: int = 9) -> PrintOutcome:
+    return PrintOutcome(
+        job="Printer-1",
+        state=JobState(
+            state=state, reasons=(), impressions=impressions, sheets=impressions // 2
+        ),
+        expected=expected,
+    )
+
+
+def _printing_run(monkeypatch, tmp_path: Path, outcome: PrintOutcome | None):
+    """Wire up a run that spools successfully, and record what it retires."""
+    retired: list[list[int]] = []
+    waited: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        "newsprint.cli.fetch_queue",
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
+    )
+    monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
+
+    def fake_await(job, expected, on_progress=None):
+        waited.append((job, expected))
+        assert outcome is not None, "await_completion should not have been called"
+        if on_progress is not None:
+            on_progress(outcome.state)
+        return outcome
+
+    monkeypatch.setattr("newsprint.cli.await_completion", fake_await)
+
+    def fake_retire_printed(config, uids, trash, folder=None):
+        retired.append(list(uids))
+        return RetireResult(retired=tuple(uids), failed=())
+
+    monkeypatch.setattr("newsprint.cli.retire_printed", fake_retire_printed)
+    return retired, waited
+
+
+def test_a_short_print_leaves_every_message_starred(monkeypatch, tmp_path) -> None:
+    """The 2026-09-18 failure, end to end: CUPS called the job completed
+    and 40 of 107 sides never reached paper. Nothing may be retired on
+    that, or the mail is gone and the packet has to be reprinted by hand."""
+    retired, _ = _printing_run(monkeypatch, tmp_path, _outcome(67, 107))
+    entries: list[dict] = []
+    monkeypatch.setattr(
+        "newsprint.runlog.record", lambda entry, **kw: entries.append(entry)
+    )
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert retired == []
+    assert result.exit_code != 0
+    assert "67" in result.output and "107" in result.output
+    assert [e["outcome"] for e in entries if e["outcome"] == "print-short"]
+
+
+def test_a_short_print_names_the_pdf_to_reprint(monkeypatch, tmp_path) -> None:
+    """The packet is the only copy of the work; a run that stops here has
+    to say where it is."""
+    _printing_run(monkeypatch, tmp_path, _outcome(67, 107))
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: None)
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert ".pdf" in result.output
+
+
+def test_a_full_print_retires_as_before(monkeypatch, tmp_path) -> None:
+    retired, waited = _printing_run(monkeypatch, tmp_path, _outcome(8, 8))
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: None)
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code == 0
+    assert retired == [[4]]
+    assert waited and waited[0][0] == "Printer-1"
+
+
+def test_the_wait_is_told_how_many_sides_to_expect(monkeypatch, tmp_path) -> None:
+    """The expected count has to be the imposed sheet sides, which is what
+    an impression is - not cells, and not sheets."""
+    _, waited = _printing_run(monkeypatch, tmp_path, _outcome(8, 8))
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: None)
+    CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert waited[0][1] > 0
+
+
+def test_no_wait_retires_without_asking_cups(monkeypatch, tmp_path) -> None:
+    """The escape hatch for an unattended run, or a printer that will be
+    switched on later. It restores the old behavior, uncertainty included."""
+    retired, waited = _printing_run(monkeypatch, tmp_path, None)
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: None)
+    result = CliRunner().invoke(
+        main,
+        ["--no-preview", "--no-wait", "--config", str(tmp_path / "absent.toml")],
+        input="y\n",
+    )
+    assert result.exit_code == 0
+    assert waited == []
+    assert retired == [[4]]
+
+
+def test_progress_reaches_the_terminal(monkeypatch, tmp_path) -> None:
+    _printing_run(monkeypatch, tmp_path, _outcome(8, 8))
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: None)
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert "Printing" in result.output
+
+
+def test_the_wait_happens_between_spooling_and_retiring(monkeypatch, tmp_path) -> None:
+    """The ordering the invariant rests on. Retiring before the wait would
+    be the old bug wearing the new code's clothes: the mail would be gone
+    before anyone could know the job stopped halfway."""
+    events: list[str] = []
+    monkeypatch.setattr(
+        "newsprint.cli.fetch_queue",
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
+    )
+    monkeypatch.setattr(
+        "newsprint.cli.spool",
+        lambda pdf, config: (events.append("spool"), "Printer-1")[1],
+    )
+
+    def fake_await(job, expected, on_progress=None):
+        events.append("wait")
+        return _outcome(expected, expected)
+
+    monkeypatch.setattr("newsprint.cli.await_completion", fake_await)
+
+    def fake_retire_printed(config, uids, trash, folder=None):
+        events.append("retire")
+        return RetireResult(retired=tuple(uids), failed=())
+
+    monkeypatch.setattr("newsprint.cli.retire_printed", fake_retire_printed)
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: None)
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert result.exit_code == 0
+    assert events == ["spool", "wait", "retire"]
+
+
+def test_an_unreadable_job_state_retires_nothing(monkeypatch, tmp_path) -> None:
+    """If CUPS cannot be reached after spooling, the run knows nothing
+    about what printed. "I could not tell" must land where "it failed"
+    lands, never where "it worked" does."""
+    retired: list[list[int]] = []
+    entries: list[dict] = []
+    monkeypatch.setattr(
+        "newsprint.cli.fetch_queue",
+        lambda config, no_pick, since_override=None: ([_queued()], "INBOX/Trash"),
+    )
+    monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
+
+    def explode(job, expected, on_progress=None):
+        raise PrintError("could not reach CUPS at http://localhost:631/")
+
+    monkeypatch.setattr("newsprint.cli.await_completion", explode)
+    monkeypatch.setattr(
+        "newsprint.cli.retire_printed",
+        lambda *a, **k: retired.append(["should not happen"]),
+    )
+    monkeypatch.setattr(
+        "newsprint.runlog.record", lambda entry, **kw: entries.append(entry)
+    )
+
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    assert retired == []
+    assert result.exit_code != 0
+    assert "print-unknown" in [e["outcome"] for e in entries]

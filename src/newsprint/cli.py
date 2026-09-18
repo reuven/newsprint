@@ -1,8 +1,11 @@
 """The Friday afternoon command.
 
 The order of operations enforces the design's one invariant: mail is modified
-only after a job has reached the print queue, and only for the messages whose
-content actually reached it.
+only after the whole packet has reached paper, and only for the messages whose
+content actually reached it. "Reached paper" is deliberately stronger than
+"reached the queue" - lp exits as soon as CUPS accepts the document, and a job
+that later stops halfway is still reported as completed, so the run waits for
+the printer and counts sides before it touches anything.
 """
 
 import imaplib
@@ -33,6 +36,7 @@ from .config import (
     rename_folder_key,
 )
 from .contents import build_contents
+from .cupsjob import JobState
 from .extract import extract
 from .impose import impose
 from .mail import (
@@ -53,7 +57,7 @@ from .picker import (
 )
 from .pickerui import questionary_prompt
 from .pipeline import Built, Failure, TeaserSkippedError, build_one
-from .printer import PrintError, spool
+from .printer import PrintError, await_completion, spool
 from .setup import run_setup
 from .stamp import format_packet_date, stamp_packet
 from .summarize import build_summary_pages
@@ -575,6 +579,70 @@ def _open_preview(pdf: Path) -> None:
             continue
 
 
+def _wait_for_paper(
+    job: str,
+    sides: int,
+    sheets_pdf: Path,
+    built: Sequence[Built],
+    uids: Sequence[int],
+    skipped_teasers: Sequence[dict[str, object]],
+) -> None:
+    """Block until the job stops, and refuse to go on if it fell short.
+
+    This is the step whose absence cost a run on 2026-09-18: `lp` had
+    exited cleanly, so newsprint retired 36 messages eleven seconds after
+    handoff, and the printer then stopped at 67 of 107 sides. CUPS still
+    called that job completed, which is why the check is against the
+    impression count rather than the state.
+
+    Falling short raises rather than asking, because the person who
+    started the run may well have walked away from it - and because the
+    answer that keeps the mail is the only safe one either way.
+    """
+    last = 0
+
+    def progress(state: JobState) -> None:
+        nonlocal last
+        last = state.impressions
+        click.echo(f"\r  Printing: {last}/{sides} sides...", nl=False)
+
+    try:
+        outcome = await_completion(job, sides, on_progress=progress)
+    except PrintError as error:
+        runlog.record({"outcome": "print-unknown", "job": job, "error": str(error)})
+        raise click.ClickException(
+            f"{error}\nMail untouched; PDF kept at {sheets_pdf}"
+        ) from error
+    finally:
+        click.echo()
+
+    if outcome.complete:
+        click.echo(f"  Printed {outcome.state.impressions} sides.")
+        return
+
+    runlog.record(
+        {
+            "outcome": "print-short",
+            "job": job,
+            "sides": sides,
+            "impressions": outcome.state.impressions,
+            "sheets": outcome.state.sheets,
+            "state": outcome.state.state,
+            "reasons": list(outcome.state.reasons),
+            "documents": [item.document.origin.identifier for item in built],
+            "uids": list(uids),
+            "skipped": list(skipped_teasers),
+        }
+    )
+    raise click.ClickException(
+        f"The printer stopped after {outcome.state.impressions} of "
+        f"{outcome.expected} sides ({outcome.state.sheets} sheets); "
+        f"{outcome.shortfall} sides never printed.\n"
+        f"Mail untouched: all {len(built)} messages stay starred.\n"
+        f"PDF kept at {sheets_pdf}"
+    )
+
+
 def retire_printed(
     config: Config, uids: list[int], trash: str, folder: str | None = None
 ) -> RetireResult:
@@ -803,6 +871,17 @@ def about() -> str:
     ),
 )
 @click.option(
+    "--no-wait",
+    "no_wait",
+    is_flag=True,
+    help=(
+        "Do not wait for the printer. newsprint normally blocks until the "
+        "job finishes and only retires the mail if every side printed; this "
+        "returns as soon as the queue accepts the document, which means a "
+        "job that stops partway will still retire the mail."
+    ),
+)
+@click.option(
     "--setup",
     "setup_mode",
     is_flag=True,
@@ -871,6 +950,7 @@ def main(
     no_retire: bool,
     output: Path | None,
     no_print: bool,
+    no_wait: bool,
     setup_mode: bool,
     unretire: bool,
     list_publications: bool,
@@ -1195,10 +1275,16 @@ def main(
             ) from error
 
         click.echo(f"Spooled as {job}.")
+
+        if not no_wait:
+            _wait_for_paper(job, sides, sheets_pdf, built, uids, skipped_teasers)
+
         runlog.record(
             {
                 "outcome": "printed-kept" if no_retire else "printed",
                 "job": job,
+                "sides": sides,
+                "waited": not no_wait,
                 "documents": [item.document.origin.identifier for item in built],
                 "uids": uids,
                 "skipped": skipped_teasers,
