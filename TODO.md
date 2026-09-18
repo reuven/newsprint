@@ -11,19 +11,19 @@ eleven seconds after handoff, while the printer had seven minutes left.
 
 `job-state` alone cannot catch this. `job-impressions-completed` can.
 
-- [ ] `cupsjob.py`: minimal IPP client — encode `Get-Job-Attributes`, decode
+- [x] `cupsjob.py`: minimal IPP client — encode `Get-Job-Attributes`, decode
       `job-state`, `job-state-reasons`, `job-impressions-completed`,
       `job-media-sheets-completed`. No new dependency; `lpstat` cannot report
       impressions and `ipptool` is not installed by default on Linux.
-- [ ] Capture real IPP responses as byte fixtures, including the truncated
+- [x] Capture real IPP responses as byte fixtures, including the truncated
       job that exposed this.
-- [ ] `printer.await_completion()`: poll until terminal state, with injected
+- [x] `printer.await_completion()`: poll until terminal state, with injected
       `fetch` and `sleep` so tests stay instant, and a progress callback.
-- [ ] `cli.py`: retire only on a full print. On a short job, record
+- [x] `cli.py`: retire only on a full print. On a short job, record
       `print-short`, keep every message starred, keep the PDF, exit non-zero.
-- [ ] `--no-wait` to restore fire-and-forget. The wait is otherwise unbounded
+- [x] `--no-wait` to restore fire-and-forget. The wait is otherwise unbounded
       by design; Ctrl-C is safe and leaves mail untouched.
-- [ ] README: document `--no-wait` and what a short print does.
+- [x] README: document `--no-wait` and what a short print does.
 
 ## Not in this branch
 

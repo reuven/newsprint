@@ -231,6 +231,11 @@ Preview for a look, and asks before printing. Useful flags:
   yourself from the file. Still offers to retire the mail, after asking
   whether the printing actually worked. `--no-print --output ~/reading/` is
   a complete workflow on a machine with no printer configured at all.
+- `--no-wait` — do not wait for the printer. A normal run blocks until the
+  job finishes and retires the mail only if every side printed; this returns
+  as soon as the queue accepts the document, which means a job that stops
+  partway will still retire the mail. See
+  [Waiting for the printer](#waiting-for-the-printer).
 - `--unretire` — undo the last retirement: move those messages back out of
   the trash and re-star them. Builds nothing and prints nothing. See
   [Undoing a retirement](#undoing-a-retirement).
@@ -325,10 +330,9 @@ does `--unretire`.
 
 With no `--output`, a finished packet is written to `[output] directory`
 — `~/.local/state/newsprint/packets` by default — rather than to a temp
-directory the system later deletes. That matters because a print run
-retires the mail as soon as CUPS accepts the job, which is not the same as
-paper having come out right: if it jams, the packet is still there to
-print again.
+directory the system later deletes. That matters because the packet is the
+only copy of a run's work: if a job stops halfway, or you want the same
+reading again next week, it is still there to print.
 
 Each run then removes packets in that directory older than `[output]
 keep_days`, 30 by default. Set it to `0` to keep them all. The sweep only
@@ -521,6 +525,46 @@ tracking pixel is not a figure at any setting, and nothing that is refused
 is ever fetched. With no entry a publication gets the usual rules.
 
 Run `newsprint --publications` to see the names your own mail uses.
+
+## Waiting for the printer
+
+A run does not end when `lp` accepts the document. It waits for the job,
+reporting sides as they print:
+
+```
+Spooled as Brother_MFC_L2700DW_series-8731.
+  Printing: 107/107 sides...
+  Printed 107 sides.
+```
+
+Only then is the mail retired, and only if the count came out whole. This
+is not a theoretical precaution. `lp` exits as soon as CUPS has the file,
+and — this is the part that surprises — a job that stops partway through is
+still reported by CUPS as `completed`. A run on 2026-09-18 put 67 of 107
+sides on paper, and the mail was unstarred and filed eleven seconds after
+handoff, while the printer still had seven minutes of work ahead of it.
+Nothing in `job-state` distinguishes that from a clean finish; only the
+printer's own count of impressions does.
+
+So a short job stops the run instead:
+
+```
+! The printer stopped after 67 of 107 sides (33 sheets); 40 sides never
+  printed.
+  Mail untouched: all 36 messages stay starred.
+  PDF kept at ~/.local/state/newsprint/packets/...-1546.pdf
+```
+
+Every message stays starred, so the next run builds the same packet again,
+and the PDF is there if you would rather print the missing pages yourself.
+The same happens if the job's state cannot be read at all — not knowing
+whether it printed is treated as a failure, never as a success.
+
+The wait has no timeout. A printer that is out of paper finishes the job
+when someone puts paper in it, and giving up early would leave exactly the
+uncertainty this exists to remove. Ctrl-C is safe: nothing has been retired
+yet. For an unattended run, `--no-wait` returns as soon as the job is
+queued, with the old caveat that a short print will still retire the mail.
 
 ## Undoing a retirement
 
