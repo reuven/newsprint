@@ -1,14 +1,15 @@
 """Known-answer tests for the IPP client.
 
-The fixtures are real responses from the CUPS that exposed this bug, not
-hand-written bytes: tests/fixtures/ipp/short-job.ipp is job 8727, the
-2026-09-18 run that put 67 of 107 sides on paper and was still reported
-as completed.
+The two responses below are real, captured from the cupsd that exposed
+this bug rather than written by hand. They live here as literals and not
+under tests/fixtures/, which is gitignored because it holds other
+people's copyrighted mail: these are a few dozen bytes of job counters
+with nothing private in them, and a contributor with no CUPS at all
+should still be able to run these tests.
 """
 
 import io
 import struct
-from pathlib import Path
 
 import pytest
 
@@ -20,11 +21,30 @@ from newsprint.cupsjob import (
     fetch,
 )
 
-FIXTURES = Path(__file__).parent / "fixtures" / "ipp"
+# Job 8727, the 2026-09-18 run: job-state 9 (completed), 0x43 = 67
+# impressions, 0x21 = 33 sheets, of a document that had 107 sides.
+SHORT_JOB = (
+    b"\x02\x00\x00\x00\x00\x00\x00\x01"
+    b"\x01"
+    b"G\x00\x12attributes-charset\x00\x05utf-8"
+    b"H\x00\x1battributes-natural-language\x00\x02en"
+    b"\x02"
+    b"#\x00\tjob-state\x00\x04\x00\x00\x00\t"
+    b"D\x00\x11job-state-reasons\x00\x18processing-to-stop-point"
+    b"!\x00\x19job-impressions-completed\x00\x04\x00\x00\x00C"
+    b"!\x00\x1ajob-media-sheets-completed\x00\x04\x00\x00\x00!"
+    b"\x03"
+)
 
-
-def fixture(name: str) -> bytes:
-    return (FIXTURES / name).read_bytes()
+# An IPP error, which arrives as a perfectly ordinary HTTP 200.
+NO_SUCH_JOB = (
+    b"\x02\x00\x04\x06\x00\x00\x00\x01"
+    b"\x01"
+    b"G\x00\x12attributes-charset\x00\x05utf-8"
+    b"H\x00\x1battributes-natural-language\x00\x02en"
+    b"A\x00\x0estatus-message\x00\x1aJob #99999 does not exist."
+    b"\x03"
+)
 
 
 def response(*attributes: bytes, status: int = 0x0000) -> bytes:
@@ -66,7 +86,7 @@ def additional(value: str) -> bytes:
 def test_decodes_the_job_that_exposed_this() -> None:
     """The whole point of the feature, against the real bytes. CUPS calls
     this job completed; only the impression count says otherwise."""
-    state = decode_response(fixture("short-job.ipp"))
+    state = decode_response(SHORT_JOB)
     assert state == JobState(
         state=9,
         reasons=("processing-to-stop-point",),
@@ -78,7 +98,7 @@ def test_decodes_the_job_that_exposed_this() -> None:
 def test_a_completed_state_is_not_proof_of_a_full_print() -> None:
     """Guards the distinction the bug turned on: succeeded is about how
     CUPS ended the job, and says nothing about how much of it printed."""
-    state = decode_response(fixture("short-job.ipp"))
+    state = decode_response(SHORT_JOB)
     assert state.succeeded is True
     assert state.terminal is True
 
@@ -87,7 +107,7 @@ def test_a_missing_job_raises_with_the_servers_own_message() -> None:
     """CUPS reports this as HTTP 200 with an IPP error status, so nothing
     below the IPP layer will notice it."""
     with pytest.raises(IppError, match="Job #99999 does not exist"):
-        decode_response(fixture("no-such-job.ipp"))
+        decode_response(NO_SUCH_JOB)
 
 
 def test_an_error_without_a_message_still_raises() -> None:
@@ -135,7 +155,7 @@ def test_a_response_without_a_state_is_an_error() -> None:
 
 def test_a_truncated_response_is_an_error() -> None:
     with pytest.raises(IppError, match="truncated"):
-        decode_response(fixture("short-job.ipp")[:40])
+        decode_response(SHORT_JOB[:40])
 
 
 def test_a_response_too_short_for_a_header_is_an_error() -> None:
@@ -204,7 +224,7 @@ def test_fetch_posts_the_request_and_decodes_the_reply() -> None:
 
     def transport(body: bytes) -> bytes:
         sent.append(body)
-        return fixture("short-job.ipp")
+        return SHORT_JOB
 
     assert fetch(8727, transport=transport).impressions == 67
     assert sent == [encode_request(8727)]
@@ -236,10 +256,10 @@ def test_post_sends_ipp_to_the_local_cups(monkeypatch) -> None:
     @contextlib.contextmanager
     def fake_urlopen(request, timeout):
         seen.append(request)
-        yield io.BytesIO(fixture("short-job.ipp"))
+        yield io.BytesIO(SHORT_JOB)
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    assert cupsjob._post(b"body") == fixture("short-job.ipp")
+    assert cupsjob._post(b"body") == SHORT_JOB
     assert seen[0].full_url == cupsjob.SERVER
     assert seen[0].data == b"body"
     assert seen[0].headers["Content-type"] == cupsjob.CONTENT_TYPE
@@ -258,3 +278,82 @@ def test_an_unreachable_cups_becomes_an_ipp_error(monkeypatch) -> None:
     monkeypatch.setattr(urllib.request, "urlopen", refuse)
     with pytest.raises(IppError, match="could not reach CUPS"):
         cupsjob._post(b"body")
+
+
+def test_the_first_error_status_is_still_an_error() -> None:
+    """0x0100 is the boundary: everything below it is a success class, and
+    0x0100 itself is client-error-bad-request. Treating it as success
+    would report a rejected request as a finished job."""
+    with pytest.raises(IppError, match="0x0100"):
+        decode_response(response(integer("job-state", 9), status=0x0100))
+
+
+def test_a_header_with_no_attributes_is_not_truncated() -> None:
+    """Exactly eight bytes is a complete header that simply carries
+    nothing - a different failure from a message cut in half, and it must
+    be reported as the missing job-state it is."""
+    with pytest.raises(IppError, match="job-state"):
+        decode_response(struct.pack(">HHI", 0x0200, 0x0000, 1))
+
+
+def test_the_status_message_is_found_by_name_and_type() -> None:
+    """Other text attributes travel in the same group. Matching on the tag
+    alone would report detailed-status-message, which is diagnostic noise
+    rather than the reason the request failed."""
+    text = struct.pack(">BH", 0x41, len(b"detailed-status-message"))
+    text += b"detailed-status-message" + struct.pack(">H", len(b"debug noise"))
+    text += b"debug noise"
+    message = struct.pack(">BH", 0x41, len(b"status-message"))
+    message += b"status-message" + struct.pack(">H", len(b"the real reason"))
+    message += b"the real reason"
+    with pytest.raises(IppError, match="the real reason"):
+        decode_response(response(text, message, status=0x0406))
+
+
+def test_every_group_delimiter_is_skipped() -> None:
+    """CUPS opens an unsupported-attributes group with tag 0x05, the
+    highest delimiter. Reading that as a value tag would consume the next
+    bytes as a name and desynchronise the whole walk."""
+    body = struct.pack(">HHI", 0x0200, 0x0000, 1)
+    body += b"\x02" + integer("job-state", 9)
+    body += b"\x05" + keyword("job-hold-until", "no-hold")
+    body += b"\x02" + integer("job-impressions-completed", 7)
+    body += b"\x03"
+    assert decode_response(body).impressions == 7
+
+
+# The exact request newsprint sends, byte for byte. This one was verified
+# against a live cupsd, which is the only thing that can judge whether an
+# attribute name, a tag or a length prefix is right: a server rejects the
+# whole request rather than reporting which field offended it, so a unit
+# test that checked the pieces loosely would pass on a request no printer
+# would ever answer.
+GOLDEN_REQUEST = (
+    b"\x02\x00\x00\t\x00\x00\x00\x01"
+    b"\x01"
+    b"G\x00\x12attributes-charset\x00\x05utf-8"
+    b"H\x00\x1battributes-natural-language\x00\x02en"
+    b"E\x00\x07job-uri\x00\x1dipp://localhost:631/jobs/8727"
+    b"D\x00\x14requested-attributes\x00\tjob-state"
+    b"D\x00\x00\x00\x11job-state-reasons"
+    b"D\x00\x00\x00\x19job-impressions-completed"
+    b"D\x00\x00\x00\x1ajob-media-sheets-completed"
+    b"\x03"
+)
+
+
+def test_the_request_is_exactly_this() -> None:
+    assert encode_request(8727) == GOLDEN_REQUEST
+
+
+def test_reasons_are_matched_by_name_and_type() -> None:
+    """Other keywords share the group - job-hold-until among them. Matching
+    on the tag alone would file them all as state reasons."""
+    state = decode_response(
+        response(
+            integer("job-state", 9),
+            keyword("job-hold-until", "no-hold"),
+            keyword("job-state-reasons", "job-completed-successfully"),
+        )
+    )
+    assert state.reasons == ("job-completed-successfully",)

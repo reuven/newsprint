@@ -25,9 +25,18 @@ eleven seconds after handoff, while the printer had seven minutes left.
       by design; Ctrl-C is safe and leaves mail untouched.
 - [x] README: document `--no-wait` and what a short print does.
 
+## Done in this branch, beyond the list above
+
+- [x] `mutmut` added to the dev group. `pyproject.toml` already referred to
+      `mutants/` but the tool itself was never declared, so the audit
+      CLAUDE.md asks for could not run. Scoped with `source_paths` to the two
+      modules under audit; `also_copy` is required or the copied tree has no
+      `__init__.py` and will not build.
+
 ## Not in this branch
 
 - [ ] `--reprint-from <pdf> --pages N-M`, so a truncated run doesn't mean
       reprinting by hand from Preview.
-- [ ] `--cov-fail-under=100` is absent from `pyproject.toml` though CLAUDE.md
-      calls for it. Unrelated to this bug.
+- [ ] `--cov-fail-under=100` lives in the CI workflow rather than
+      `pyproject.toml`, so a local `make test` does not enforce it. Moving it
+      would make the gate the same in both places. Unrelated to this bug.

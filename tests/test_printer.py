@@ -211,3 +211,27 @@ def test_an_unreachable_cups_is_a_print_error() -> None:
 
     with pytest.raises(PrintError, match="could not reach CUPS"):
         await_completion("P-1", 107, fetch=fetch, sleep=lambda _: None)
+
+
+def test_the_job_number_is_what_gets_polled() -> None:
+    """lp hands back a name; CUPS answers to the number inside it. Polling
+    anything else would ask about a job that is not this one."""
+    asked: list[int] = []
+
+    def fetch(job_id: int) -> JobState:
+        asked.append(job_id)
+        return state(9, 4)
+
+    await_completion(
+        "Brother_MFC_L2700DW_series-8727", 4, fetch=fetch, sleep=lambda _: None
+    )
+    assert asked == [8727]
+
+
+def test_the_outcome_remembers_which_job_it_describes() -> None:
+    """The run log and the error message both name the job, and a wrong
+    name there sends someone to the wrong entry in lpstat."""
+    outcome = await_completion(
+        "Printer-9", 4, fetch=polls(state(9, 4)), sleep=lambda _: None
+    )
+    assert outcome.job == "Printer-9"
