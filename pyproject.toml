@@ -53,6 +53,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "mutmut>=3.3.1",
     "mypy>=2.3.1",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
@@ -93,3 +94,11 @@ untyped_calls_exclude = ["pymupdf"]
 [[tool.mypy.overrides]]
 module = ["weasyprint.*"]
 ignore_missing_imports = true
+
+[tool.mutmut]
+# Scoped to the modules under audit: mutating all of src/newsprint takes
+# hours, and CLAUDE.md treats mutation testing as a periodic audit rather
+# than a gate. also_copy brings the rest of the package into mutmut's
+# working tree - without it the copy has no __init__.py and will not build.
+source_paths = ["src/newsprint/cupsjob.py", "src/newsprint/printer.py"]
+also_copy = ["src/newsprint/", "tests/", "README.md"]
