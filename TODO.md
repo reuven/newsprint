@@ -1,5 +1,35 @@
 # TODO
 
+## Count sides the printer printed, not sides CUPS sent
+
+On 2026-10-02 job `Brother_MFC_L2700DW_series-8732` stopped short and
+newsprint reported 66 of 116 sides. The printer's own record of the same
+job (its job 10210) says 60: it ran out of memory and cancelled the job
+(`job-canceled-at-device`, "Out of Memory" in its error history). CUPS
+counts a side when the filter finishes *sending* it, so its
+`job-impressions-completed` runs ahead of paper by however many pages the
+printer had buffered - six here. Resuming from side 67 would have lost
+61-66. The same lag means a job CUPS calls complete can still jam on its
+last few sheets, after newsprint has retired the mail.
+
+- [x] `cupsjob.py`: Get-Printer-Attributes for a queue's `device-uri`, and
+      Get-Jobs against the printer itself, decoding one record per job.
+- [ ] `device.py`: turn a device URI into the printer's IPP URI - ipp/ipps
+      as-is, dnssd:// resolved with `ippfind` (by uuid, else by name),
+      anything else (usb, socket, lpd) has no printer-side record.
+      `print.printer_uri` in the config overrides discovery.
+- [ ] `printer.await_completion()`: once CUPS stops, follow the printer's
+      job (matched by job name, newest id) until it stops too, and judge
+      the outcome on the printer's count. An IPP printer that cannot be
+      reached or whose job cannot be found is a PrintError: mail kept.
+      A non-IPP device falls back to the CUPS count, labeled as sent.
+- [ ] `cli.py`: progress and the short-print message use the printer's
+      count, give sheets for duplex, name the printer's reason, and say
+      which side to resume from. The run log keeps both counts.
+- [ ] README and config.example.toml: `printer_uri`, and what the two
+      counts mean.
+- [ ] Release 0.20.0.
+
 ## Wait for the print job to finish before retiring mail
 
 `spool()` returns when `lp` exits, which means CUPS accepted the job — not
