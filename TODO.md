@@ -14,7 +14,7 @@ last few sheets, after newsprint has retired the mail.
 
 - [x] `cupsjob.py`: Get-Printer-Attributes for a queue's `device-uri`, and
       Get-Jobs against the printer itself, decoding one record per job.
-- [ ] `device.py`: turn a device URI into the printer's IPP URI - ipp/ipps
+- [x] `device.py`: turn a device URI into the printer's IPP URI - ipp/ipps
       as-is, dnssd:// resolved with `ippfind` (by uuid, else by name),
       anything else (usb, socket, lpd) has no printer-side record.
       `print.printer_uri` in the config overrides discovery.

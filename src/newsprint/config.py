@@ -35,6 +35,9 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # print in, "publication" groups by name, "length" puts the
         # longest first.
         "trim_order": "date",
+        # The printer's own IPP address, asked after each run how many
+        # sides reached paper. Empty finds it from the CUPS queue.
+        "printer_uri": "",
     },
     "layout": {"margin_mm": 9.0, "font_size_pt": 9.0, "line_height": 1.35},
     "window": {"fallback_days": 7},
@@ -90,6 +93,7 @@ _SECTION_KEYS: dict[str, frozenset[str]] = {
             "cells_per_side",
             "trim_above_sheets",
             "trim_order",
+            "printer_uri",
         }
     ),
     "layout": frozenset({"margin_mm", "font_size_pt", "line_height"}),
@@ -218,6 +222,17 @@ class ImagesConfig:
         return max(matches, key=lambda rule: len(rule[0]))[1]
 
 
+def _printer_uri(uri: str, path: Path) -> str:
+    """The [print] printer_uri override, checked now rather than after a
+    packet has gone to paper and the printer is asked about it."""
+    if uri and not uri.startswith(("ipp://", "ipps://")):
+        raise ConfigError(
+            f"{path}: print.printer_uri must be an ipp:// or ipps:// address, "
+            f"not {uri!r}"
+        )
+    return uri
+
+
 @dataclass(frozen=True, slots=True)
 class PrintConfig:
     printer: str
@@ -225,6 +240,7 @@ class PrintConfig:
     duplex: str
     trim_above_sheets: int
     trim_order: TrimOrder
+    printer_uri: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -508,6 +524,7 @@ def load_config(
                 duplex=data["print"]["duplex"],
                 trim_above_sheets=data["print"]["trim_above_sheets"],
                 trim_order=cast("TrimOrder", data["print"]["trim_order"]),
+                printer_uri=_printer_uri(data["print"]["printer_uri"], path),
             ),
             layout=LayoutConfig(
                 **{
