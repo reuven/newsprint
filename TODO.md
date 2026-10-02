@@ -23,7 +23,7 @@ last few sheets, after newsprint has retired the mail.
       the outcome on the printer's count. An IPP printer that cannot be
       reached or whose job cannot be found is a PrintError: mail kept.
       A non-IPP device falls back to the CUPS count, labeled as sent.
-- [ ] `cli.py`: progress and the short-print message use the printer's
+- [x] `cli.py`: progress and the short-print message use the printer's
       count, give sheets for duplex, name the printer's reason, and say
       which side to resume from. The run log keeps both counts.
 - [ ] README and config.example.toml: `printer_uri`, and what the two

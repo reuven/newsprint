@@ -57,7 +57,7 @@ from .picker import (
 )
 from .pickerui import questionary_prompt
 from .pipeline import Built, Failure, TeaserSkippedError, build_one
-from .printer import PrintError, await_completion, spool
+from .printer import PrintError, await_completion, locate_printer, spool
 from .setup import run_setup
 from .stamp import format_packet_date, stamp_packet
 from .summarize import build_summary_pages
@@ -580,6 +580,7 @@ def _open_preview(pdf: Path) -> None:
 
 
 def _wait_for_paper(
+    config: Config,
     job: str,
     sides: int,
     sheets_pdf: Path,
@@ -598,16 +599,35 @@ def _wait_for_paper(
     Falling short raises rather than asking, because the person who
     started the run may well have walked away from it - and because the
     answer that keeps the mail is the only safe one either way.
-    """
-    last = 0
 
-    def progress(state: JobState) -> None:
-        nonlocal last
-        last = state.impressions
-        click.echo(f"\r  Printing: {last}/{sides} sides...", nl=False)
+    The count that decides is the printer's own. CUPS's runs ahead of
+    paper by whatever the printer holds in memory: on 2026-10-02 it said
+    66 of 116 while the printer had cancelled the job at 60, and resuming
+    from side 67 would have lost six pages. CUPS's number is shown, and
+    labeled, as sides sent.
+    """
+    printing = False
+
+    def sent(state: JobState) -> None:
+        click.echo(f"\r  Sent: {state.impressions}/{sides} sides...", nl=False)
+
+    def printed(state: JobState) -> None:
+        nonlocal printing
+        if not printing:
+            click.echo()
+            printing = True
+        click.echo(f"\r  Printed: {state.impressions}/{sides} sides...", nl=False)
 
     try:
-        outcome = await_completion(job, sides, on_progress=progress)
+        printer = locate_printer(job, override=config.printing.printer_uri)
+        outcome = await_completion(
+            job,
+            sides,
+            on_progress=sent,
+            document=sheets_pdf.name,
+            printer=printer,
+            on_printed=printed,
+        )
     except PrintError as error:
         runlog.record({"outcome": "print-unknown", "job": job, "error": str(error)})
         raise click.ClickException(
@@ -616,17 +636,28 @@ def _wait_for_paper(
     finally:
         click.echo()
 
+    count = outcome.state.impressions
     if outcome.complete:
-        click.echo(f"  Printed {outcome.state.impressions} sides.")
+        if outcome.confirmed:
+            click.echo(f"  Printed {count} sides.")
+        else:
+            click.echo(
+                f"  Sent {count} sides; this printer cannot report how many "
+                "reached paper."
+            )
         return
 
+    sheets = _sheets(count, config.printing.duplex)
     runlog.record(
         {
             "outcome": "print-short",
             "job": job,
             "sides": sides,
-            "impressions": outcome.state.impressions,
-            "sheets": outcome.state.sheets,
+            "impressions": count,
+            "sent": outcome.sent,
+            "sheets": sheets,
+            "confirmed": outcome.confirmed,
+            "printer_job": outcome.printer_job,
             "state": outcome.state.state,
             "reasons": list(outcome.state.reasons),
             "documents": [item.document.origin.identifier for item in built],
@@ -634,13 +665,30 @@ def _wait_for_paper(
             "skipped": list(skipped_teasers),
         }
     )
+    if outcome.confirmed:
+        why = f": {', '.join(outcome.state.reasons)}" if outcome.state.reasons else ""
+        what = (
+            f"The printer stopped after {count} of {outcome.expected} sides "
+            f"({sheets} sheets){why}. {outcome.shortfall} sides never printed.\n"
+            f"To finish, print sides {count + 1}-{outcome.expected} of the PDF.\n"
+        )
+    else:
+        what = (
+            f"CUPS sent {count} of {outcome.expected} sides and stopped. This "
+            "printer cannot report how many reached paper, so check the last "
+            "sheet before reprinting.\n"
+        )
     raise click.ClickException(
-        f"The printer stopped after {outcome.state.impressions} of "
-        f"{outcome.expected} sides ({outcome.state.sheets} sheets); "
-        f"{outcome.shortfall} sides never printed.\n"
+        f"{what}"
         f"Mail untouched: all {len(built)} messages stay starred.\n"
         f"PDF kept at {sheets_pdf}"
     )
+
+
+def _sheets(sides: int, duplex: str) -> int:
+    """Sheets of paper `sides` sides take. Printing on both, an odd side
+    out is still a sheet that came out of the printer."""
+    return -(-sides // 2) if duplex.startswith("two-sided") else sides
 
 
 def retire_printed(
@@ -1277,7 +1325,9 @@ def main(
         click.echo(f"Spooled as {job}.")
 
         if not no_wait:
-            _wait_for_paper(job, sides, sheets_pdf, built, uids, skipped_teasers)
+            _wait_for_paper(
+                config, job, sides, sheets_pdf, built, uids, skipped_teasers
+            )
 
         runlog.record(
             {
