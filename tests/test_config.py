@@ -612,3 +612,30 @@ def test_a_config_with_no_image_rules_treats_everything_normally(
     path = tmp_path / "config.toml"
     path.write_text("[print]\npaper = 'A4'\n")
     assert load_config(path).images.policy_for("Anything At All") == "default"
+
+
+def test_printer_uri_defaults_to_discovery(tmp_path: Path) -> None:
+    """Empty means "ask CUPS where the queue's printer is"."""
+    path = tmp_path / "config.toml"
+    path.write_text("[print]\n")
+    assert load_config(path).printing.printer_uri == ""
+
+
+def test_printer_uri_overrides_discovery(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('[print]\nprinter_uri = "ipp://printer.local/ipp/print"\n')
+    assert load_config(path).printing.printer_uri == "ipp://printer.local/ipp/print"
+
+
+@pytest.mark.parametrize(
+    "uri", ["http://printer.local/ipp/print", "printer.local", "usb://Brother/X"]
+)
+def test_a_printer_uri_that_is_not_ipp_is_rejected(tmp_path: Path, uri: str) -> None:
+    """The printer is going to be sent an IPP request; anything else would
+    only fail later, mid-run, with the packet already on paper."""
+    from newsprint.config import ConfigError
+
+    path = tmp_path / "config.toml"
+    path.write_text(f'[print]\nprinter_uri = "{uri}"\n')
+    with pytest.raises(ConfigError, match="printer_uri must be an ipp:"):
+        load_config(path)

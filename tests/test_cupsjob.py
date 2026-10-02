@@ -16,9 +16,17 @@ import pytest
 from newsprint.cupsjob import (
     IppError,
     JobState,
+    PrinterJob,
+    decode_device_uri,
+    decode_jobs,
     decode_response,
+    device_uri,
+    encode_device_uri_request,
+    encode_jobs_request,
     encode_request,
     fetch,
+    http_url,
+    printer_jobs,
 )
 
 # Job 8727, the 2026-09-18 run: job-state 9 (completed), 0x43 = 67
@@ -254,7 +262,7 @@ def test_post_sends_ipp_to_the_local_cups(monkeypatch) -> None:
     seen: list[urllib.request.Request] = []
 
     @contextlib.contextmanager
-    def fake_urlopen(request, timeout):
+    def fake_urlopen(request, timeout, context=None):
         seen.append(request)
         yield io.BytesIO(SHORT_JOB)
 
@@ -272,7 +280,7 @@ def test_an_unreachable_cups_becomes_an_ipp_error(monkeypatch) -> None:
 
     from newsprint import cupsjob
 
-    def refuse(request, timeout):
+    def refuse(request, timeout, context=None):
         raise urllib.error.URLError("connection refused")
 
     monkeypatch.setattr(urllib.request, "urlopen", refuse)
@@ -357,3 +365,350 @@ def test_reasons_are_matched_by_name_and_type() -> None:
         )
     )
     assert state.reasons == ("job-completed-successfully",)
+
+
+# --- the queue's device, and the printer's own jobs ----------------------
+#
+# CUPS counts a side as done when it has *sent* it, so its
+# job-impressions-completed runs ahead of paper by whatever the printer
+# has buffered: on 2026-10-02 CUPS said 66 of 116 and the printer, which
+# had run out of memory and cancelled the job, said 60. Only the printer
+# knows what reached paper, so these ask it directly.
+#
+# The three replies below are real, captured from cupsd and from the
+# Brother that cancelled that job. Two values are substituted, because
+# this repository is public: the packet's file name and the printer's
+# uuid. Their lengths are adjusted to match; every byte of structure is
+# as received.
+
+DEVICE_URI = (
+    "dnssd://Brother%20MFC-L2700DW%20series._ipp._tcp.local./"
+    "?uuid=00000000-0000-1000-8000-000000000000"
+)
+
+DEVICE_URI_REPLY = (
+    b"\x02\x00\x00\x00\x00\x00\x00\x01"
+    b"\x01"
+    b"G\x00\x12attributes-charset\x00\x05utf-8"
+    b"H\x00\x1battributes-natural-language\x00\x02en"
+    b"\x04"
+    b"E\x00\ndevice-uri"
+    + struct.pack(">H", len(DEVICE_URI))
+    + DEVICE_URI.encode()
+    + b"\x03"
+)
+
+# Get-Jobs, which-jobs=completed, from the printer. Note three things the
+# decoder has to cope with, none of which CUPS does: an empty
+# natural-language, status 0x0001 (it ignored an attribute it does not
+# support), and that attribute echoed back in an unsupported-attributes
+# group - this printer has no job-media-sheets-completed. The job name is
+# nameWithLanguage, a language and a text packed into one value.
+PRINTER_COMPLETED = (
+    b"\x02\x00\x00\x01\x00\x00\x00\x01"
+    b"\x01"
+    b"G\x00\x12attributes-charset\x00\x05utf-8"
+    b"H\x00\x1battributes-natural-language\x00\x00"
+    b"\x05"
+    b"D\x00\x14requested-attributes\x00\x1ajob-media-sheets-completed"
+    b"\x02"
+    b"!\x00\x06job-id\x00\x04\x00\x00'\xe3"
+    b"6\x00\x08job-name\x00#\x00\x05en-us\x00\x1apacket-2026-10-02-1227.pdf"
+    b"#\x00\tjob-state\x00\x04\x00\x00\x00\t"
+    b"D\x00\x11job-state-reasons\x00\x1ajob-completed-successfully"
+    b"!\x00\x19job-impressions-completed\x00\x04\x00\x00\x00\x10"
+    b"\x03"
+)
+
+# Get-Jobs, which-jobs=not-completed, with nothing printing: no job groups.
+PRINTER_IDLE = (
+    b"\x02\x00\x00\x00\x00\x00\x00\x01"
+    b"\x01"
+    b"G\x00\x12attributes-charset\x00\x05utf-8"
+    b"H\x00\x1battributes-natural-language\x00\x00"
+    b"\x03"
+)
+
+
+def name_without_language(name: str, value: str) -> bytes:
+    """job-name as CUPS sends it: tag 0x42, plain text."""
+    encoded, text = name.encode(), value.encode()
+    return (
+        struct.pack(">BH", 0x42, len(encoded))
+        + encoded
+        + struct.pack(">H", len(text))
+        + text
+    )
+
+
+def jobs_response(*jobs: bytes, status: int = 0x0000) -> bytes:
+    """A Get-Jobs reply: one job-attributes group per job."""
+    return (
+        struct.pack(">HHI", 0x0200, status, 1)
+        + b"".join(b"\x02" + job for job in jobs)
+        + b"\x03"
+    )
+
+
+def test_the_device_uri_is_read_from_cupss_reply() -> None:
+    assert decode_device_uri(DEVICE_URI_REPLY) == DEVICE_URI
+
+
+def test_a_reply_without_a_device_uri_is_an_error() -> None:
+    with pytest.raises(IppError, match="device-uri"):
+        decode_device_uri(PRINTER_IDLE)
+
+
+def test_a_refused_device_uri_request_is_an_error() -> None:
+    with pytest.raises(IppError, match="0x0406"):
+        decode_device_uri(response(status=0x0406))
+
+
+def test_the_device_uri_request_asks_the_queue_for_just_that() -> None:
+    body = encode_device_uri_request("Brother_MFC_L2700DW_series")
+    assert body[:8] == struct.pack(">HHI", 0x0200, 0x000B, 1)
+    assert b"ipp://localhost/printers/Brother_MFC_L2700DW_series" in body
+    assert body.count(b"requested-attributes") == 1
+    assert b"device-uri" in body
+    assert body.index(b"attributes-charset") < body.index(b"printer-uri")
+
+
+def test_device_uri_posts_to_the_queue_on_the_local_cups() -> None:
+    sent: list[tuple[str, bytes]] = []
+
+    def poster(url: str, body: bytes) -> bytes:
+        sent.append((url, body))
+        return DEVICE_URI_REPLY
+
+    assert device_uri("Q", poster=poster) == DEVICE_URI
+    assert sent == [("http://localhost:631/printers/Q", encode_device_uri_request("Q"))]
+
+
+def test_the_printers_own_job_is_decoded_from_the_real_reply() -> None:
+    """The record that tells the truth about a short print. Sheets read as
+    zero because this printer does not report them at all."""
+    assert decode_jobs(PRINTER_COMPLETED) == [
+        PrinterJob(
+            id=10211,
+            name="packet-2026-10-02-1227.pdf",
+            state=JobState(
+                state=9,
+                reasons=("job-completed-successfully",),
+                impressions=16,
+                sheets=0,
+            ),
+        )
+    ]
+
+
+def test_a_printer_with_nothing_printing_has_no_jobs() -> None:
+    assert decode_jobs(PRINTER_IDLE) == []
+
+
+def test_each_job_group_becomes_its_own_job() -> None:
+    """Attributes must not leak from one job into the next: the second job
+    here has no impressions, and must not inherit the first one's 60."""
+    body = jobs_response(
+        integer("job-id", 10210)
+        + name_without_language("job-name", "a.pdf")
+        + integer("job-state", 7)
+        + keyword("job-state-reasons", "job-canceled-at-device")
+        + integer("job-impressions-completed", 60),
+        integer("job-id", 10211)
+        + name_without_language("job-name", "b.pdf")
+        + integer("job-state", 5),
+    )
+    assert decode_jobs(body) == [
+        PrinterJob(10210, "a.pdf", JobState(7, ("job-canceled-at-device",), 60, 0)),
+        PrinterJob(10211, "b.pdf", JobState(5, (), 0, 0)),
+    ]
+
+
+def test_a_job_without_an_id_or_state_is_an_error() -> None:
+    """Without these there is nothing to match on and nothing to judge."""
+    with pytest.raises(IppError, match="job-id"):
+        decode_jobs(jobs_response(integer("job-state", 9)))
+    with pytest.raises(IppError, match="job-state"):
+        decode_jobs(jobs_response(integer("job-id", 1)))
+
+
+def test_a_job_without_a_name_reads_as_unnamed() -> None:
+    body = jobs_response(integer("job-id", 1) + integer("job-state", 9))
+    assert decode_jobs(body)[0].name == ""
+
+
+def test_a_refused_jobs_request_is_an_error_with_the_printers_message() -> None:
+    body = (
+        struct.pack(">HHI", 0x0200, 0x0400, 1)
+        + b"\x01"
+        + (b"A\x00\x0estatus-message\x00\x0bbad request")
+        + b"\x03"
+    )
+    with pytest.raises(IppError, match="bad request"):
+        decode_jobs(body)
+
+
+def test_the_jobs_request_names_the_printer_and_which_jobs() -> None:
+    body = encode_jobs_request("ipp://printer.local:631/ipp/print", "completed")
+    assert body[:8] == struct.pack(">HHI", 0x0200, 0x000A, 1)
+    assert b"ipp://printer.local:631/ipp/print" in body
+    assert b"which-jobs\x00\x09completed" in body
+    assert body.count(b"requested-attributes") == 1
+    for wanted in (b"job-id", b"job-name", b"job-state", b"job-impressions-completed"):
+        assert wanted in body
+    assert body.index(b"attributes-charset") < body.index(b"printer-uri")
+
+
+@pytest.mark.parametrize(
+    ("uri", "url"),
+    [
+        ("ipp://printer.local:631/ipp/print", "http://printer.local:631/ipp/print"),
+        ("ipp://printer.local/ipp/print", "http://printer.local:631/ipp/print"),
+        ("ipps://printer.local/ipp/print", "https://printer.local:631/ipp/print"),
+        ("ipps://printer.local:443/ipp/print", "https://printer.local:443/ipp/print"),
+    ],
+)
+def test_ipp_uris_become_the_http_urls_they_name(uri: str, url: str) -> None:
+    """IPP is HTTP on port 631 unless the URI says otherwise (RFC 8010)."""
+    assert http_url(uri) == url
+
+
+def test_a_uri_that_is_not_ipp_has_no_http_url() -> None:
+    with pytest.raises(IppError, match="usb://"):
+        http_url("usb://Brother/MFC?serial=1")
+
+
+def test_printer_jobs_asks_for_both_running_and_finished_jobs() -> None:
+    """A job CUPS has finished sending may still be printing, so the
+    printer's not-completed list matters as much as its completed one."""
+    sent: list[tuple[str, bytes]] = []
+    replies = iter([PRINTER_IDLE, PRINTER_COMPLETED])
+
+    def poster(url: str, body: bytes) -> bytes:
+        sent.append((url, body))
+        return next(replies)
+
+    uri = "ipp://printer.local:631/ipp/print"
+    jobs = printer_jobs(uri, poster=poster)
+    assert [job.id for job in jobs] == [10211]
+    assert sent == [
+        (
+            "http://printer.local:631/ipp/print",
+            encode_jobs_request(uri, "not-completed"),
+        ),
+        ("http://printer.local:631/ipp/print", encode_jobs_request(uri, "completed")),
+    ]
+
+
+def test_post_to_reaches_any_url_and_names_it_on_failure(monkeypatch) -> None:
+    import contextlib
+    import urllib.request
+
+    from newsprint import cupsjob
+
+    seen: list[urllib.request.Request] = []
+
+    @contextlib.contextmanager
+    def fake_urlopen(request, timeout, context=None):
+        seen.append(request)
+        yield io.BytesIO(PRINTER_IDLE)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert cupsjob.post_to("http://printer.local:631/ipp/print", b"x") == PRINTER_IDLE
+    assert seen[0].full_url == "http://printer.local:631/ipp/print"
+    assert seen[0].headers["Content-type"] == cupsjob.CONTENT_TYPE
+
+    def refuse(request, timeout, context=None):
+        raise OSError("no route to host")
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    with pytest.raises(IppError, match="printer.local"):
+        cupsjob.post_to("http://printer.local:631/ipp/print", b"x")
+
+
+def test_a_printers_self_signed_certificate_is_accepted(monkeypatch) -> None:
+    """Printers ship self-signed certificates, so verifying one would make
+    ipps:// printers unreachable. The query only reads job counters."""
+    import contextlib
+    import ssl
+    import urllib.request
+
+    from newsprint import cupsjob
+
+    contexts: list[ssl.SSLContext | None] = []
+
+    @contextlib.contextmanager
+    def fake_urlopen(request, timeout, context=None):
+        contexts.append(context)
+        yield io.BytesIO(PRINTER_IDLE)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    cupsjob.post_to("https://printer.local:631/ipp/print", b"x")
+    cupsjob.post_to("http://printer.local:631/ipp/print", b"x")
+    assert contexts[0] is not None
+    assert contexts[0].verify_mode == ssl.CERT_NONE
+    assert contexts[1] is None
+
+
+# --- closing mutation-testing gaps (2026-10-02 audit) ---------------------
+
+
+def test_the_request_id_reaches_the_header() -> None:
+    """IPP replies echo the id; a request that drops it cannot be paired
+    with its reply."""
+    assert encode_request(1, request_id=7)[:8] == struct.pack(">HHI", 0x0200, 0x0009, 7)
+
+
+def test_the_device_uri_request_names_its_attributes_exactly() -> None:
+    """A substring check passes for "XXprinter-uriXX" too; these are the
+    exact encoded attributes cupsd looks for."""
+    body = encode_device_uri_request("Q")
+    assert b"\x45\x00\x0bprinter-uri\x00\x1aipp://localhost/printers/Q" in body
+    assert b"\x44\x00\x14requested-attributes\x00\x0adevice-uri\x03" in body
+
+
+def test_the_jobs_request_names_the_printer_exactly() -> None:
+    uri = "ipp://p/ipp/print"
+    body = encode_jobs_request(uri, "completed")
+    assert (
+        b"\x45\x00\x0bprinter-uri" + struct.pack(">H", len(uri)) + uri.encode() in body
+    )
+
+
+def test_the_device_uri_is_found_by_name_not_just_by_type() -> None:
+    """CUPS sends other URIs in the same group; only device-uri will do."""
+    other = "ipp://localhost:631/printers/Q"
+    body = (
+        struct.pack(">HHI", 0x0200, 0, 1)
+        + b"\x04"
+        + b"E\x00\x15printer-uri-supported"
+        + struct.pack(">H", len(other))
+        + other.encode()
+        + b"E\x00\ndevice-uri"
+        + struct.pack(">H", len(DEVICE_URI))
+        + DEVICE_URI.encode()
+        + b"\x03"
+    )
+    assert decode_device_uri(body) == DEVICE_URI
+
+
+def test_post_to_posts_with_a_deadline(monkeypatch) -> None:
+    """A printer that accepts the connection and never answers must not
+    hold the run forever."""
+    import contextlib
+    import urllib.request
+
+    from newsprint import cupsjob
+
+    calls: list[tuple[urllib.request.Request, object]] = []
+
+    @contextlib.contextmanager
+    def fake_urlopen(request, timeout, context=None):
+        calls.append((request, timeout))
+        yield io.BytesIO(PRINTER_IDLE)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    cupsjob.post_to("http://p:631/ipp/print", b"x")
+    request, timeout = calls[0]
+    assert request.get_method() == "POST"
+    assert isinstance(timeout, (int, float)) and timeout > 0

@@ -1,6 +1,6 @@
 [project]
 name = "newsprint"
-version = "0.19.0"
+version = "0.20.0"
 description = "Fetch starred newsletters over IMAP, reduce them to article content, and print them quarter-sheet, four to a side, duplex."
 readme = "README.md"
 license = "MIT"
@@ -100,5 +100,9 @@ ignore_missing_imports = true
 # hours, and CLAUDE.md treats mutation testing as a periodic audit rather
 # than a gate. also_copy brings the rest of the package into mutmut's
 # working tree - without it the copy has no __init__.py and will not build.
-source_paths = ["src/newsprint/cupsjob.py", "src/newsprint/printer.py"]
+source_paths = [
+    "src/newsprint/cupsjob.py",
+    "src/newsprint/device.py",
+    "src/newsprint/printer.py",
+]
 also_copy = ["src/newsprint/", "tests/", "README.md"]

@@ -38,6 +38,11 @@ trim_above_sheets = 20           # past this many sheets a run stops and
 trim_order = "date"              # how that list is ordered: "date" is the
                                   # order it will print in, "publication"
                                   # groups by name, "length" longest first.
+printer_uri = ""                 # the printer's own IPP address, asked how
+                                  # many sides reached paper. Empty finds it
+                                  # from the CUPS queue (with ippfind for a
+                                  # Bonjour printer); set it if that fails,
+                                  # e.g. "ipp://printer.local:631/ipp/print".
 
 [layout]
 margin_mm   = 9.0

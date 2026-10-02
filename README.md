@@ -529,11 +529,12 @@ Run `newsprint --publications` to see the names your own mail uses.
 ## Waiting for the printer
 
 A run does not end when `lp` accepts the document. It waits for the job,
-reporting sides as they print:
+first while CUPS sends it and then while the printer prints it:
 
 ```
 Spooled as Brother_MFC_L2700DW_series-8731.
-  Printing: 107/107 sides...
+  Sent: 107/107 sides...
+  Printed: 107/107 sides...
   Printed 107 sides.
 ```
 
@@ -543,21 +544,45 @@ and — this is the part that surprises — a job that stops partway through is
 still reported by CUPS as `completed`. A run on 2026-09-18 put 67 of 107
 sides on paper, and the mail was unstarred and filed eleven seconds after
 handoff, while the printer still had seven minutes of work ahead of it.
-Nothing in `job-state` distinguishes that from a clean finish; only the
-printer's own count of impressions does.
+Nothing in `job-state` distinguishes that from a clean finish.
 
-So a short job stops the run instead:
+CUPS's own count of sides is not the answer either: it counts a side once
+it has *sent* it, so it runs ahead of paper by however many pages the
+printer is holding. On 2026-10-02 CUPS reported 66 of 116 sides while the
+printer, which had run out of memory and cancelled the job, had printed 60.
+So once CUPS has sent everything, newsprint asks the printer itself for its
+record of the job, follows it until the printer stops, and goes by the
+printer's count. A short job stops the run:
 
 ```
-! The printer stopped after 67 of 107 sides (33 sheets); 40 sides never
-  printed.
-  Mail untouched: all 36 messages stay starred.
-  PDF kept at ~/.local/state/newsprint/packets/...-1546.pdf
+! The printer stopped after 60 of 116 sides (30 sheets):
+  job-canceled-at-device. 56 sides never printed.
+  To finish, print sides 61-116 of the PDF.
+  Mail untouched: all 40 messages stay starred.
+  PDF kept at ~/.local/state/newsprint/packets/...-1227.pdf
 ```
+
+To ask the printer, newsprint needs its address. It reads the queue's
+device from CUPS and, for a Bonjour printer (most network printers on a
+Mac), looks it up with `ippfind`, which ships with macOS and is in the
+`cups-ipp-utils` package on most Linux distributions. If that does not
+find yours, set it in the config:
+
+```toml
+[print]
+printer_uri = "ipp://BRW0123456789AB.local:631/ipp/print"
+```
+
+A printer connected by USB, or reached as a raw socket or over LPD, keeps
+no job record that can be asked. For those the run goes by CUPS's count, as
+before, and says so: "Sent 107 sides; this printer cannot report how many
+reached paper." If such a job stops short, the message gives CUPS's number
+and asks you to check the last sheet before reprinting.
 
 Every message stays starred, so the next run builds the same packet again,
 and the PDF is there if you would rather print the missing pages yourself.
-The same happens if the job's state cannot be read at all — not knowing
+The same happens if the job's state cannot be read at all, or if the
+printer cannot be found or has already forgotten the job — not knowing
 whether it printed is treated as a failure, never as a success.
 
 The wait has no timeout. A printer that is out of paper finishes the job

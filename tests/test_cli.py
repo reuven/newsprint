@@ -26,7 +26,7 @@ def _the_printer_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
     that do care set their own await_completion afterwards, which wins.
     """
 
-    def finished(job: str, expected: int, on_progress=None) -> PrintOutcome:
+    def finished(job: str, expected: int, on_progress=None, **kwargs) -> PrintOutcome:
         state = JobState(
             state=9, reasons=(), impressions=expected, sheets=expected // 2
         )
@@ -35,6 +35,9 @@ def _the_printer_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
         return PrintOutcome(job=job, state=state, expected=expected)
 
     monkeypatch.setattr("newsprint.cli.await_completion", finished)
+    # Finding the printer would otherwise ask the developer's own CUPS and
+    # browse their network with ippfind.
+    monkeypatch.setattr("newsprint.cli.locate_printer", lambda job, override="": None)
 
 
 SAMPLE_CONFIG = """
@@ -4367,7 +4370,7 @@ def _printing_run(monkeypatch, tmp_path: Path, outcome: PrintOutcome | None):
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
 
-    def fake_await(job, expected, on_progress=None):
+    def fake_await(job, expected, on_progress=None, **kwargs):
         waited.append((job, expected))
         assert outcome is not None, "await_completion should not have been called"
         if on_progress is not None:
@@ -4452,12 +4455,13 @@ def test_no_wait_retires_without_asking_cups(monkeypatch, tmp_path) -> None:
 
 
 def test_progress_reaches_the_terminal(monkeypatch, tmp_path) -> None:
+    """CUPS's count is labeled for what it is: sides sent."""
     _printing_run(monkeypatch, tmp_path, _outcome(8, 8))
     monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: None)
     result = CliRunner().invoke(
         main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
     )
-    assert "Printing" in result.output
+    assert "Sent: 8/" in result.output
 
 
 def test_the_wait_happens_between_spooling_and_retiring(monkeypatch, tmp_path) -> None:
@@ -4474,7 +4478,7 @@ def test_the_wait_happens_between_spooling_and_retiring(monkeypatch, tmp_path) -
         lambda pdf, config: (events.append("spool"), "Printer-1")[1],
     )
 
-    def fake_await(job, expected, on_progress=None):
+    def fake_await(job, expected, on_progress=None, **kwargs):
         events.append("wait")
         return _outcome(expected, expected)
 
@@ -4506,7 +4510,7 @@ def test_an_unreadable_job_state_retires_nothing(monkeypatch, tmp_path) -> None:
     )
     monkeypatch.setattr("newsprint.cli.spool", lambda pdf, config: "Printer-1")
 
-    def explode(job, expected, on_progress=None):
+    def explode(job, expected, on_progress=None, **kwargs):
         raise PrintError("could not reach CUPS at http://localhost:631/")
 
     monkeypatch.setattr("newsprint.cli.await_completion", explode)
@@ -4524,3 +4528,196 @@ def test_an_unreadable_job_state_retires_nothing(monkeypatch, tmp_path) -> None:
     assert retired == []
     assert result.exit_code != 0
     assert "print-unknown" in [e["outcome"] for e in entries]
+
+
+# --- the printer's count, not CUPS's ---------------------------------------
+#
+# On 2026-10-02 CUPS reported 66 of 116 sides and the printer, which had
+# run out of memory and cancelled the job, had printed 60. newsprint said
+# 66, and resuming from side 67 would have lost six pages.
+
+
+def _confirmed(impressions, expected, sent, state=9, reasons=()) -> PrintOutcome:
+    return PrintOutcome(
+        job="Printer-1",
+        state=JobState(state=state, reasons=reasons, impressions=impressions, sheets=0),
+        expected=expected,
+        sent=sent,
+        printer_job=10210,
+    )
+
+
+def _run_with(monkeypatch, tmp_path, outcome, config_text="", locate=None):
+    """A printing run whose wait returns `outcome`; returns what it saw."""
+    retired, _ = _printing_run(monkeypatch, tmp_path, outcome)
+    seen: dict = {}
+
+    def fake_await(job, expected, on_progress=None, **kwargs):
+        seen.update(kwargs, job=job, expected=expected)
+        if on_progress is not None:
+            on_progress(JobState(5, (), outcome.sent, 0))
+        if kwargs.get("on_printed") is not None and outcome.confirmed:
+            kwargs["on_printed"](outcome.state)
+        return outcome
+
+    monkeypatch.setattr("newsprint.cli.await_completion", fake_await)
+    if locate is not None:
+        monkeypatch.setattr("newsprint.cli.locate_printer", locate)
+    entries: list[dict] = []
+    monkeypatch.setattr(
+        "newsprint.runlog.record", lambda entry, **kw: entries.append(entry)
+    )
+    config = tmp_path / "config.toml"
+    if config_text:
+        config.write_text(config_text)
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(config)], input="y\n"
+    )
+    return result, retired, seen, entries
+
+
+def test_a_short_print_reports_the_printers_count(monkeypatch, tmp_path) -> None:
+    outcome = _confirmed(60, 116, sent=66, state=7, reasons=("job-canceled-at-device",))
+    result, retired, _, entries = _run_with(monkeypatch, tmp_path, outcome)
+    assert retired == []
+    assert result.exit_code != 0
+    assert "60 of 116 sides (30 sheets)" in result.output
+    assert "66 of 116" not in result.output
+    assert "job-canceled-at-device" in result.output
+    short = next(e for e in entries if e["outcome"] == "print-short")
+    assert (short["impressions"], short["sent"], short["printer_job"]) == (
+        60,
+        66,
+        10210,
+    )
+    assert short["confirmed"] is True
+
+
+def test_a_short_print_says_which_sides_to_reprint(monkeypatch, tmp_path) -> None:
+    """The next thing anyone does after a short print is reprint the rest;
+    the first missing side is the printer's count plus one."""
+    result, *_ = _run_with(monkeypatch, tmp_path, _confirmed(60, 116, sent=66, state=7))
+    assert "sides 61-116" in result.output
+
+
+def test_one_sided_sheets_are_sides(monkeypatch, tmp_path) -> None:
+    result, *_ = _run_with(
+        monkeypatch,
+        tmp_path,
+        _confirmed(7, 10, sent=8, state=7),
+        '[print]\nduplex = "one-sided"\n',
+    )
+    assert "7 of 10 sides (7 sheets)" in result.output
+
+
+def test_an_odd_count_of_two_sided_sides_rounds_up_to_a_sheet(
+    monkeypatch, tmp_path
+) -> None:
+    """Side 61 alone is still a sheet that came out of the printer."""
+    result, *_ = _run_with(monkeypatch, tmp_path, _confirmed(61, 116, sent=66, state=7))
+    assert "(31 sheets)" in result.output
+
+
+def test_an_unconfirmed_short_print_says_the_count_is_only_what_was_sent(
+    monkeypatch, tmp_path
+) -> None:
+    """With no printer to ask, the honest number is CUPS's, and it can
+    overstate what reached paper."""
+    outcome = PrintOutcome(
+        job="Printer-1", state=JobState(9, (), 66, 33), expected=116, sent=66
+    )
+    result, retired, _, entries = _run_with(monkeypatch, tmp_path, outcome)
+    assert retired == []
+    assert "sent 66 of 116 sides" in result.output
+    assert "check the last sheet" in result.output
+    short = next(e for e in entries if e["outcome"] == "print-short")
+    assert short["confirmed"] is False
+
+
+def test_progress_shows_both_counts_under_their_own_names(
+    monkeypatch, tmp_path
+) -> None:
+    result, *_ = _run_with(monkeypatch, tmp_path, _confirmed(116, 116, sent=116))
+    assert "Sent: 116/" in result.output
+    assert "Printed: 116/" in result.output
+    assert "Printed 116 sides." in result.output
+
+
+def test_a_full_print_the_printer_cannot_confirm_says_so(monkeypatch, tmp_path) -> None:
+    """A USB printer keeps no record: the run still retires on CUPS's word,
+    as it always has, but does not claim more than it knows."""
+    outcome = PrintOutcome(
+        job="Printer-1", state=JobState(9, (), 8, 4), expected=8, sent=8
+    )
+    result, retired, *_ = _run_with(monkeypatch, tmp_path, outcome)
+    assert result.exit_code == 0
+    assert retired == [[4]]
+    assert "Sent 8 sides" in result.output
+    assert "cannot report" in result.output
+
+
+def test_the_wait_is_told_the_document_and_the_printer(monkeypatch, tmp_path) -> None:
+    """The printer's job is found by name, and the name is the PDF's."""
+    _, _, seen, _ = _run_with(
+        monkeypatch,
+        tmp_path,
+        _confirmed(8, 8, sent=8),
+        locate=lambda job, override="": "ipp://printer.local/ipp/print",
+    )
+    assert seen["printer"] == "ipp://printer.local/ipp/print"
+    assert seen["document"].endswith(".pdf")
+    assert "/" not in seen["document"]
+
+
+def test_the_configured_printer_uri_is_handed_to_discovery(
+    monkeypatch, tmp_path
+) -> None:
+    asked: list[tuple[str, str]] = []
+
+    def locate(job, override=""):
+        asked.append((job, override))
+        return override
+
+    _run_with(
+        monkeypatch,
+        tmp_path,
+        _confirmed(8, 8, sent=8),
+        '[print]\nprinter_uri = "ipp://printer.local/ipp/print"\n',
+        locate=locate,
+    )
+    assert asked == [("Printer-1", "ipp://printer.local/ipp/print")]
+
+
+def test_a_printer_that_cannot_be_found_retires_nothing(monkeypatch, tmp_path) -> None:
+    def locate(job, override=""):
+        raise PrintError("could not find the printer behind queue Printer: no answer")
+
+    result, retired, _, entries = _run_with(
+        monkeypatch, tmp_path, _confirmed(8, 8, sent=8), locate=locate
+    )
+    assert retired == []
+    assert result.exit_code != 0
+    assert "could not find the printer" in result.output
+    assert "Mail untouched" in result.output
+    assert "print-unknown" in [e["outcome"] for e in entries]
+
+
+def test_printer_progress_repaints_one_line(monkeypatch, tmp_path) -> None:
+    """Each update overwrites the last; only the switch from sending to
+    printing starts a new line."""
+    _printing_run(monkeypatch, tmp_path, None)
+
+    def fake_await(job, expected, on_progress=None, on_printed=None, **kwargs):
+        on_progress(JobState(9, (), 116, 0))
+        on_printed(JobState(5, (), 110, 0))
+        on_printed(JobState(9, (), 116, 0))
+        return _confirmed(116, 116, sent=116)
+
+    monkeypatch.setattr("newsprint.cli.await_completion", fake_await)
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: None)
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    output = result.output
+    assert output.count("\n\r  Printed: ") == 1  # one new line, at the switch
+    assert "sides...\r  Printed: 116/" in output  # then each update repaints
