@@ -288,6 +288,7 @@ def test_the_printers_count_decides_not_cupss() -> None:
     assert outcome.sent == 66
     assert outcome.printer_job == 10210
     assert outcome.shortfall == 56
+    assert outcome.job == "P-8732"
     assert asked == [PRINTER]
 
 
@@ -358,7 +359,7 @@ def test_a_printer_that_stops_answering_is_a_print_error() -> None:
     def jobs(uri: str) -> list[PrinterJob]:
         raise IppError("could not reach the printer")
 
-    with pytest.raises(PrintError, match="could not reach the printer"):
+    with pytest.raises(PrintError, match="about job P-1: could not reach the printer"):
         await_completion(
             "P-1",
             116,

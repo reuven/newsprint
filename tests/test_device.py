@@ -38,6 +38,7 @@ def answers(stdout: str = "", returncode: int = 0):
             "ipp://printer.local/ipp/print?waitjob=false&snmp=false",
             "ipp://printer.local/ipp/print",
         ),
+        ("ipp://printer.local/ipp/print#anything", "ipp://printer.local/ipp/print"),
     ],
 )
 def test_an_ipp_device_is_its_own_address(device: str, expected: str) -> None:
@@ -109,8 +110,10 @@ def test_a_bonjour_printer_that_does_not_answer_is_an_error() -> None:
     """It speaks IPP, so its record exists - not finding it means not
     knowing what printed, which must keep the mail."""
     run, _ = answers(returncode=1)
-    with pytest.raises(DeviceError, match="Brother MFC-L2700DW series"):
+    with pytest.raises(DeviceError, match="Brother MFC-L2700DW series") as raised:
         printer_uri(BROTHER, runner=run)
+    # The printer's name, not the whole Bonjour string around it.
+    assert "_ipp._tcp" not in str(raised.value)
 
 
 def test_an_answer_with_no_address_in_it_is_an_error() -> None:
@@ -158,3 +161,17 @@ def test_the_real_subprocess_is_the_default(monkeypatch) -> None:
     monkeypatch.setattr(device.subprocess, "run", fake_run)
     assert printer_uri(BROTHER) == "ipp://a/ipp/print"
     assert calls[0][0] == "ippfind"
+
+
+def test_ippfinds_output_is_captured_as_text() -> None:
+    """The address is read from what ippfind prints; uncaptured, it would
+    go to the terminal and the run would find nothing."""
+    options: list[dict] = []
+
+    def run(command, **kwargs):
+        options.append(kwargs)
+        return subprocess.CompletedProcess(command, 0, "ipp://a/ipp/print\n", "")
+
+    printer_uri(BROTHER, runner=run)
+    assert options[0]["capture_output"] is True
+    assert options[0]["text"] is True

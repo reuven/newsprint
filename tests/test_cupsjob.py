@@ -648,3 +648,67 @@ def test_a_printers_self_signed_certificate_is_accepted(monkeypatch) -> None:
     assert contexts[0] is not None
     assert contexts[0].verify_mode == ssl.CERT_NONE
     assert contexts[1] is None
+
+
+# --- closing mutation-testing gaps (2026-10-02 audit) ---------------------
+
+
+def test_the_request_id_reaches_the_header() -> None:
+    """IPP replies echo the id; a request that drops it cannot be paired
+    with its reply."""
+    assert encode_request(1, request_id=7)[:8] == struct.pack(">HHI", 0x0200, 0x0009, 7)
+
+
+def test_the_device_uri_request_names_its_attributes_exactly() -> None:
+    """A substring check passes for "XXprinter-uriXX" too; these are the
+    exact encoded attributes cupsd looks for."""
+    body = encode_device_uri_request("Q")
+    assert b"\x45\x00\x0bprinter-uri\x00\x1aipp://localhost/printers/Q" in body
+    assert b"\x44\x00\x14requested-attributes\x00\x0adevice-uri\x03" in body
+
+
+def test_the_jobs_request_names_the_printer_exactly() -> None:
+    uri = "ipp://p/ipp/print"
+    body = encode_jobs_request(uri, "completed")
+    assert (
+        b"\x45\x00\x0bprinter-uri" + struct.pack(">H", len(uri)) + uri.encode() in body
+    )
+
+
+def test_the_device_uri_is_found_by_name_not_just_by_type() -> None:
+    """CUPS sends other URIs in the same group; only device-uri will do."""
+    other = "ipp://localhost:631/printers/Q"
+    body = (
+        struct.pack(">HHI", 0x0200, 0, 1)
+        + b"\x04"
+        + b"E\x00\x15printer-uri-supported"
+        + struct.pack(">H", len(other))
+        + other.encode()
+        + b"E\x00\ndevice-uri"
+        + struct.pack(">H", len(DEVICE_URI))
+        + DEVICE_URI.encode()
+        + b"\x03"
+    )
+    assert decode_device_uri(body) == DEVICE_URI
+
+
+def test_post_to_posts_with_a_deadline(monkeypatch) -> None:
+    """A printer that accepts the connection and never answers must not
+    hold the run forever."""
+    import contextlib
+    import urllib.request
+
+    from newsprint import cupsjob
+
+    calls: list[tuple[urllib.request.Request, object]] = []
+
+    @contextlib.contextmanager
+    def fake_urlopen(request, timeout, context=None):
+        calls.append((request, timeout))
+        yield io.BytesIO(PRINTER_IDLE)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    cupsjob.post_to("http://p:631/ipp/print", b"x")
+    request, timeout = calls[0]
+    assert request.get_method() == "POST"
+    assert isinstance(timeout, (int, float)) and timeout > 0
