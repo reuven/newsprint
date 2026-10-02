@@ -26,7 +26,7 @@ last few sheets, after newsprint has retired the mail.
 - [x] `cli.py`: progress and the short-print message use the printer's
       count, give sheets for duplex, name the printer's reason, and say
       which side to resume from. The run log keeps both counts.
-- [ ] README and config.example.toml: `printer_uri`, and what the two
+- [x] README and config.example.toml: `printer_uri`, and what the two
       counts mean.
 - [ ] Release 0.20.0.
 
