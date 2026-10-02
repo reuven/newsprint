@@ -28,7 +28,7 @@ last few sheets, after newsprint has retired the mail.
       which side to resume from. The run log keeps both counts.
 - [x] README and config.example.toml: `printer_uri`, and what the two
       counts mean.
-- [ ] Release 0.20.0.
+- [x] Release 0.20.0.
 
 ## Wait for the print job to finish before retiring mail
 
