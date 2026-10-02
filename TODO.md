@@ -18,7 +18,7 @@ last few sheets, after newsprint has retired the mail.
       as-is, dnssd:// resolved with `ippfind` (by uuid, else by name),
       anything else (usb, socket, lpd) has no printer-side record.
       `print.printer_uri` in the config overrides discovery.
-- [ ] `printer.await_completion()`: once CUPS stops, follow the printer's
+- [x] `printer.await_completion()`: once CUPS stops, follow the printer's
       job (matched by job name, newest id) until it stops too, and judge
       the outcome on the printer's count. An IPP printer that cannot be
       reached or whose job cannot be found is a PrintError: mail kept.
