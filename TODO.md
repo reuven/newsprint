@@ -20,18 +20,18 @@ Nothing was wrong with the print. Everything was wrong with the report:
 Completeness itself stays as it is: `impressions >= expected` is what makes
 106 >= 105 pass, and it is correct.
 
-- [ ] `progress.py`: pure formatting - sheets, elapsed, estimate, and the
+- [x] `progress.py`: pure formatting - sheets, elapsed, estimate, and the
       three lines. No clock inside, so the tests need no clock.
-- [ ] Never show a fraction over 100%: clamp sides and sheets to the
+- [x] Never show a fraction over 100%: clamp sides and sheets to the
       document's own totals.
-- [ ] Two labeled stages: `Queueing`/`Queued` for what CUPS has sent,
+- [x] Two labeled stages: `Queueing`/`Queued` for what CUPS has sent,
       `Printing` for what the printer has put on paper.
-- [ ] Elapsed time on the line so a 2-second poll visibly ticks even when
+- [x] Elapsed time on the line so a 2-second poll visibly ticks even when
       the page count does not.
-- [ ] Final line in the document's terms: `Printed 105 sides on 53 sheets.`
-- [ ] Move `_sheets` out of cli.py into progress.py beside the rest of the
+- [x] Final line in the document's terms: `Printed 105 sides on 53 sheets.`
+- [x] Move `_sheets` out of cli.py into progress.py beside the rest of the
       duplex arithmetic.
-- [ ] README: say that the print queue empties long before the paper stops.
+- [x] README: say that the print queue empties long before the paper stops.
 
 ## Not in this branch
 
