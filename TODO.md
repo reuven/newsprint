@@ -1,72 +1,41 @@
 # TODO
 
-## Count sides the printer printed, not sides CUPS sent
+## Make the printing wait legible
 
-On 2026-10-02 job `Brother_MFC_L2700DW_series-8732` stopped short and
-newsprint reported 66 of 116 sides. The printer's own record of the same
-job (its job 10210) says 60: it ran out of memory and cancelled the job
-(`job-canceled-at-device`, "Out of Memory" in its error history). CUPS
-counts a side when the filter finishes *sending* it, so its
-`job-impressions-completed` runs ahead of paper by however many pages the
-printer had buffered - six here. Resuming from side 67 would have lost
-61-66. The same lag means a job CUPS calls complete can still jam on its
-last few sheets, after newsprint has retired the mail.
+The 2026-10-30 run printed correctly and looked broken. 105 sheet sides is
+odd, so duplex runs 53 sheets = 106 impressions, the last one the blank back
+of the final sheet. The printer reported 106, the display divided it by 105,
+and the run ended on "Printed 106 sides." for a 105-side document.
 
-- [x] `cupsjob.py`: Get-Printer-Attributes for a queue's `device-uri`, and
-      Get-Jobs against the printer itself, decoding one record per job.
-- [x] `device.py`: turn a device URI into the printer's IPP URI - ipp/ipps
-      as-is, dnssd:// resolved with `ippfind` (by uuid, else by name),
-      anything else (usb, socket, lpd) has no printer-side record.
-      `print.printer_uri` in the config overrides discovery.
-- [x] `printer.await_completion()`: once CUPS stops, follow the printer's
-      job (matched by job name, newest id) until it stops too, and judge
-      the outcome on the printer's count. An IPP printer that cannot be
-      reached or whose job cannot be found is a PrintError: mail kept.
-      A non-IPP device falls back to the CUPS count, labeled as sent.
-- [x] `cli.py`: progress and the short-print message use the printer's
-      count, give sheets for duplex, name the printer's reason, and say
-      which side to resume from. The run log keeps both counts.
-- [x] README and config.example.toml: `printer_uri`, and what the two
-      counts mean.
-- [x] Release 0.20.0.
+Nothing was wrong with the print. Everything was wrong with the report:
 
-## Wait for the print job to finish before retiring mail
+- `Sent: 106/105 sides` reads as a fault.
+- `Printed 106 sides.` is the printer's count, not the document's.
+- `Sent:` runs ahead of paper, so "94/105" looked nearly done while the
+  printer had six minutes left.
+- At ~8s per side the line sat unchanged long enough to look frozen, and the
+  job is absent from the print queue the whole time - CUPS marks it finished
+  as soon as the printer's memory has it.
 
-`spool()` returns when `lp` exits, which means CUPS accepted the job — not
-that paper came out right. `config.py`'s `OutputConfig` docstring has said
-so since the packets directory was added; on 2026-09-18 it cost a real run.
-Job `Brother_MFC_L2700DW_series-8727` printed 67 of 107 sides and CUPS still
-reported `job-state = completed`, so newsprint retired all 36 messages
-eleven seconds after handoff, while the printer had seven minutes left.
+Completeness itself stays as it is: `impressions >= expected` is what makes
+106 >= 105 pass, and it is correct.
 
-`job-state` alone cannot catch this. `job-impressions-completed` can.
-
-- [x] `cupsjob.py`: minimal IPP client — encode `Get-Job-Attributes`, decode
-      `job-state`, `job-state-reasons`, `job-impressions-completed`,
-      `job-media-sheets-completed`. No new dependency; `lpstat` cannot report
-      impressions and `ipptool` is not installed by default on Linux.
-- [x] Capture real IPP responses as byte fixtures, including the truncated
-      job that exposed this.
-- [x] `printer.await_completion()`: poll until terminal state, with injected
-      `fetch` and `sleep` so tests stay instant, and a progress callback.
-- [x] `cli.py`: retire only on a full print. On a short job, record
-      `print-short`, keep every message starred, keep the PDF, exit non-zero.
-- [x] `--no-wait` to restore fire-and-forget. The wait is otherwise unbounded
-      by design; Ctrl-C is safe and leaves mail untouched.
-- [x] README: document `--no-wait` and what a short print does.
-
-## Done in this branch, beyond the list above
-
-- [x] `mutmut` added to the dev group. `pyproject.toml` already referred to
-      `mutants/` but the tool itself was never declared, so the audit
-      CLAUDE.md asks for could not run. Scoped with `source_paths` to the two
-      modules under audit; `also_copy` is required or the copied tree has no
-      `__init__.py` and will not build.
+- [ ] `progress.py`: pure formatting - sheets, elapsed, estimate, and the
+      three lines. No clock inside, so the tests need no clock.
+- [ ] Never show a fraction over 100%: clamp sides and sheets to the
+      document's own totals.
+- [ ] Two labeled stages: `Queueing`/`Queued` for what CUPS has sent,
+      `Printing` for what the printer has put on paper.
+- [ ] Elapsed time on the line so a 2-second poll visibly ticks even when
+      the page count does not.
+- [ ] Final line in the document's terms: `Printed 105 sides on 53 sheets.`
+- [ ] Move `_sheets` out of cli.py into progress.py beside the rest of the
+      duplex arithmetic.
+- [ ] README: say that the print queue empties long before the paper stops.
 
 ## Not in this branch
 
-- [ ] `--reprint-from <pdf> --pages N-M`, so a truncated run doesn't mean
-      reprinting by hand from Preview.
+- [ ] `--reprint-from <pdf> --pages N-M`.
 - [ ] `--cov-fail-under=100` lives in the CI workflow rather than
-      `pyproject.toml`, so a local `make test` does not enforce it. Moving it
-      would make the gate the same in both places. Unrelated to this bug.
+      `pyproject.toml`, so a local `make test` does not enforce it.
+- [ ] `origin/newsletter-pipeline` still exists; the local branch is gone.
