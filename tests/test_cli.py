@@ -4455,13 +4455,16 @@ def test_no_wait_retires_without_asking_cups(monkeypatch, tmp_path) -> None:
 
 
 def test_progress_reaches_the_terminal(monkeypatch, tmp_path) -> None:
-    """CUPS's count is labeled for what it is: sides sent."""
+    """CUPS's count is labeled for what it is: sides queued, not printed.
+    Called "Sent" against the document's total it read as printing
+    progress, so a run six minutes from the last page looked nearly done."""
     _printing_run(monkeypatch, tmp_path, _outcome(8, 8))
     monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: None)
     result = CliRunner().invoke(
         main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
     )
-    assert "Sent: 8/" in result.output
+    assert "Queueing:" in result.output
+    assert "Sent:" not in result.output  # the old label, which read as printed
 
 
 def test_the_wait_happens_between_spooling_and_retiring(monkeypatch, tmp_path) -> None:
@@ -4638,9 +4641,12 @@ def test_progress_shows_both_counts_under_their_own_names(
     monkeypatch, tmp_path
 ) -> None:
     result, *_ = _run_with(monkeypatch, tmp_path, _confirmed(116, 116, sent=116))
-    assert "Sent: 116/" in result.output
-    assert "Printed: 116/" in result.output
-    assert "Printed 116 sides." in result.output
+    assert "Queued:" in result.output
+    assert "Printing: sheet" in result.output
+    # The printer reported 116; the packet is one side. The closing line
+    # has to speak for the document, or it repeats the 2026-10-30 bug of
+    # announcing a count the reader cannot find in the tray.
+    assert "Printed 1 side on 1 sheet." in result.output
 
 
 def test_a_full_print_the_printer_cannot_confirm_says_so(monkeypatch, tmp_path) -> None:
@@ -4652,8 +4658,9 @@ def test_a_full_print_the_printer_cannot_confirm_says_so(monkeypatch, tmp_path) 
     result, retired, *_ = _run_with(monkeypatch, tmp_path, outcome)
     assert result.exit_code == 0
     assert retired == [[4]]
-    assert "Sent 8 sides" in result.output
-    assert "cannot report" in result.output
+    assert "sides; this printer cannot report how many reached paper." in (
+        result.output
+    )
 
 
 def test_the_wait_is_told_the_document_and_the_printer(monkeypatch, tmp_path) -> None:
@@ -4719,5 +4726,7 @@ def test_printer_progress_repaints_one_line(monkeypatch, tmp_path) -> None:
         main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
     )
     output = result.output
-    assert output.count("\n\r  Printed: ") == 1  # one new line, at the switch
-    assert "sides...\r  Printed: 116/" in output  # then each update repaints
+    # The switch closes the queueing line once, on its own line.
+    assert output.count("Queued:") == 1
+    # Then every printer update repaints in place rather than scrolling.
+    assert output.count("\r  Printing: sheet") == 2
