@@ -533,10 +533,24 @@ first while CUPS sends it and then while the printer prints it:
 
 ```
 Spooled as Brother_MFC_L2700DW_series-8731.
-  Sent: 107/107 sides...
-  Printed: 107/107 sides...
-  Printed 107 sides.
+  Queued: 107 sides sent to the printer.
+  Printing: sheet 47 of 54  (94 sides)  12m50s, ~2m left
+  Printed 107 sides on 54 sheets.
 ```
+
+The `Printing` line repaints in place, and its clock ticks on every poll —
+worth knowing, because **the print queue is empty for almost all of this**.
+CUPS marks the job finished as soon as the printer's memory holds the
+document, so there is nothing to watch in Printers & Scanners while the
+printer works alone for another quarter of an hour. That line is the only
+sign the run is alive.
+
+Counts are the document's, never the printer's. Printed on both sides, a
+packet with an odd number of sides runs one blank back: 105 sides is 53
+sheets, and the printer honestly reports 106 impressions. Reporting that
+back would be a fraction over 100% and a total nobody could find in the
+tray, so newsprint clamps what it shows to the document — while still
+treating that 106th side as the proof of a finished job.
 
 Only then is the mail retired, and only if the count came out whole. This
 is not a theoretical precaution. `lp` exits as soon as CUPS has the file,

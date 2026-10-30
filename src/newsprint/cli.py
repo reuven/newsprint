@@ -18,7 +18,7 @@ import textwrap
 import time
 import tomllib
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
 from importlib.metadata import metadata, version
 from pathlib import Path
@@ -58,6 +58,13 @@ from .picker import (
 from .pickerui import questionary_prompt
 from .pipeline import Built, Failure, TeaserSkippedError, build_one
 from .printer import PrintError, await_completion, locate_printer, spool
+from .progress import (
+    printed_line,
+    printing_line,
+    queued_line,
+    queueing_line,
+    sheets_for,
+)
 from .setup import run_setup
 from .stamp import format_packet_date, stamp_packet
 from .summarize import build_summary_pages
@@ -587,6 +594,7 @@ def _wait_for_paper(
     built: Sequence[Built],
     uids: Sequence[int],
     skipped_teasers: Sequence[dict[str, object]],
+    clock: Callable[[], float] = time.monotonic,
 ) -> None:
     """Block until the job stops, and refuse to go on if it fell short.
 
@@ -606,17 +614,24 @@ def _wait_for_paper(
     from side 67 would have lost six pages. CUPS's number is shown, and
     labeled, as sides sent.
     """
+    duplex = config.printing.duplex
+    started = clock()
     printing = False
 
     def sent(state: JobState) -> None:
-        click.echo(f"\r  Sent: {state.impressions}/{sides} sides...", nl=False)
+        click.echo(f"\r  {queueing_line(state.impressions, sides)}", nl=False)
 
     def printed(state: JobState) -> None:
         nonlocal printing
         if not printing:
-            click.echo()
+            # Overwrite the queueing line rather than leaving a stale
+            # count above a stage that has already moved on.
+            click.echo(f"\r  {queued_line(sides)}")
             printing = True
-        click.echo(f"\r  Printed: {state.impressions}/{sides} sides...", nl=False)
+        click.echo(
+            f"\r  {printing_line(state.impressions, sides, duplex, clock() - started)}",
+            nl=False,
+        )
 
     try:
         printer = locate_printer(job, override=config.printing.printer_uri)
@@ -639,15 +654,15 @@ def _wait_for_paper(
     count = outcome.state.impressions
     if outcome.complete:
         if outcome.confirmed:
-            click.echo(f"  Printed {count} sides.")
+            click.echo(f"  {printed_line(sides, duplex)}")
         else:
             click.echo(
-                f"  Sent {count} sides; this printer cannot report how many "
+                f"  Sent {sides} sides; this printer cannot report how many "
                 "reached paper."
             )
         return
 
-    sheets = _sheets(count, config.printing.duplex)
+    sheets = sheets_for(count, config.printing.duplex)
     runlog.record(
         {
             "outcome": "print-short",
@@ -683,12 +698,6 @@ def _wait_for_paper(
         f"Mail untouched: all {len(built)} messages stay starred.\n"
         f"PDF kept at {sheets_pdf}"
     )
-
-
-def _sheets(sides: int, duplex: str) -> int:
-    """Sheets of paper `sides` sides take. Printing on both, an odd side
-    out is still a sheet that came out of the printer."""
-    return -(-sides // 2) if duplex.startswith("two-sided") else sides
 
 
 def retire_printed(
