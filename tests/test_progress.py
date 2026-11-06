@@ -215,3 +215,16 @@ def test_stall_lines_clamp_like_every_other_line_here() -> None:
     assert stall_lines(106, 105, 600)[0] == (
         "No change for 10m00s - stuck at 105 of 105 sides."
     )
+
+
+def test_remaining_estimates_from_a_single_side() -> None:
+    """One side is a rate, thin but real: 1 side in 10s leaves 104 to go
+    at 0.1/s, about 17 minutes. The guard is `done <= 0`, not `done <= 1`,
+    and only a test at the boundary says which."""
+    assert remaining(1, 105, 10) == "~17m left"
+
+
+def test_remaining_estimates_inside_the_first_second() -> None:
+    """Likewise `seconds <= 0`: a fraction of a second is still elapsed
+    time, and 40 sides in one second leaves well under a minute."""
+    assert remaining(40, 105, 1) == "~1m left"

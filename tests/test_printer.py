@@ -578,3 +578,55 @@ def test_the_wait_reports_a_stall_on_the_printer_too() -> None:
         ),
     )
     assert seen == [(40, 4.0)]
+
+
+def test_a_stall_is_reported_with_the_count_that_froze() -> None:
+    """The warning is tied to the count, not to the passing of polls.
+
+    A job that climbs and then stops has to be reported at the number it
+    stopped on, with the threshold measured from the freeze rather than
+    from the first poll - otherwise a watch that ignored the count
+    entirely would look exactly the same.
+    """
+    seen: list[tuple[int, float]] = []
+    climbing = [state(5, n) for n in (10, 20, 30, 40, 50)]
+    frozen = [state(5, 50) for _ in range(4)]
+    await_completion(
+        "P-1",
+        72,
+        fetch=polls(*climbing, *frozen, state(9, 72)),
+        sleep=lambda _: None,
+        interval=1.0,
+        stall_after=4.0,
+        on_stall=lambda job_state, seconds: seen.append(
+            (job_state.impressions, seconds)
+        ),
+    )
+    assert seen == [(50, 4.0)]
+
+
+def test_a_stall_on_the_printer_is_reported_with_the_count_that_froze() -> None:
+    """The same guarantee on the printer's own count."""
+    seen: list[tuple[int, float]] = []
+    counts = [10, 20, 30, 40, 50, 50, 50, 50, 50]
+    records = [JobState(state=5, reasons=(), impressions=n, sheets=0) for n in counts]
+    records.append(JobState(state=9, reasons=(), impressions=72, sheets=36))
+
+    def jobs(printer: str) -> list[PrinterJob]:
+        return [PrinterJob(id=7, name="packet.pdf", state=records.pop(0))]
+
+    await_completion(
+        "P-1",
+        72,
+        fetch=polls(state(9, 72)),
+        sleep=lambda _: None,
+        interval=1.0,
+        stall_after=4.0,
+        document="packet.pdf",
+        printer="ipp://printer/ipp/print",
+        jobs=jobs,
+        on_stall=lambda job_state, seconds: seen.append(
+            (job_state.impressions, seconds)
+        ),
+    )
+    assert seen == [(50, 4.0)]
