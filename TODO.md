@@ -1,41 +1,54 @@
 # TODO
 
-## Make the printing wait legible
+## Say something when the printer stops answering
 
-The 2026-10-30 run printed correctly and looked broken. 105 sheet sides is
-odd, so duplex runs 53 sheets = 106 impressions, the last one the blank back
-of the final sheet. The printer reported 106, the display divided it by 105,
-and the run ended on "Printed 106 sides." for a 105-side document.
+2026-11-05, job 8759. The tray ran dry at side 37 of 72. Paper went back
+in, and nothing happened: newsprint sat on a frozen counter for **2 hours
+and 9 minutes** without a word, and the only way to find out why was to go
+digging at the socket:
 
-Nothing was wrong with the print. Everything was wrong with the report:
+```
+tcp4  0  130160  192.168.68.107.52810 -> 192.168.68.114.631  ESTABLISHED  ipp:94074
+```
 
-- `Sent: 106/105 sides` reads as a fault.
-- `Printed 106 sides.` is the printer's count, not the document's.
-- `Sent:` runs ahead of paper, so "94/105" looked nearly done while the
-  printer had six minutes left.
-- At ~8s per side the line sat unchanged long enough to look frozen, and the
-  job is absent from the print queue the whole time - CUPS marks it finished
-  as soon as the printer's memory has it.
+A full 131,072-byte send buffer, frozen to the byte across minutes, while
+the printer reported `printer-state = idle`, `printer-state-reasons = none`,
+paper ready, toner at 80%, and no job of its own. The printer had discarded
+the job on the paper-out and left the connection open; the `ipp` backend was
+parked in a `write()` that was never going to return.
 
-Completeness itself stays as it is: `impressions >= expected` is what makes
-106 >= 105 pass, and it is correct.
+This refutes the reasoning currently written into `await_completion`:
 
-- [x] `progress.py`: pure formatting - sheets, elapsed, estimate, and the
-      three lines. No clock inside, so the tests need no clock.
-- [x] Never show a fraction over 100%: clamp sides and sheets to the
-      document's own totals.
-- [x] Two labeled stages: `Queueing`/`Queued` for what CUPS has sent,
-      `Printing` for what the printer has put on paper.
-- [x] Elapsed time on the line so a 2-second poll visibly ticks even when
-      the page count does not.
-- [x] Final line in the document's terms: `Printed 105 sides on 53 sheets.`
-- [x] Move `_sheets` out of cli.py into progress.py beside the rest of the
-      duplex arithmetic.
-- [x] README: say that the print queue empties long before the paper stops.
+> a printer that is switched off or out of paper will finish the job when
+> someone attends to it
+
+It does not. This one threw the job away and kept the socket. The unbounded
+wait is still right - giving up early hands back exactly the uncertainty the
+function exists to remove, and Ctrl-C is already safe - but silence is not.
+A counter that has not moved in ten minutes is information.
+
+- [ ] Count consecutive polls with no change in the impression count. No
+      clock: at `interval` seconds a threshold of N polls is N*interval,
+      and keeping time out of the loop is what made `progress.py` testable.
+- [ ] `on_stall` callback, fired once when the threshold is crossed, then
+      re-armed so a second stall after real progress is reported again.
+- [ ] Both loops - tonight's stall was in the queueing stage, with CUPS
+      still `processing`, but `_follow_on_printer` can stall the same way.
+- [ ] The warning says what to check, because "is it printing or not?" was
+      the actual question: paper, then whether the queue shows a frozen
+      count, then that cancelling is the fix and Ctrl-C is safe.
+- [ ] Once stalled, annotate the progress line itself so the condition
+      stays on screen instead of scrolling away.
+- [ ] Correct the `await_completion` docstring: record what a paper-out
+      actually does on this printer.
+- [ ] README: how to tell a wedged job from a slow one, and that a
+      cancelled job can leave an orphaned backend holding the queue
+      ("now printing <queue>-0"), cleared by restarting cupsd.
 
 ## Not in this branch
 
-- [ ] `--reprint-from <pdf> --pages N-M`.
+- [ ] `--reprint-from <pdf> --pages N-M`, and retire the mail from that
+      run's recorded UIDs once it completes. Tonight that gap meant a
+      manual `lp -P 37-72` and 25 messages to unstar by hand.
 - [ ] `--cov-fail-under=100` lives in the CI workflow rather than
       `pyproject.toml`, so a local `make test` does not enforce it.
-- [ ] `origin/newsletter-pipeline` still exists; the local branch is gone.
