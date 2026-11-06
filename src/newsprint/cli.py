@@ -97,6 +97,18 @@ _FULL_ITEMS = "(UID RFC822)"
 # side effect of merely listing them.
 _HEADER_ITEMS = "(UID BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE LIST-ID)])"
 
+# The same, plus the header that says *which message this is*. Retiring
+# from a record has to prove each uid is still the message the record
+# names, and a server returns only the headers it was asked for - so
+# without MESSAGE-ID here, extract() falls back to the sender address
+# (see its own `default=address`), that matches none of the Message-IDs
+# the run recorded, and a retirement reports every message as "no longer
+# the one that run printed" and moves nothing at all. Which is exactly
+# what it did on 2026-11-06, against the 25 messages this was written to
+# rescue: the fake Mailbox in the tests returns whole messages whatever
+# the fetch asks for, so nothing caught it until it was run for real.
+_CHECK_ITEMS = "(UID BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE LIST-ID MESSAGE-ID)])"
+
 
 def _fetch_documents(
     box: Mailbox, uids: list[int], names: PublicationNames, items: str, label: str
@@ -1027,7 +1039,7 @@ def retire_recorded(config: Config, entry: dict[str, Any]) -> None:
             found = {
                 document.origin.uid: document.origin.identifier
                 for document in _fetch_documents(
-                    box, uids, names, items=_HEADER_ITEMS, label="  Checking"
+                    box, uids, names, items=_CHECK_ITEMS, label="  Checking"
                 )
             }
             trash = trash or _resolve_trash(box, config, uids) or ""

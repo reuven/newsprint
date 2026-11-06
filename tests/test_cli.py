@@ -5301,3 +5301,57 @@ def test_a_reprint_that_retires_nothing_leaves_the_last_retirement_alone(
     last = runlog.last_retirement()
     assert last is not None
     assert last["retired_ids"] == ["<old@example.com>"]
+
+
+class _HonestHeaderBox(_RetiringBox):
+    """A mailbox that returns only the headers the fetch asked for.
+
+    Which is what every real IMAP server does, and what _FakeBox does
+    not: it hands back the whole message however little was requested.
+    That is more generous than any server, and it hid a real bug - a
+    verification fetch that does not name MESSAGE-ID gets the sender
+    address as the identifier instead (extract.py's documented fallback),
+    so nothing matches the record and the retirement moves nothing.
+    """
+
+    def fetch_many(self, uids, items: str = "(UID RFC822)") -> dict[int, bytes]:
+        self.fetch_many_calls.append((tuple(uids), items))
+        if "HEADER.FIELDS" not in items:
+            return {uid: RAW_MESSAGE for uid in uids}
+        wanted = {
+            field.lower()
+            for field in re.findall(r"[A-Za-z-]+", items.split("HEADER.FIELDS", 1)[1])
+        }
+        kept = [
+            line
+            for line in RAW_MESSAGE.split(b"\n\n", 1)[0].split(b"\n")
+            if line.split(b":", 1)[0].decode().lower() in wanted
+        ]
+        return {uid: b"\n".join(kept) + b"\n\n" for uid in uids}
+
+
+def test_the_check_asks_the_server_for_the_message_id(monkeypatch, tmp_path) -> None:
+    """Against a server that returns only what was asked for, the check
+    has to still be able to recognize the mail. It could not: the fetch
+    named FROM, SUBJECT, DATE and LIST-ID, so every uid resolved to the
+    sender address, matched none of the record's Message-IDs, and the
+    retirement reported all 25 messages as "no longer the ones that run
+    printed" and moved nothing.
+    """
+    pdf, config, *_ = _reprint_setup(monkeypatch, tmp_path, box=_HonestHeaderBox)
+    _hold_mail()
+    result = _reprint(config, pdf, "--no-print", answers="y\n")
+    retired = [box.retire_calls for box in _FakeBox.instances if box.retire_calls]
+    assert retired == [[((4, 5), "INBOX/Trash")]]
+    assert "no longer" not in result.output
+
+
+def test_the_check_does_not_ask_for_whole_messages(monkeypatch, tmp_path) -> None:
+    """Headers, not bodies. 25 newsletters is megabytes of HTML, and the
+    only question being asked is which message each uid is."""
+    pdf, config, *_ = _reprint_setup(monkeypatch, tmp_path, box=_HonestHeaderBox)
+    _hold_mail()
+    _reprint(config, pdf, "--no-print", answers="y\n")
+    checks = [items for box in _FakeBox.instances for _, items in box.fetch_many_calls]
+    assert checks and all("HEADER.FIELDS" in items for items in checks)
+    assert all("MESSAGE-ID" in items for items in checks)
