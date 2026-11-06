@@ -251,3 +251,17 @@ def test_one_sided_sheets_are_counted_as_sides() -> None:
     assert describe(Pages(37, 72), 72, SIMPLEX) == (
         "Sides 37-72 of 72 - 36 sides on 36 sheets."
     )
+
+
+def test_the_last_side_of_a_one_sided_packet_can_be_reprinted() -> None:
+    """Cell 284 of a 72-side one-sided packet leaves only side 72, and a
+    range of exactly the last side is a real reprint, not an overrun.
+    `first > total` and `first >= total` differ only here."""
+    assert pages_after_cell(284, 4, 72, SIMPLEX) == Pages(72, 72)
+
+
+def test_the_last_sheet_of_an_odd_packet_can_be_reprinted() -> None:
+    """71 sides is 36 sheets, the last printed on one face only. Cell 283
+    leaves side 71 unfinished, so side 71 alone goes again - and it is
+    the last side there is."""
+    assert pages_after_cell(283, 4, 71, DUPLEX) == Pages(71, 71)

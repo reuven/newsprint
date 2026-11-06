@@ -1048,6 +1048,26 @@ def retire_recorded(config: Config, entry: dict[str, Any]) -> None:
         failed += result.failed
         unrecoverable += result.unrecoverable
 
+    if not retired:
+        # Deliberately not recorded as a retirement, because it was not
+        # one: --unretire undoes the newest "retired" entry in the log,
+        # and an empty one written here would hide the real retirement it
+        # was about to undo.
+        runlog.record(
+            {
+                "outcome": "retire-none",
+                "from_run": str(entry.get("at")),
+                "trash": trash,
+                "failed": failed,
+                "unrecoverable": unrecoverable,
+            }
+        )
+        click.echo(
+            "Retired 0 message(s). Nothing was moved, so the mail stays "
+            "exactly where it is."
+        )
+        return
+
     # The same shape an ordinary run writes, so --unretire can undo this
     # one too: it reads `folders` for the Message-IDs to find in the trash.
     runlog.record(

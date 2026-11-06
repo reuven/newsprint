@@ -5277,3 +5277,27 @@ def test_retiring_alone_with_no_record_says_there_is_nothing_to_retire(
     assert spooled == []
     assert result.exit_code == 0
     assert "no run" in result.output.lower()
+
+
+def test_a_reprint_that_retires_nothing_leaves_the_last_retirement_alone(
+    monkeypatch, tmp_path
+) -> None:
+    """--unretire undoes the newest `retired` entry in the log. A reprint
+    that found nothing left to retire must not write one of those, or it
+    hides the real retirement that --unretire was going to undo."""
+    runlog.record(
+        {
+            "outcome": "retired",
+            "at": "2026-10-30T12:58:00+00:00",
+            "folder": "INBOX/toprint",
+            "folders": {"INBOX/toprint": ["<old@example.com>"]},
+            "retired_ids": ["<old@example.com>"],
+            "trash": "INBOX/Trash",
+        }
+    )
+    pdf, config, *_ = _reprint_setup(monkeypatch, tmp_path, box=_AllMovedOnBox)
+    _hold_mail()
+    _reprint(config, pdf, "--pages", "37-72")
+    last = runlog.last_retirement()
+    assert last is not None
+    assert last["retired_ids"] == ["<old@example.com>"]
