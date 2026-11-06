@@ -1,57 +1,64 @@
 # TODO
 
-## Say something when the printer stops answering
+## Finish a job that stopped partway
 
-2026-11-05, job 8759. The tray ran dry at side 37 of 72. Paper went back
-in, and nothing happened: newsprint sat on a frozen counter for **2 hours
-and 9 minutes** without a word, and the only way to find out why was to go
-digging at the socket:
+2026-11-05, job 8759: the tray ran dry at side 37 of 72 and the printer
+discarded the job. The watchdog shipped in 0.22.0 now says so. What it
+cannot do is finish the packet, and the recovery that followed was all by
+hand: read the last cell number off the paper, work out which side that
+was, work out that the resume point has to be odd, run `lp -P 37-72`, and
+then unstar 25 messages one at a time in Thunderbird.
 
-```
-tcp4  0  130160  192.168.68.107.52810 -> 192.168.68.114.631  ESTABLISHED  ipp:94074
-```
+Three facts make that worth automating rather than documenting.
 
-A full 131,072-byte send buffer, frozen to the byte across minutes, while
-the printer reported `printer-state = idle`, `printer-state-reasons = none`,
-paper ready, toner at 80%, and no job of its own. The printer had discarded
-the job on the paper-out and left the connection open; the `ipp` backend was
-parked in a `write()` that was never going to return.
+**CUPS re-imposes an extracted range from scratch.** Page 1 of whatever
+range it is given becomes the front of a sheet, whatever it was in the
+original. Resume on an even side and every back prints as a front: the
+whole remainder comes out inside-out. The resume point must be the first
+side of the first sheet that is not already whole - `2S + 1` - which at
+worst reprints one sheet instead of ruining 36.
 
-This refutes the reasoning currently written into `await_completion`:
+**The paper is read in cells, not sides.** "The last cell printed was
+144" is what a person can see. Sides, sheets and page ranges are all
+derived from it, and deriving them by hand at the end of a failed run is
+exactly when it will go wrong.
 
-> a printer that is switched off or out of paper will finish the job when
-> someone attends to it
+**A uid means nothing without its folder.** The run log records `uids` as
+one flat list, so nothing can safely retire from it: uid 4 in two folders
+is two different messages. That is a gap in the record, not in the
+retirement code, and it has to be closed first.
 
-It does not. This one threw the job away and kept the socket. The unbounded
-wait is still right - giving up early hands back exactly the uncertainty the
-function exists to remove, and Ctrl-C is already safe - but silence is not.
-A counter that has not moved in ten minutes is information.
-
-- [x] Count consecutive polls with no change in the impression count. No
-      clock: at `interval` seconds a threshold of N polls is N*interval,
-      and keeping time out of the loop is what made `progress.py` testable.
-- [x] `on_stall` callback, fired once when the threshold is crossed, then
-      re-armed so a second stall after real progress is reported again.
-- [x] Both loops - tonight's stall was in the queueing stage, with CUPS
-      still `processing`, but `_follow_on_printer` can stall the same way.
-- [x] The warning says what to check, because "is it printing or not?" was
-      the actual question: paper, then whether the queue shows a frozen
-      count, then that cancelling is the fix and Ctrl-C is safe.
-- [~] Dropped in favor of repeating the warning on every further whole
-      multiple of the threshold. Annotating the repainting line would have
-      meant threading the stall through `on_progress`, and a warning that
-      scrolls back into view every ten minutes serves an unattended run
-      better than one that can only be seen by watching.
-- [x] Correct the `await_completion` docstring: record what a paper-out
-      actually does on this printer.
-- [x] README: how to tell a wedged job from a slow one, and that a
-      cancelled job can leave an orphaned backend holding the queue
-      ("now printing <queue>-0"), cleared by restarting cupsd.
+- [ ] `reprint.py`: `Pages`, `parse_pages`, `resume_at`, and
+      `resume_after_cell`. Pure arithmetic, no I/O - the sheet rule is
+      the part that must never be wrong, so it gets known-answer tests.
+- [ ] Reject an even first page on a duplex job, with a message that
+      names the odd page to use instead. Silently printing 36 inside-out
+      sheets is the one outcome worse than refusing.
+- [ ] `page-ranges` through `build_command`/`spool`.
+- [ ] Record `messages` (identifier, uid and folder together), `trash`
+      and `packet` on every run that holds mail. The flat `uids` and
+      `documents` stay beside them: every record already written has
+      those and nothing else, including the ones in the author's own log.
+- [ ] `runlog.pending_mail`: runs that queued a packet and never retired
+      it, newest first. Walk the log in time order, adding on `retired`
+      and removing on `unretired`, so a run restored by `--unretire` is
+      pending again.
+- [ ] `--reprint-from <pdf>`, with `--pages N-M` or `--after-cell N`.
+      Waits on the printer exactly as a normal run does, watchdog and
+      all, then offers to retire the mail that run recorded.
+- [ ] Fix `_wait_for_paper`'s short-print advice: it currently says to
+      print sides `count+1`-`expected`, which is even half the time and
+      so advises an inside-out reprint. It should name the sheet
+      boundary, and the `--reprint-from` command that does it.
+- [ ] Retire from a record written before `messages` existed, where the
+      config names a single folder - tonight's own record is one of
+      those, and 25 messages are still starred behind it.
+- [ ] README: the reprint recipe, in place of the hand arithmetic.
 
 ## Not in this branch
 
-- [ ] `--reprint-from <pdf> --pages N-M`, and retire the mail from that
-      run's recorded UIDs once it completes. Tonight that gap meant a
-      manual `lp -P 37-72` and 25 messages to unstar by hand.
 - [ ] `--cov-fail-under=100` lives in the CI workflow rather than
       `pyproject.toml`, so a local `make test` does not enforce it.
+- [ ] Versions 0.19.0 through 0.22.0 are tagged but were never published
+      to PyPI, which stops at 0.18.0. Only the newest matters to anyone
+      installing, so this is a decision to make rather than a gap to fill.
