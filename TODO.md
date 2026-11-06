@@ -28,32 +28,49 @@ one flat list, so nothing can safely retire from it: uid 4 in two folders
 is two different messages. That is a gap in the record, not in the
 retirement code, and it has to be closed first.
 
-- [ ] `reprint.py`: `Pages`, `parse_pages`, `resume_at`, and
+- [x] `reprint.py`: `Pages`, `parse_pages`, `resume_at`, and
       `resume_after_cell`. Pure arithmetic, no I/O - the sheet rule is
       the part that must never be wrong, so it gets known-answer tests.
-- [ ] Reject an even first page on a duplex job, with a message that
+- [x] Reject an even first page on a duplex job, with a message that
       names the odd page to use instead. Silently printing 36 inside-out
       sheets is the one outcome worse than refusing.
-- [ ] `page-ranges` through `build_command`/`spool`.
-- [ ] Record `messages` (identifier, uid and folder together), `trash`
+- [x] `page-ranges` through `build_command`/`spool`.
+- [x] Record `messages` (identifier, uid and folder together), `trash`
       and `packet` on every run that holds mail. The flat `uids` and
       `documents` stay beside them: every record already written has
       those and nothing else, including the ones in the author's own log.
-- [ ] `runlog.pending_mail`: runs that queued a packet and never retired
+- [x] `runlog.pending_mail`: runs that queued a packet and never retired
       it, newest first. Walk the log in time order, adding on `retired`
       and removing on `unretired`, so a run restored by `--unretire` is
       pending again.
-- [ ] `--reprint-from <pdf>`, with `--pages N-M` or `--after-cell N`.
+- [x] `--reprint-from <pdf>`, with `--pages N-M` or `--after-cell N`.
       Waits on the printer exactly as a normal run does, watchdog and
       all, then offers to retire the mail that run recorded.
-- [ ] Fix `_wait_for_paper`'s short-print advice: it currently says to
+- [x] Fix `_wait_for_paper`'s short-print advice: it currently says to
       print sides `count+1`-`expected`, which is even half the time and
       so advises an inside-out reprint. It should name the sheet
       boundary, and the `--reprint-from` command that does it.
-- [ ] Retire from a record written before `messages` existed, where the
+- [x] Retire from a record written before `messages` existed, where the
       config names a single folder - tonight's own record is one of
       those, and 25 messages are still starred behind it.
-- [ ] README: the reprint recipe, in place of the hand arithmetic.
+- [x] README: the reprint recipe, in place of the hand arithmetic.
+- [x] Not in the plan, found while verifying against the real log:
+      `--reprint-from --no-print` retires the mail without printing
+      anything. That is how 2026-11-05 actually ended - the packet was
+      finished with an `lp` by hand, so a reprint would have spent 18
+      sheets to unstar 25 messages.
+- [x] Also not in the plan: `config.mail.folder` still holds its
+      structural default (`INBOX/toprint`) for any config written with
+      `folders`, so it can name a folder the account does not have. The
+      single-folder fallback uses `folders[0]`.
+
+## Still stranded
+
+`runlog.pending_mail` reports four runs holding mail, not one: 2026-11-05
+(25 messages), 2026-10-23 (42) and the two entries of the 2026-10-02 run
+(40). The October ones may well have been unstarred by hand - the check
+against each uid's Message-ID will say so rather than moving anything -
+but they are worth a look.
 
 ## Not in this branch
 
