@@ -5231,3 +5231,49 @@ def test_a_reprint_reports_a_broken_config_like_any_other_run(tmp_path) -> None:
     result = _reprint(config, pdf, "--pages", "1-4")
     assert result.exit_code != 0
     assert "printer_uri" in result.output
+
+
+def test_a_packet_already_on_paper_can_retire_its_mail_alone(
+    monkeypatch, tmp_path
+) -> None:
+    """2026-11-05's actual ending: the packet was finished by hand, so
+    there is nothing left to print and 25 messages left starred. --no-print
+    means the same here as it does on an ordinary run - the paper came out
+    somewhere else, so go straight to the mail."""
+    pdf, config, spooled, waited = _reprint_setup(monkeypatch, tmp_path)
+    _hold_mail()
+    result = _reprint(config, pdf, "--no-print", answers="y\n")
+    assert result.exit_code == 0, result.output
+    assert spooled == [] and waited == []
+    retired = [box.retire_calls for box in _FakeBox.instances if box.retire_calls]
+    assert retired == [[((4, 5), "INBOX/Trash")]]
+
+
+def test_retiring_alone_still_asks_first(monkeypatch, tmp_path) -> None:
+    pdf, config, *_ = _reprint_setup(monkeypatch, tmp_path)
+    _hold_mail()
+    result = _reprint(config, pdf, "--no-print", answers="n\n")
+    assert not [box for box in _FakeBox.instances if box.retire_calls]
+    assert "Mail untouched" in result.output
+
+
+def test_not_printing_and_not_retiring_leaves_nothing_to_do(
+    monkeypatch, tmp_path
+) -> None:
+    pdf, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path)
+    _hold_mail()
+    result = _reprint(config, pdf, "--no-print", "--no-retire", answers="")
+    assert spooled == []
+    assert not [box for box in _FakeBox.instances if box.retire_calls]
+    assert result.exit_code == 0
+    assert "Nothing to do" in result.output
+
+
+def test_retiring_alone_with_no_record_says_there_is_nothing_to_retire(
+    monkeypatch, tmp_path
+) -> None:
+    pdf, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path)
+    result = _reprint(config, pdf, "--no-print", answers="")
+    assert spooled == []
+    assert result.exit_code == 0
+    assert "no run" in result.output.lower()

@@ -1070,6 +1070,26 @@ def retire_recorded(config: Config, entry: dict[str, Any]) -> None:
     click.echo(f"Retired {len(retired)} message(s) to {trash}.")
 
 
+def _offer_retirement(config: Config, held: tuple[dict[str, Any], bool] | None) -> None:
+    """Ask about the mail a stopped run recorded, and retire it on a yes.
+
+    Asked rather than assumed, even after a reprint that completed,
+    because which run this packet belongs to is read out of the log and
+    can be a best guess - see _mail_held_for. The plan printed above says
+    which run and how many messages, so the question has its answer in
+    front of it.
+    """
+    if held is None:
+        return
+    if not click.confirm(
+        f"\nRetire the {_held_count(held[0])} message(s) that run was holding?",
+        default=False,
+    ):
+        click.echo("Mail untouched.")
+        return
+    retire_recorded(config, held[0])
+
+
 def _pages_to_reprint(
     config: Config, total: int, pages_text: str, after_cell: int | None
 ) -> Pages:
@@ -1091,6 +1111,7 @@ def reprint_packet(
     after_cell: int | None,
     *,
     dry_run: bool = False,
+    no_print: bool = False,
     no_retire: bool = False,
     no_wait: bool = False,
 ) -> None:
@@ -1117,15 +1138,18 @@ def reprint_packet(
     except ReprintError as error:
         raise click.ClickException(str(error)) from error
 
-    click.echo(f"Reprinting {pdf.name}")
-    click.echo(f"  {describe(pages, total, config.printing.duplex)}")
-    if after_cell is not None and pages.first <= after_cell // (
-        config.printing.paper.cells_per_side
-    ):
-        click.echo(
-            f"  Cell {after_cell} left a sheet part way through, so that "
-            "sheet prints again - a duplex job cannot start on a back."
-        )
+    if no_print:
+        click.echo(f"Not printing {pdf.name} - --no-print names the mail only.")
+    else:
+        click.echo(f"Reprinting {pdf.name}")
+        click.echo(f"  {describe(pages, total, config.printing.duplex)}")
+        if after_cell is not None and pages.first <= after_cell // (
+            config.printing.paper.cells_per_side
+        ):
+            click.echo(
+                f"  Cell {after_cell} left a sheet part way through, so that "
+                "sheet prints again - a duplex job cannot start on a back."
+            )
 
     held = _mail_held_for(pdf)
     if held is None:
@@ -1145,6 +1169,16 @@ def reprint_packet(
 
     if dry_run:
         click.echo("\nDry run: nothing printed, nothing retired.")
+        return
+
+    if no_print:
+        # The 2026-11-05 ending: the packet was finished by hand, so the
+        # only thing left undone is the mail. --no-print already means
+        # "the paper came out somewhere else" on an ordinary run.
+        if no_retire:
+            click.echo("\nNothing to do: --no-print and --no-retire together.")
+            return
+        _offer_retirement(config, held)
         return
 
     destination = config.printing.printer or "the default printer"
@@ -1201,15 +1235,7 @@ def reprint_packet(
     if no_retire:
         click.echo("Mail untouched: the messages stay starred.")
         return
-    if held is None:
-        return
-    if not click.confirm(
-        f"\nRetire the {_held_count(held[0])} message(s) that run was holding?",
-        default=False,
-    ):
-        click.echo("Mail untouched.")
-        return
-    retire_recorded(config, held[0])
+    _offer_retirement(config, held)
 
 
 def about() -> str:
@@ -1315,7 +1341,8 @@ def about() -> str:
         "finishing a job that stopped partway. Say which sides with --pages "
         "or --after-cell; with neither, the whole packet prints again. Once "
         "it completes, newsprint offers to retire the mail the stopped run "
-        "was holding."
+        "was holding. With --no-print it prints nothing and only offers the "
+        "mail, for a packet already finished by hand."
     ),
 )
 @click.option(
@@ -1462,6 +1489,7 @@ def main(
                 pages_text,
                 after_cell,
                 dry_run=dry_run,
+                no_print=no_print,
                 no_retire=no_retire,
                 no_wait=no_wait,
             )
