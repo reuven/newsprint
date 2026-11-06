@@ -1,6 +1,6 @@
 [project]
 name = "newsprint"
-version = "0.23.0"
+version = "0.23.1"
 description = "Fetch starred newsletters over IMAP, reduce them to article content, and print them quarter-sheet, four to a side, duplex."
 readme = "README.md"
 license = "MIT"
@@ -48,7 +48,14 @@ Issues = "https://github.com/reuven/newsprint/issues"
 newsprint = "newsprint.cli:main"
 
 [build-system]
-requires = ["uv_build>=0.12.10,<0.13.0"]
+# The upper bound is on the minor series, because the backend follows uv's
+# own versioning policy and a new series may build differently. uv checks
+# its own version against this on every `uv build` and warns when it falls
+# outside - which is the signal to widen it, and the reason this moved:
+# `uv build` on 0.13.7 was warning that <0.13.0 excluded it. The floor
+# stays where it was, so an older uv_build can still build this, exactly
+# as uv's own 0.12 upgrade note recommends.
+requires = ["uv_build>=0.12.10,<0.14"]
 build-backend = "uv_build"
 
 [dependency-groups]
