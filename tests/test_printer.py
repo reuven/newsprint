@@ -62,6 +62,50 @@ def test_letter_override_reaches_the_command(tmp_path: Path) -> None:
     assert "media=Letter" in build_command(tmp_path / "sheets.pdf", config)
 
 
+def test_a_page_range_reaches_the_command(config, tmp_path: Path) -> None:
+    """page-ranges is what finishes a job that stopped partway.
+
+    Spelled as the IPP attribute rather than lp's own -P shorthand: the
+    two mean the same thing to CUPS, but -P means the printer in lpr, and
+    this command is read by people recovering from a failed print.
+    """
+    command = build_command(tmp_path / "sheets.pdf", config, pages="37-72")
+    assert command == [
+        "lp",
+        "-o",
+        "media=A4",
+        "-o",
+        "sides=two-sided-long-edge",
+        "-o",
+        "print-scaling=none",
+        "-o",
+        "page-ranges=37-72",
+        str(tmp_path / "sheets.pdf"),
+    ]
+
+
+def test_no_page_range_asks_for_no_page_range(config, tmp_path: Path) -> None:
+    """An ordinary run must not acquire a page-ranges option at all - an
+    empty one would be a range CUPS has to interpret."""
+    assert not [
+        option
+        for option in build_command(tmp_path / "sheets.pdf", config)
+        if "page-ranges" in option
+    ]
+
+
+def test_spool_carries_the_page_range(config, tmp_path: Path) -> None:
+    sent: list[list[str]] = []
+
+    def runner(command, **kwargs):
+        sent.append(command)
+        return subprocess.CompletedProcess(command, 0, "request id is HP-9\n", "")
+
+    pdf = tmp_path / "sheets.pdf"
+    assert spool(pdf, config, runner=runner, pages="37-72") == "HP-9"
+    assert "page-ranges=37-72" in sent[0]
+
+
 def test_spool_returns_the_job_id(config, tmp_path: Path) -> None:
     def runner(command, **kwargs):
         return subprocess.CompletedProcess(
