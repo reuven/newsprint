@@ -288,3 +288,332 @@ def test_a_later_retirement_is_found_past_an_unrelated_run(tmp_path: Path) -> No
 
     found = runlog.last_retirement(tmp_path)
     assert found is not None and found["trash"] == "NEW"
+
+
+# --- which runs still hold their mail -------------------------------------
+#
+# A run records the mail it queued before anything is modified, and a
+# later entry records what was retired. Nothing ties the two together but
+# the Message-IDs, so that is what these walk. Every shape below is one
+# that exists in the author's own log, including the two-week-old
+# `printing` entry whose mail a later run swept up and retired.
+
+
+def pending(tmp_path: Path) -> list[list[str]]:
+    """The documents of each pending run, newest first."""
+    return [entry["documents"] for entry in runlog.pending_mail(state_dir=tmp_path)]
+
+
+def test_nothing_is_pending_in_an_empty_log(tmp_path: Path) -> None:
+    assert runlog.pending_mail(state_dir=tmp_path) == []
+
+
+def test_nothing_is_pending_without_a_log_at_all(tmp_path: Path) -> None:
+    assert runlog.pending_mail(state_dir=tmp_path / "never-created") == []
+
+
+def test_a_run_that_queued_mail_is_pending(tmp_path: Path) -> None:
+    runlog.record(
+        {
+            "outcome": "printing",
+            "at": "2026-11-05T17:27:06+00:00",
+            "documents": ["<a@x>", "<b@x>"],
+            "uids": [4, 5],
+        },
+        state_dir=tmp_path,
+    )
+    assert pending(tmp_path) == [["<a@x>", "<b@x>"]]
+
+
+def test_a_retirement_settles_the_run_it_followed(tmp_path: Path) -> None:
+    runlog.record(
+        {
+            "outcome": "printing",
+            "at": "2026-10-30T12:46:00+00:00",
+            "documents": ["<a@x>", "<b@x>"],
+            "uids": [4, 5],
+        },
+        state_dir=tmp_path,
+    )
+    runlog.record(
+        {
+            "outcome": "retired",
+            "at": "2026-10-30T12:58:00+00:00",
+            "retired_ids": ["<a@x>", "<b@x>"],
+        },
+        state_dir=tmp_path,
+    )
+    assert pending(tmp_path) == []
+
+
+def test_mail_a_later_run_swept_up_is_no_longer_pending(tmp_path: Path) -> None:
+    """The stranded-run case, from the author's log: a run stopped partway
+    and left its mail starred, so the next run collected the same
+    messages and retired them. The first run's entry still says
+    "printing" and always will - what settles it is the Message-IDs."""
+    runlog.record(
+        {
+            "outcome": "printing",
+            "at": "2026-10-23T08:55:00+00:00",
+            "documents": ["<a@x>"],
+            "uids": [4],
+        },
+        state_dir=tmp_path,
+    )
+    runlog.record(
+        {
+            "outcome": "printing",
+            "at": "2026-10-30T12:46:00+00:00",
+            "documents": ["<a@x>", "<b@x>"],
+            "uids": [4, 9],
+        },
+        state_dir=tmp_path,
+    )
+    runlog.record(
+        {
+            "outcome": "retired",
+            "at": "2026-10-30T12:58:00+00:00",
+            "retired_ids": ["<a@x>", "<b@x>"],
+        },
+        state_dir=tmp_path,
+    )
+    assert pending(tmp_path) == []
+
+
+def test_a_run_whose_mail_was_only_partly_retired_is_still_pending(
+    tmp_path: Path,
+) -> None:
+    runlog.record(
+        {
+            "outcome": "print-short",
+            "at": "2026-11-05T17:27:06+00:00",
+            "documents": ["<a@x>", "<b@x>"],
+            "uids": [4, 5],
+        },
+        state_dir=tmp_path,
+    )
+    runlog.record(
+        {
+            "outcome": "retired",
+            "at": "2026-11-05T18:00:00+00:00",
+            "retired_ids": ["<a@x>"],
+        },
+        state_dir=tmp_path,
+    )
+    assert pending(tmp_path) == [["<a@x>", "<b@x>"]]
+
+
+def test_unretiring_makes_a_run_pending_again(tmp_path: Path) -> None:
+    """--unretire puts the messages back and re-stars them, which is
+    exactly the state a pending run is in. Walking the log in order is
+    what gets this right; counting retirements alone would not."""
+    runlog.record(
+        {
+            "outcome": "printed",
+            "at": "2026-11-05T17:27:06+00:00",
+            "documents": ["<a@x>"],
+            "uids": [4],
+        },
+        state_dir=tmp_path,
+    )
+    runlog.record(
+        {
+            "outcome": "retired",
+            "at": "2026-11-05T18:00:00+00:00",
+            "retired_ids": ["<a@x>"],
+        },
+        state_dir=tmp_path,
+    )
+    runlog.record(
+        {
+            "outcome": "unretired",
+            "at": "2026-11-05T18:05:00+00:00",
+            "restored": ["<a@x>"],
+        },
+        state_dir=tmp_path,
+    )
+    assert pending(tmp_path) == [["<a@x>"]]
+
+
+def test_pending_runs_come_back_newest_first(tmp_path: Path) -> None:
+    for stamp, identifier in (
+        ("2026-10-23T08:55:00+00:00", "<old@x>"),
+        ("2026-11-05T17:27:06+00:00", "<new@x>"),
+    ):
+        runlog.record(
+            {
+                "outcome": "printing",
+                "at": stamp,
+                "documents": [identifier],
+                "uids": [4],
+            },
+            state_dir=tmp_path,
+        )
+    assert pending(tmp_path) == [["<new@x>"], ["<old@x>"]]
+
+
+def test_a_cancelled_run_holds_no_mail(tmp_path: Path) -> None:
+    """A cancellation records `documents` as a count rather than a list -
+    it never had uids to retire, and never will."""
+    runlog.record(
+        {"outcome": "cancelled", "at": "2026-11-05T17:00:00+00:00", "documents": 25},
+        state_dir=tmp_path,
+    )
+    assert runlog.pending_mail(state_dir=tmp_path) == []
+
+
+def test_a_run_without_uids_holds_nothing_to_retire(tmp_path: Path) -> None:
+    runlog.record(
+        {
+            "outcome": "printing",
+            "at": "2026-11-05T17:00:00+00:00",
+            "documents": ["<a@x>"],
+            "uids": [],
+        },
+        state_dir=tmp_path,
+    )
+    assert runlog.pending_mail(state_dir=tmp_path) == []
+
+
+def test_a_damaged_entry_does_not_hide_the_others(tmp_path: Path) -> None:
+    (tmp_path / "0000-broken.json").write_text("{not json")
+    (tmp_path / "0001-list.json").write_text("[]")
+    (tmp_path / "0002-undated.json").write_text('{"outcome": "printing"}')
+    runlog.record(
+        {
+            "outcome": "printing",
+            "at": "2026-11-05T17:27:06+00:00",
+            "documents": ["<a@x>"],
+            "uids": [4],
+        },
+        state_dir=tmp_path,
+    )
+    assert pending(tmp_path) == [["<a@x>"]]
+
+
+def test_a_damaged_retirement_does_not_settle_anything(tmp_path: Path) -> None:
+    """Failing open: an unreadable retirement means newsprint cannot know
+    the mail is gone, so the run stays pending and the person is asked.
+    The alternative - treating an unreadable file as a retirement - would
+    quietly drop mail out of the only record that can recover it."""
+    runlog.record(
+        {
+            "outcome": "printing",
+            "at": "2026-11-05T17:27:06+00:00",
+            "documents": ["<a@x>"],
+            "uids": [4],
+        },
+        state_dir=tmp_path,
+    )
+    (tmp_path / "zz-broken.json").write_text('{"outcome": "retired", "at": "nope"}')
+    assert pending(tmp_path) == [["<a@x>"]]
+
+
+# --- the mail a record holds, with the folder each uid belongs to ---------
+
+
+def test_messages_round_trip_through_a_record(tmp_path: Path) -> None:
+    messages = [
+        runlog.Message(identifier="<a@x>", uid=4, folder="toprint"),
+        runlog.Message(identifier="<b@x>", uid=4, folder="INBOX"),
+    ]
+    path = runlog.record(
+        {"outcome": "printing", "messages": runlog.as_records(messages)},
+        state_dir=tmp_path,
+    )
+    assert runlog.messages_in(json.loads(path.read_text())) == messages
+
+
+def test_two_folders_can_hold_the_same_uid(tmp_path: Path) -> None:
+    """The whole reason the folder travels with the uid: these are two
+    different messages, and retiring uid 4 against one folder would move
+    the wrong one out of the other."""
+    messages = [
+        runlog.Message(identifier="<a@x>", uid=4, folder="toprint"),
+        runlog.Message(identifier="<b@x>", uid=4, folder="INBOX"),
+    ]
+    assert runlog.by_folder(messages) == {"toprint": [4], "INBOX": [4]}
+
+
+def test_uids_stay_in_the_order_they_were_recorded() -> None:
+    messages = [
+        runlog.Message(identifier="<a@x>", uid=9, folder="toprint"),
+        runlog.Message(identifier="<b@x>", uid=4, folder="toprint"),
+    ]
+    assert runlog.by_folder(messages) == {"toprint": [9, 4]}
+
+
+def test_an_older_record_names_no_folders() -> None:
+    """Every entry in the author's own log is this shape: a flat uids
+    list, with nothing saying which folder issued them. Inventing a
+    folder here is the guess that moves the wrong mail, so this returns
+    nothing and leaves the decision to a caller that knows how many
+    folders the config names."""
+    assert runlog.messages_in({"outcome": "printing", "uids": [4, 5]}) == []
+
+
+def test_a_damaged_messages_field_names_no_folders() -> None:
+    assert runlog.messages_in({"messages": "four"}) == []
+
+
+def test_an_incomplete_message_is_not_read_as_mail() -> None:
+    entry = {
+        "messages": [
+            {"identifier": "<a@x>", "uid": 4, "folder": "toprint"},
+            {"identifier": "<b@x>", "uid": None, "folder": "toprint"},
+        ]
+    }
+    assert runlog.messages_in(entry) == [
+        runlog.Message(identifier="<a@x>", uid=4, folder="toprint")
+    ]
+
+
+def test_each_retirement_settles_its_own_run(tmp_path: Path) -> None:
+    """Two runs, each retired by its own entry, and both are settled.
+
+    The retirements have to accumulate: if only the newest counted, every
+    run retired before it would read as still holding its mail, and
+    --reprint-from would offer to retire mail that is long gone.
+    """
+    for stamp, identifier in (
+        ("2026-10-23T08:55:00+00:00", "<first@x>"),
+        ("2026-10-30T12:46:00+00:00", "<second@x>"),
+    ):
+        runlog.record(
+            {
+                "outcome": "printing",
+                "at": stamp,
+                "documents": [identifier],
+                "uids": [4],
+            },
+            state_dir=tmp_path,
+        )
+        runlog.record(
+            {
+                "outcome": "retired",
+                "at": stamp.replace("T0", "T1"),
+                "retired_ids": [identifier],
+            },
+            state_dir=tmp_path,
+        )
+    assert runlog.pending_mail(state_dir=tmp_path) == []
+
+
+def test_two_entries_stamped_at_the_same_instant_are_both_read(
+    tmp_path: Path,
+) -> None:
+    """A tie on the timestamp must not be broken by comparing the entries
+    themselves - they are dicts, and that raises. A log is a directory of
+    files, and two of them carrying the same `at` is something a restored
+    or hand-edited log can easily do."""
+    for identifier in ("<a@x>", "<b@x>"):
+        runlog.record(
+            {
+                "outcome": "printing",
+                "at": "2026-11-05T17:27:06+00:00",
+                "documents": [identifier],
+                "uids": [4],
+            },
+            state_dir=tmp_path,
+        )
+    assert sorted(pending(tmp_path)) == [["<a@x>"], ["<b@x>"]]

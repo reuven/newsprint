@@ -21,6 +21,18 @@ _SECONDS_PER_MINUTE = 60
 _SECONDS_PER_HOUR = 3600
 
 
+def is_duplex(duplex: str) -> bool:
+    """Whether a `sides=` value names a two-sided mode.
+
+    One line, in one place, because two things turn on it that must never
+    disagree: how many sheets a side count is (here), and which sides a
+    reprint may start on (reprint.py). Long-edge and short-edge differ
+    only in which way the back is turned, which neither question cares
+    about.
+    """
+    return duplex.startswith("two-sided")
+
+
 def sheets_for(sides: int, duplex: str) -> int:
     """Sheets of paper `sides` sides take.
 
@@ -28,7 +40,7 @@ def sheets_for(sides: int, duplex: str) -> int:
     out of the printer - which is why a 105-side packet is 53 sheets and
     the printer reports 106 impressions.
     """
-    if not duplex.startswith("two-sided"):
+    if not is_duplex(duplex):
         return sides
     return -(-sides // 2)
 

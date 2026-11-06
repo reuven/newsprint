@@ -1,6 +1,6 @@
 [project]
 name = "newsprint"
-version = "0.22.0"
+version = "0.23.0"
 description = "Fetch starred newsletters over IMAP, reduce them to article content, and print them quarter-sheet, four to a side, duplex."
 readme = "README.md"
 license = "MIT"
@@ -105,5 +105,7 @@ source_paths = [
     "src/newsprint/device.py",
     "src/newsprint/printer.py",
     "src/newsprint/progress.py",
+    "src/newsprint/reprint.py",
+    "src/newsprint/runlog.py",
 ]
 also_copy = ["src/newsprint/", "tests/", "README.md"]

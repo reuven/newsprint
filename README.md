@@ -236,6 +236,11 @@ Preview for a look, and asks before printing. Useful flags:
   as soon as the queue accepts the document, which means a job that stops
   partway will still retire the mail. See
   [Waiting for the printer](#waiting-for-the-printer).
+- `--reprint-from PATH` — print part of a packet again instead of building
+  a new one, for finishing a job that stopped partway, and then retire the
+  mail that run was holding. Say which sides with `--pages 37-72` or
+  `--after-cell 144`. See
+  [Finishing a job that stopped partway](#finishing-a-job-that-stopped-partway).
 - `--unretire` — undo the last retirement: move those messages back out of
   the trash and re-star them. Builds nothing and prints nothing. See
   [Undoing a retirement](#undoing-a-retirement).
@@ -650,24 +655,78 @@ advertises a phantom `now printing <queue>-0` that the next job queues
 behind. `sudo launchctl kickstart -k system/org.cups.cupsd` clears both
 (on Linux, restart `cups.service`).
 
-Then finish the packet from the PDF, which is still on disk. One PDF page
-is one sheet side, so a page range is a side range — but printed on both
-sides, odd pages are fronts and even pages are backs, and CUPS re-imposes
-an extracted range from scratch. **Resume only on an odd page**, at
-`2S + 1` where `S` is the number of sheets printed on *both* sides, and set
-aside any sheet printed on one side only:
+Then finish the packet with `--reprint-from`, below.
+
+### Finishing a job that stopped partway
+
+The packet is still on disk, so all that is missing is a page range — and
+nothing about that range is as obvious as it looks. One PDF page is one
+sheet side, and CUPS **re-imposes whatever range it is given from
+scratch**: page 1 of the range becomes the front of a sheet, whatever it
+was in the original document. Resume on an even side and every back prints
+as a front, so the remainder of the packet comes out inside-out, and
+nothing looks wrong until the stack is in your hands.
+
+`--reprint-from` does that arithmetic, and takes the one number you can
+actually read off the paper: the last cell that came out whole, which is
+stamped on the page.
 
 ```
-lp -d <queue> -o media=A4 -o sides=two-sided-long-edge \
-   -o print-scaling=none -P 37-72 \
-   ~/.local/state/newsprint/packets/...-1926.pdf
+newsprint --reprint-from ~/.local/state/newsprint/packets/...-1926.pdf \
+          --after-cell 144
 ```
 
-Resuming at an even page instead puts every later page on the wrong face of
-its sheet, which is not obvious until the packet is in your hands. And
-because four cells go on a side, the last cell you can find in the stack
-names the break exactly: cell 144 is the fourth cell of side 36, the back
-of sheet 18, so the next side to print is 37.
+```
+Reprinting reuven-s-shabbat-reading-2026-11-05-1926.pdf
+  Sides 37-72 of 72 - 36 sides on 18 sheets.
+  Mail: the run of 2026-11-05T17:27:06 is still holding 25 message(s).
+
+Print sides 37-72 to Brother_MFC_L2700DW_native? [y/N]:
+```
+
+Four cells go on a side, so cell 144 is 36 whole sides, which is 18 whole
+sheets, so the reprint starts at side 37. A cell part way down a side —
+143, say — leaves sheet 18 printed on one face only, and because a duplex
+job cannot start on a back, that whole sheet goes through again. That costs
+one sheet of paper instead of a ruined remainder.
+
+`--pages 37-72` says the range directly, `--pages 37-` runs to the end, and
+an even first side is refused rather than printed:
+
+```
+Error: Page 38 is the back of a sheet, and a duplex reprint cannot start on
+a back: CUPS lays out whatever range it is given from scratch, so every
+back would print as a front and the rest of the packet would come out
+inside-out.
+Start on an odd side instead - --pages 37-72 reprints one sheet you already
+have and gets the rest right.
+```
+
+A reprint waits on the printer exactly as an ordinary run does, watchdog
+and all, and if it too stops short it names the sides of the *original*
+packet to pick up from. `--dry-run` shows the whole plan — range, sheets
+and mail — without spending any paper. And if you finished the packet by
+hand and only the mail is left over, `--no-print` sends nothing to the
+printer and offers the retirement on its own.
+
+By hand, the same thing is `lp -d <queue> -o media=A4 -o
+sides=two-sided-long-edge -o print-scaling=none -o page-ranges=37-72 <pdf>`
+— which also leaves the mail for you to unstar, 25 messages at a time.
+
+**How the mail is found, and why it is checked.** A run writes down the
+messages it is holding *before* anything is printed, so the record of the
+run that stopped is what names them. But a uid is only a number issued by a
+folder, and a record can outlive the mail it names — so nothing is taken on
+trust: each folder's uids are fetched headers-first, and retired only where
+the Message-ID is one that run actually printed. Anything else is reported
+and left exactly where it is.
+
+Records written before 0.23.0 carry a flat uid list with no folder beside
+it. With one folder configured that is unambiguous; with several, uid 4
+could have come from either and they would be different messages, so
+newsprint refuses to guess and leaves the mail starred for the next
+ordinary run to collect. The retirement itself is recorded like any other,
+so `--unretire` undoes it.
 
 ## Undoing a retirement
 

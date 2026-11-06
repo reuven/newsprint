@@ -49,7 +49,15 @@ class PrintError(Exception):
     """
 
 
-def build_command(pdf: Path, config: Config) -> list[str]:
+def build_command(pdf: Path, config: Config, pages: str = "") -> list[str]:
+    """The lp command for this document, and optionally part of it.
+
+    `pages` is for finishing a job that stopped partway - see reprint.py
+    for why the range it names has to start on a front. Written as the
+    IPP attribute `page-ranges` rather than lp's own `-P` shorthand,
+    which means the same thing to CUPS: `-P` means the printer in `lpr`,
+    and this command is read by people recovering from a failed print.
+    """
     command = ["lp"]
     if config.printing.printer:
         command += ["-d", config.printing.printer]
@@ -62,13 +70,17 @@ def build_command(pdf: Path, config: Config) -> list[str]:
         f"sides={config.printing.duplex}",
         "-o",
         "print-scaling=none",
-        str(pdf),
     ]
+    if pages:
+        command += ["-o", f"page-ranges={pages}"]
+    command.append(str(pdf))
     return command
 
 
-def spool(pdf: Path, config: Config, runner: Runner = subprocess.run) -> str:
-    command = build_command(pdf, config)
+def spool(
+    pdf: Path, config: Config, runner: Runner = subprocess.run, pages: str = ""
+) -> str:
+    command = build_command(pdf, config, pages)
     result = runner(command, capture_output=True, text=True)
     if result.returncode != 0:
         raise PrintError(result.stderr.strip() or f"lp exited {result.returncode}")

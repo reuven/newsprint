@@ -19,9 +19,11 @@ import time
 import tomllib
 from collections import Counter
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from importlib.metadata import metadata, version
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -48,6 +50,7 @@ from .mail import (
     password_for,
 )
 from .models import Document, Verdict
+from .pdfutil import page_count
 from .picker import (
     DISPLAY_LIMIT,
     build_picklist,
@@ -65,6 +68,14 @@ from .progress import (
     queueing_line,
     sheets_for,
     stall_lines,
+)
+from .reprint import (
+    Pages,
+    ReprintError,
+    describe,
+    pages_after_cell,
+    parse_pages,
+    resume_at,
 )
 from .setup import run_setup
 from .stamp import format_packet_date, stamp_packet
@@ -587,14 +598,62 @@ def _open_preview(pdf: Path) -> None:
             continue
 
 
+@dataclass(frozen=True, slots=True)
+class Packet:
+    """A packet at the printer, and the mail that is waiting on it.
+
+    One shape for both ways in: a fresh run builds it from what it has
+    just rendered, and a reprint rebuilds it from the log entry of the
+    run that stopped. Everything after the job is spooled - waiting,
+    reporting a shortfall, retiring the mail - is then the same code
+    either way, and none of it has to know which one it came from.
+
+    `first_side` is where this job sits in the document it came out of,
+    so a reprint of 37-72 that itself stops partway can still name a side
+    of the original packet rather than a number that only means anything
+    inside the range.
+    """
+
+    pdf: Path
+    sides: int
+    documents: tuple[str, ...] = ()
+    messages: tuple[runlog.Message, ...] = ()
+    trash: str | None = None
+    skipped: tuple[dict[str, object], ...] = ()
+    first_side: int = 1
+
+    @property
+    def uids(self) -> list[int]:
+        return [message.uid for message in self.messages]
+
+    def side(self, within: int) -> int:
+        """Side `within` of this job, numbered as the document numbers it."""
+        return self.first_side + within - 1
+
+    def held(self) -> dict[str, object]:
+        """The log fields that say which mail this run is still holding.
+
+        `messages` is the one that can be retired from, since it carries
+        each uid's folder. `documents` and `uids` stay beside it because
+        every entry ever written has those and nothing else - including
+        the ones in the author's own log, one of which is still holding
+        25 messages - and because `pending_mail` reads `documents` to
+        tell a run that has been settled from one that has not.
+        """
+        return {
+            "documents": list(self.documents),
+            "uids": self.uids,
+            "messages": runlog.as_records(self.messages),
+            "trash": self.trash,
+            "packet": str(self.pdf),
+            "skipped": list(self.skipped),
+        }
+
+
 def _wait_for_paper(
     config: Config,
     job: str,
-    sides: int,
-    sheets_pdf: Path,
-    built: Sequence[Built],
-    uids: Sequence[int],
-    skipped_teasers: Sequence[dict[str, object]],
+    packet: Packet,
     clock: Callable[[], float] = time.monotonic,
 ) -> None:
     """Block until the job stops, and refuse to go on if it fell short.
@@ -615,6 +674,8 @@ def _wait_for_paper(
     from side 67 would have lost six pages. CUPS's number is shown, and
     labeled, as sides sent.
     """
+    sides = packet.sides
+    sheets_pdf = packet.pdf
     duplex = config.printing.duplex
     started = clock()
     printing = False
@@ -686,27 +747,35 @@ def _wait_for_paper(
             "printer_job": outcome.printer_job,
             "state": outcome.state.state,
             "reasons": list(outcome.state.reasons),
-            "documents": [item.document.origin.identifier for item in built],
-            "uids": list(uids),
-            "skipped": list(skipped_teasers),
+            **packet.held(),
         }
+    )
+    # Where to pick it up again, in the original document's own numbering
+    # and rounded back to a sheet boundary. `count + 1` was wrong here:
+    # on a duplex job it is an even side half the time, and CUPS lays out
+    # an extracted range from scratch, so that advice printed every
+    # remaining back as a front. See reprint.py.
+    resume = packet.side(resume_at(count, duplex))
+    finish = (
+        f"To finish:\n  newsprint --reprint-from {sheets_pdf} "
+        f"--pages {resume}-{packet.side(outcome.expected)}\n"
     )
     if outcome.confirmed:
         why = f": {', '.join(outcome.state.reasons)}" if outcome.state.reasons else ""
         what = (
             f"The printer stopped after {count} of {outcome.expected} sides "
             f"({sheets} sheets){why}. {outcome.shortfall} sides never printed.\n"
-            f"To finish, print sides {count + 1}-{outcome.expected} of the PDF.\n"
+            f"{finish}"
         )
     else:
         what = (
             f"CUPS sent {count} of {outcome.expected} sides and stopped. This "
             "printer cannot report how many reached paper, so check the last "
-            "sheet before reprinting.\n"
+            f"sheet before reprinting.\n{finish}"
         )
     raise click.ClickException(
         f"{what}"
-        f"Mail untouched: all {len(built)} messages stay starred.\n"
+        f"Mail untouched: all {len(packet.documents)} messages stay starred.\n"
         f"PDF kept at {sheets_pdf}"
     )
 
@@ -856,6 +925,339 @@ def unretire_last(config: Config) -> None:
     )
 
 
+def _mail_held_for(pdf: Path) -> tuple[dict[str, Any], bool] | None:
+    """The run still holding mail for `pdf`, and whether it named it.
+
+    A record written by this version names the packet it built, so a
+    match is exact. Every record written before it names nothing at all,
+    so the best answer available is the newest run whose mail is still
+    waiting - which is a guess, and is reported as a guess rather than
+    acted on, because the thing at stake is somebody's mail.
+    """
+    waiting = runlog.pending_mail()
+    named = [
+        entry
+        for entry in waiting
+        if Path(str(entry.get("packet", ""))).name == pdf.name
+    ]
+    if named:
+        return named[0], True
+    if waiting:
+        return waiting[0], False
+    return None
+
+
+def _held_count(entry: dict[str, Any]) -> int:
+    """How many messages a record is holding.
+
+    The uids, not the Message-IDs: two messages in a packet can share an
+    identifier (a mailing list that reuses one, or a message with no
+    Message-ID at all, where extract.py falls back to the sender), and
+    what is about to be retired is a list of uids.
+    """
+    return len(runlog.messages_in(entry)) or len(entry.get("uids") or [])
+
+
+def _recorded_mail(
+    config: Config, entry: dict[str, Any]
+) -> tuple[list[runlog.Message], str]:
+    """The mail a record holds as uids that know their folder, or why not.
+
+    An older record carries a flat uid list with no folder beside it. One
+    configured folder is the only case where that is not a guess: with
+    two, uid 4 could have come from either, and they are two different
+    messages. So that case is refused rather than resolved - the mail
+    stays starred, and the next ordinary run collects it as it always has.
+    """
+    messages = runlog.messages_in(entry)
+    if messages:
+        return messages, ""
+    # Non-empty by the time anything asks: pending_mail only returns runs
+    # that recorded uids, and this is only ever asked about one of those.
+    uids = [int(uid) for uid in entry.get("uids") or []]
+    if len(config.mail.folders) > 1:
+        return [], (
+            "that run was recorded before newsprint kept each uid's folder "
+            "beside it, and this config reads from several folders - uid "
+            f"{uids[0]} could have come from any of them, and they would be "
+            "different messages. The mail stays starred; the next ordinary "
+            "run will collect it."
+        )
+    return [
+        runlog.Message(identifier="", uid=uid, folder=config.mail.folders[0])
+        for uid in uids
+    ], ""
+
+
+def retire_recorded(config: Config, entry: dict[str, Any]) -> None:
+    """Retire the mail a stopped run recorded, having checked it is still
+    the same mail.
+
+    A uid is a number issued by a folder, and a record outlives the run
+    that wrote it - the author's own log holds four runs whose entries
+    will say "printing" forever. So the numbers are not taken on trust:
+    each folder's uids are fetched headers-first, and only those whose
+    Message-ID is one that run actually printed are retired. Anything
+    else is reported and left exactly where it is.
+
+    Two connections per folder, deliberately: a read-only one to check,
+    then retire_printed's own. See mail.py on why the retirement
+    connection stays separate from any fetch.
+    """
+    messages, refusal = _recorded_mail(config, entry)
+    if refusal:
+        click.echo(f"  Not retiring: {refusal}", err=True)
+        return
+    printed = {str(identifier) for identifier in entry.get("documents") or []}
+    trash = str(entry.get("trash") or "")
+    names = load_publication_names()
+    password = password_for(config.mail.host, config.mail.user)
+    retired_ids: dict[str, list[str]] = {}
+    retired: list[int] = []
+    failed: list[int] = []
+    unrecoverable: list[int] = []
+    for folder, uids in runlog.by_folder(messages).items():
+        with Mailbox(
+            host=config.mail.host,
+            user=config.mail.user,
+            password=password,
+            folder=folder,
+            notify=lambda message: click.echo(f"  {message}"),
+        ) as box:
+            found = {
+                document.origin.uid: document.origin.identifier
+                for document in _fetch_documents(
+                    box, uids, names, items=_HEADER_ITEMS, label="  Checking"
+                )
+            }
+            trash = trash or _resolve_trash(box, config, uids) or ""
+        matching = [uid for uid in uids if found.get(uid) in printed]
+        if len(matching) < len(uids):
+            click.echo(
+                f"  {len(uids) - len(matching)} message(s) in {folder} are no "
+                "longer the ones that run printed, so they stay where they "
+                "are.",
+                err=True,
+            )
+        if not matching:
+            continue
+        result = retire_printed(config, matching, trash, folder=folder)
+        done = set(result.retired)
+        retired_ids[folder] = [found[uid] for uid in matching if uid in done]
+        retired += result.retired
+        failed += result.failed
+        unrecoverable += result.unrecoverable
+
+    if not retired:
+        # Deliberately not recorded as a retirement, because it was not
+        # one: --unretire undoes the newest "retired" entry in the log,
+        # and an empty one written here would hide the real retirement it
+        # was about to undo.
+        runlog.record(
+            {
+                "outcome": "retire-none",
+                "from_run": str(entry.get("at")),
+                "trash": trash,
+                "failed": failed,
+                "unrecoverable": unrecoverable,
+            }
+        )
+        click.echo(
+            "Retired 0 message(s). Nothing was moved, so the mail stays "
+            "exactly where it is."
+        )
+        return
+
+    # The same shape an ordinary run writes, so --unretire can undo this
+    # one too: it reads `folders` for the Message-IDs to find in the trash.
+    runlog.record(
+        {
+            "outcome": "retired",
+            "folder": next(iter(retired_ids), config.mail.folders[0]),
+            "folders": retired_ids,
+            "trash": trash,
+            "retired_ids": [
+                identifier
+                for identifiers in retired_ids.values()
+                for identifier in identifiers
+            ],
+            "retired": retired,
+            "failed": failed,
+            "unrecoverable": unrecoverable,
+            "from_run": str(entry.get("at")),
+        }
+    )
+    click.echo(f"Retired {len(retired)} message(s) to {trash}.")
+
+
+def _offer_retirement(config: Config, held: tuple[dict[str, Any], bool] | None) -> None:
+    """Ask about the mail a stopped run recorded, and retire it on a yes.
+
+    Asked rather than assumed, even after a reprint that completed,
+    because which run this packet belongs to is read out of the log and
+    can be a best guess - see _mail_held_for. The plan printed above says
+    which run and how many messages, so the question has its answer in
+    front of it.
+    """
+    if held is None:
+        return
+    if not click.confirm(
+        f"\nRetire the {_held_count(held[0])} message(s) that run was holding?",
+        default=False,
+    ):
+        click.echo("Mail untouched.")
+        return
+    retire_recorded(config, held[0])
+
+
+def _pages_to_reprint(
+    config: Config, total: int, pages_text: str, after_cell: int | None
+) -> Pages:
+    """Which sides to print again, from whichever way the user said it."""
+    duplex = config.printing.duplex
+    if after_cell is not None:
+        return pages_after_cell(
+            after_cell, config.printing.paper.cells_per_side, total, duplex
+        )
+    if pages_text:
+        return parse_pages(pages_text, total, duplex)
+    return Pages(first=1, last=total)
+
+
+def reprint_packet(
+    config: Config,
+    pdf: Path,
+    pages_text: str,
+    after_cell: int | None,
+    *,
+    dry_run: bool = False,
+    no_print: bool = False,
+    no_retire: bool = False,
+    no_wait: bool = False,
+) -> None:
+    """Print part of a packet again, and retire the mail it was holding.
+
+    The order is the invariant the whole tool turns on, unchanged: paper
+    first, mail afterwards, and only once the printer has said every side
+    came out. What is different is where the mail comes from - a run that
+    has already ended wrote it down, so this reads the log instead of
+    IMAP, and proves each uid is still the message that run printed
+    before touching it.
+
+    This exists because of 2026-11-05. The tray ran dry at side 37 of 72,
+    the printer threw the job away, and finishing the packet took reading
+    a cell number off the paper, working out that a duplex reprint has to
+    start on an odd side, an `lp -P 37-72` by hand, and then unstarring
+    25 messages one at a time.
+    """
+    if not pdf.is_file():
+        raise click.ClickException(f"No packet to reprint at {pdf}")
+    total = page_count(pdf)
+    try:
+        pages = _pages_to_reprint(config, total, pages_text, after_cell)
+    except ReprintError as error:
+        raise click.ClickException(str(error)) from error
+
+    if no_print:
+        click.echo(f"Not printing {pdf.name} - --no-print names the mail only.")
+    else:
+        click.echo(f"Reprinting {pdf.name}")
+        click.echo(f"  {describe(pages, total, config.printing.duplex)}")
+        if after_cell is not None and pages.first <= after_cell // (
+            config.printing.paper.cells_per_side
+        ):
+            click.echo(
+                f"  Cell {after_cell} left a sheet part way through, so that "
+                "sheet prints again - a duplex job cannot start on a back."
+            )
+
+    held = _mail_held_for(pdf)
+    if held is None:
+        click.echo("  Mail: no run in the log is still holding any, so none is due.")
+    elif held[1]:
+        click.echo(
+            f"  Mail: the run of {held[0].get('at')} is still holding "
+            f"{_held_count(held[0])} message(s)."
+        )
+    else:
+        was = Path(str(held[0].get("packet", ""))).name or "not recorded"
+        click.echo(
+            f"  Mail: no record names this packet, so this is the newest run "
+            f"still holding any - {held[0].get('at')}, "
+            f"{_held_count(held[0])} message(s), packet {was}."
+        )
+
+    if dry_run:
+        click.echo("\nDry run: nothing printed, nothing retired.")
+        return
+
+    if no_print:
+        # The 2026-11-05 ending: the packet was finished by hand, so the
+        # only thing left undone is the mail. --no-print already means
+        # "the paper came out somewhere else" on an ordinary run.
+        if no_retire:
+            click.echo("\nNothing to do: --no-print and --no-retire together.")
+            return
+        _offer_retirement(config, held)
+        return
+
+    destination = config.printing.printer or "the default printer"
+    if not click.confirm(f"\nPrint sides {pages} to {destination}?", default=False):
+        runlog.record(
+            {"outcome": "cancelled", "reason": "reprint declined", "packet": str(pdf)}
+        )
+        click.echo("Not printed. Mail untouched.")
+        return
+
+    packet = Packet(
+        pdf=pdf,
+        sides=pages.count,
+        first_side=pages.first,
+        documents=(
+            ()
+            if held is None
+            else tuple(str(i) for i in held[0].get("documents") or [])
+        ),
+        messages=() if held is None else tuple(runlog.messages_in(held[0])),
+        trash=None if held is None else str(held[0].get("trash") or "") or None,
+    )
+    started: dict[str, object] = {
+        "outcome": "reprinting",
+        "pages": str(pages),
+        **packet.held(),
+    }
+    if held is not None:
+        started["source"] = str(held[0].get("at"))
+    runlog.record(started)
+
+    try:
+        job = spool(pdf, config, pages=str(pages))
+    except PrintError as error:
+        runlog.record({"outcome": "print-failed", "error": str(error)})
+        raise click.ClickException(
+            f"{error}\nMail untouched; PDF kept at {pdf}"
+        ) from error
+    click.echo(f"Spooled as {job}.")
+
+    if not no_wait:
+        _wait_for_paper(config, job, packet)
+
+    runlog.record(
+        {
+            "outcome": "reprinted",
+            "job": job,
+            "pages": str(pages),
+            "waited": not no_wait,
+            **packet.held(),
+        }
+    )
+
+    if no_retire:
+        click.echo("Mail untouched: the messages stay starred.")
+        return
+    _offer_retirement(config, held)
+
+
 def about() -> str:
     """Three lines: what this is, where it lives, who wrote it.
 
@@ -950,6 +1352,43 @@ def about() -> str:
     ),
 )
 @click.option(
+    "--reprint-from",
+    "reprint_from",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=(
+        "Print part of a packet again instead of building a new one, for "
+        "finishing a job that stopped partway. Say which sides with --pages "
+        "or --after-cell; with neither, the whole packet prints again. Once "
+        "it completes, newsprint offers to retire the mail the stopped run "
+        "was holding. With --no-print it prints nothing and only offers the "
+        "mail, for a packet already finished by hand."
+    ),
+)
+@click.option(
+    "--pages",
+    "pages_text",
+    default="",
+    help=(
+        "Which sides to reprint: 37-72, or 37- for everything from side 37 "
+        "on, or 37 for a single side. A duplex reprint has to start on an "
+        "odd side - CUPS lays the range out from scratch, so starting on the "
+        "back of a sheet prints every back as a front. Needs --reprint-from."
+    ),
+)
+@click.option(
+    "--after-cell",
+    "after_cell",
+    type=int,
+    default=None,
+    help=(
+        "The last cell number that came out whole, instead of --pages. Cell "
+        "numbers are printed on the paper, so this is the one number you can "
+        "read off the stack; newsprint turns it into sides and rounds back "
+        "to a whole sheet. Needs --reprint-from."
+    ),
+)
+@click.option(
     "--setup",
     "setup_mode",
     is_flag=True,
@@ -1019,6 +1458,9 @@ def main(
     output: Path | None,
     no_print: bool,
     no_wait: bool,
+    reprint_from: Path | None,
+    pages_text: str,
+    after_cell: int | None,
     setup_mode: bool,
     unretire: bool,
     list_publications: bool,
@@ -1028,6 +1470,16 @@ def main(
     summary: bool | None,
 ) -> None:
     """Print this week's starred newsletters, four to a side, duplex."""
+    if reprint_from is None and (pages_text or after_cell is not None):
+        raise click.ClickException(
+            "--pages and --after-cell say which part of a packet to print\n"
+            "again, so they need --reprint-from to say which packet."
+        )
+    if pages_text and after_cell is not None:
+        raise click.ClickException(
+            "--pages and --after-cell both say where to start printing.\n"
+            "Pass one or the other."
+        )
     if setup_mode:
         run_setup(config_path)
         return
@@ -1041,6 +1493,26 @@ def main(
                 cells_override=int(cells_per_side) if cells_per_side else None,
             )
             unretire_last(config)
+        except (MailError, ConfigError) as error:
+            raise click.ClickException(str(error)) from error
+        return
+    if reprint_from is not None:
+        try:
+            config = load_config(
+                config_path,
+                paper_override=paper,
+                cells_override=int(cells_per_side) if cells_per_side else None,
+            )
+            reprint_packet(
+                config,
+                reprint_from,
+                pages_text,
+                after_cell,
+                dry_run=dry_run,
+                no_print=no_print,
+                no_retire=no_retire,
+                no_wait=no_wait,
+            )
         except (MailError, ConfigError) as error:
             raise click.ClickException(str(error)) from error
         return
@@ -1281,7 +1753,30 @@ def main(
         click.echo("\nDry run: nothing printed, nothing retired.")
         return
 
-    uids = [item.document.origin.uid for item in built if item.document.origin.uid]
+    # The folder travels with every uid from here on. A uid is issued by
+    # a folder and means nothing outside it, so a record that holds only
+    # numbers cannot be retired from afterwards - which is exactly what
+    # stranded 25 messages on 2026-11-05. config.mail.folders[0] is the
+    # fallback rather than config.mail.folder: that one still holds its
+    # structural default for any config written with `folders`, so it can
+    # name a folder the account does not have.
+    packet = Packet(
+        pdf=sheets_pdf,
+        sides=sides,
+        documents=tuple(item.document.origin.identifier for item in built),
+        messages=tuple(
+            runlog.Message(
+                identifier=item.document.origin.identifier,
+                uid=item.document.origin.uid,
+                folder=item.document.origin.folder or config.mail.folders[0],
+            )
+            for item in built
+            if item.document.origin.uid is not None
+        ),
+        trash=trash,
+        skipped=tuple(skipped_teasers),
+    )
+    uids = packet.uids
 
     if no_print:
         # Nothing was sent to a printer, so the one fact that decides
@@ -1304,14 +1799,7 @@ def main(
             )
             click.echo("Mail untouched.")
             return
-        runlog.record(
-            {
-                "outcome": "printed-elsewhere",
-                "documents": [item.document.origin.identifier for item in built],
-                "uids": uids,
-                "skipped": skipped_teasers,
-            }
-        )
+        runlog.record({"outcome": "printed-elsewhere", **packet.held()})
     else:
         destination = config.printing.printer or "the default printer"
         if not click.confirm(f"\nPrint to {destination}?", default=False):
@@ -1325,14 +1813,7 @@ def main(
             click.echo("Not printed. Mail untouched.")
             return
 
-        runlog.record(
-            {
-                "outcome": "printing",
-                "documents": [item.document.origin.identifier for item in built],
-                "uids": uids,
-                "skipped": skipped_teasers,
-            }
-        )
+        runlog.record({"outcome": "printing", **packet.held()})
 
         try:
             job = spool(sheets_pdf, config)
@@ -1345,9 +1826,7 @@ def main(
         click.echo(f"Spooled as {job}.")
 
         if not no_wait:
-            _wait_for_paper(
-                config, job, sides, sheets_pdf, built, uids, skipped_teasers
-            )
+            _wait_for_paper(config, job, packet)
 
         runlog.record(
             {
@@ -1355,9 +1834,7 @@ def main(
                 "job": job,
                 "sides": sides,
                 "waited": not no_wait,
-                "documents": [item.document.origin.identifier for item in built],
-                "uids": uids,
-                "skipped": skipped_teasers,
+                **packet.held(),
             }
         )
 

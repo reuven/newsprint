@@ -3,9 +3,11 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import ClassVar, Self
 
+import pymupdf
 import pytest
 from click.testing import CliRunner
 
+from newsprint import runlog
 from newsprint.cli import fetch_queue, main, retire_printed
 from newsprint.config import load_config
 from newsprint.cupsjob import JobState
@@ -4596,11 +4598,40 @@ def test_a_short_print_reports_the_printers_count(monkeypatch, tmp_path) -> None
     assert short["confirmed"] is True
 
 
-def test_a_short_print_says_which_sides_to_reprint(monkeypatch, tmp_path) -> None:
-    """The next thing anyone does after a short print is reprint the rest;
-    the first missing side is the printer's count plus one."""
+def test_a_short_print_says_how_to_finish_the_packet(monkeypatch, tmp_path) -> None:
+    """The next thing anyone does after a short print is finish it, so
+    the message is the command that does it rather than a page range to
+    translate by hand into one."""
     result, *_ = _run_with(monkeypatch, tmp_path, _confirmed(60, 116, sent=66, state=7))
-    assert "sides 61-116" in result.output
+    assert "--reprint-from" in result.output
+    assert "--pages 61-116" in result.output
+
+
+def test_the_resume_point_is_rounded_back_to_a_whole_sheet(
+    monkeypatch, tmp_path
+) -> None:
+    """61 sides is 30 whole sheets and one front. Side 62 is that sheet's
+    back, and a duplex reprint cannot start on a back - CUPS lays out an
+    extracted range from scratch, so 62-116 would have printed every
+    remaining back as a front. This advice said exactly that until
+    2026-11-06; the right answer is to run sheet 31 again.
+    """
+    result, *_ = _run_with(monkeypatch, tmp_path, _confirmed(61, 116, sent=66, state=7))
+    assert "--pages 61-116" in result.output
+    assert "62-116" not in result.output
+
+
+def test_an_unconfirmed_short_print_also_says_how_to_finish(
+    monkeypatch, tmp_path
+) -> None:
+    """A printer that keeps no job record leaves the count to CUPS, which
+    can overstate it - but the command to finish is still the useful
+    thing to hand over, and the reader has been told to check the stack."""
+    outcome = PrintOutcome(
+        job="Printer-1", state=JobState(9, (), 66, 33), expected=116, sent=66
+    )
+    result, *_ = _run_with(monkeypatch, tmp_path, outcome)
+    assert "--pages 67-116" in result.output
 
 
 def test_one_sided_sheets_are_sides(monkeypatch, tmp_path) -> None:
@@ -4768,3 +4799,505 @@ def test_a_stall_breaks_out_of_the_repainting_progress_line(
     assert [line.startswith("    ") for line in lines[first + 1 : first + 7]] == [
         True
     ] * 6
+
+
+# --- finishing a job that stopped partway --------------------------------
+#
+# The 2026-11-05 recovery, as a command instead of by hand: read the last
+# cell number off the paper, print the sides that never came out, and
+# retire the mail the stopped run recorded but never got to.
+
+
+def _packet_pdf(path: Path, sides: int) -> Path:
+    """A stand-in for an imposed packet: `sides` blank A4 sheet sides."""
+    with pymupdf.open() as document:
+        for _ in range(sides):
+            document.new_page(width=595, height=842)
+        document.save(path)
+    return path
+
+
+class _RetiringBox(_FakeBox):
+    """A folder that reports every uid it is given as retired."""
+
+    def retire(self, uids, trash_folder):
+        self.retire_calls.append((tuple(uids), trash_folder))
+        return RetireResult(retired=tuple(uids), failed=())
+
+
+_OTHER_RAW = _message(
+    """
+From: Someone Else <other@example.com>
+Subject: Not That Message
+Date: Fri, 6 Nov 2026 09:00:00 +0000
+Message-ID: <other@example.com>
+Content-Type: text/html; charset="utf-8"
+""",
+    "<html><body><p>Different message.</p></body></html>",
+)
+
+
+class _MovedOnBox(_RetiringBox):
+    """A folder where uid 5 is no longer the message the record names."""
+
+    def fetch_many(self, uids, items: str = "(UID RFC822)") -> dict[int, bytes]:
+        self.fetch_many_calls.append((tuple(uids), items))
+        return {uid: (_OTHER_RAW if uid == 5 else RAW_MESSAGE) for uid in uids}
+
+
+def _reprint_setup(monkeypatch, tmp_path, *, sides=72, outcome=None, box=_RetiringBox):
+    """A packet on disk, a printer that takes it, and a fake mailbox."""
+    _FakeBox.instances.clear()
+    pdf = _packet_pdf(tmp_path / "newsprint-2026-11-05-1727.pdf", sides)
+    spooled: list[tuple[str, str]] = []
+    waited: list[int] = []
+
+    def fake_spool(path, config, pages=""):
+        spooled.append((Path(path).name, pages))
+        return "Printer-1"
+
+    def fake_await(job, expected, on_progress=None, **kwargs):
+        waited.append(expected)
+        if outcome is not None:
+            return outcome
+        return PrintOutcome(
+            job=job,
+            state=JobState(9, ("job-completed-successfully",), expected, 0),
+            expected=expected,
+            sent=expected,
+        )
+
+    monkeypatch.setattr("newsprint.cli.spool", fake_spool)
+    monkeypatch.setattr("newsprint.cli.locate_printer", lambda job, override="": None)
+    monkeypatch.setattr("newsprint.cli.await_completion", fake_await)
+    monkeypatch.setattr("newsprint.cli.password_for", lambda host, user: "secret")
+    monkeypatch.setattr("newsprint.cli.Mailbox", box)
+    config = tmp_path / "config.toml"
+    config.write_text(SAMPLE_CONFIG)
+    return pdf, config, spooled, waited
+
+
+def _hold_mail(**extra) -> None:
+    """A log entry for a run that printed nothing and kept its mail.
+
+    `<issue@example.com>` is RAW_MESSAGE's own Message-ID, so the fake
+    mailbox's uids really do resolve to the message this record names -
+    which is what the retirement checks before it touches anything.
+    """
+    entry: dict = {
+        "outcome": "printing",
+        "at": "2026-11-05T17:27:06+00:00",
+        "documents": ["<issue@example.com>"],
+        "uids": [4, 5],
+    }
+    entry.update(extra)
+    runlog.record(entry)
+
+
+def _reprint(config: Path, pdf: Path, *args: str, answers: str = "y\ny\n"):
+    return CliRunner().invoke(
+        main,
+        ["--no-preview", "--config", str(config), "--reprint-from", str(pdf), *args],
+        input=answers,
+    )
+
+
+def test_a_reprint_sends_only_the_sides_that_are_missing(monkeypatch, tmp_path) -> None:
+    pdf, config, spooled, waited = _reprint_setup(monkeypatch, tmp_path)
+    result = _reprint(config, pdf, "--pages", "37-72")
+    assert result.exit_code == 0, result.output
+    assert spooled == [(pdf.name, "37-72")]
+    # Waited on 36 sides, not 72: the job is the range, not the document.
+    assert waited == [36]
+
+
+def test_a_reprint_reads_the_last_cell_off_the_paper(monkeypatch, tmp_path) -> None:
+    """2026-11-05's own numbers. Cell 144 of 287 was the last one printed,
+    four cells to a side, so 36 sides were whole - 18 sheets - and the
+    reprint starts on side 37."""
+    pdf, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path)
+    result = _reprint(config, pdf, "--after-cell", "144")
+    assert result.exit_code == 0, result.output
+    assert spooled == [(pdf.name, "37-72")]
+
+
+def test_a_cell_part_way_down_a_side_reprints_its_whole_sheet(
+    monkeypatch, tmp_path
+) -> None:
+    """Cell 143 leaves side 36 unfinished, and side 36 is the back of
+    sheet 18 - so sheet 18 goes through again rather than the reprint
+    starting on a back."""
+    pdf, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path)
+    _reprint(config, pdf, "--after-cell", "143")
+    assert spooled == [(pdf.name, "35-72")]
+
+
+def test_a_reprint_with_no_range_prints_the_whole_packet(monkeypatch, tmp_path) -> None:
+    pdf, config, spooled, waited = _reprint_setup(monkeypatch, tmp_path, sides=4)
+    _reprint(config, pdf, answers="y\nn\n")
+    assert spooled == [(pdf.name, "1-4")]
+    assert waited == [4]
+
+
+def test_an_even_first_side_is_refused_before_anything_prints(
+    monkeypatch, tmp_path
+) -> None:
+    """The failure this whole feature exists to prevent: 36 sheets coming
+    out inside-out, which looks right in the printer and is only
+    discovered once the stack is in hand."""
+    pdf, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path)
+    result = _reprint(config, pdf, "--pages", "38-72")
+    assert result.exit_code != 0
+    assert spooled == []
+    assert "--pages 37-72" in result.output
+
+
+def test_a_range_past_the_end_of_the_packet_is_refused(monkeypatch, tmp_path) -> None:
+    pdf, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path)
+    result = _reprint(config, pdf, "--pages", "37-99")
+    assert result.exit_code != 0
+    assert spooled == []
+    assert "only 72 sides" in result.output
+
+
+def test_a_cell_past_the_end_of_the_packet_is_refused(monkeypatch, tmp_path) -> None:
+    """A mistyped cell number must not quietly print nothing, or send a
+    range the printer reads as the whole document."""
+    pdf, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path)
+    result = _reprint(config, pdf, "--after-cell", "2870")
+    assert result.exit_code != 0
+    assert spooled == []
+    assert "72 sides" in result.output
+
+
+def test_a_packet_that_is_not_there_says_so(monkeypatch, tmp_path) -> None:
+    _, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path)
+    result = _reprint(config, tmp_path / "gone.pdf", "--pages", "37-72")
+    assert result.exit_code != 0
+    assert spooled == []
+    assert "gone.pdf" in result.output
+
+
+def test_pages_without_a_packet_to_reprint_is_refused(tmp_path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(SAMPLE_CONFIG)
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(config), "--pages", "37-72"]
+    )
+    assert result.exit_code != 0
+    assert "--reprint-from" in result.output
+
+
+def test_two_ways_of_saying_where_to_start_is_refused(monkeypatch, tmp_path) -> None:
+    pdf, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path)
+    result = _reprint(config, pdf, "--pages", "37-72", "--after-cell", "144")
+    assert result.exit_code != 0
+    assert spooled == []
+
+
+def test_declining_the_reprint_prints_nothing(monkeypatch, tmp_path) -> None:
+    pdf, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path)
+    _hold_mail()
+    result = _reprint(config, pdf, "--pages", "37-72", answers="n\n")
+    assert spooled == []
+    assert not [box for box in _FakeBox.instances if box.retire_calls]
+    assert "Mail untouched" in result.output
+
+
+def test_a_reprint_names_the_run_that_is_still_holding_mail(
+    monkeypatch, tmp_path
+) -> None:
+    pdf, config, *_ = _reprint_setup(monkeypatch, tmp_path)
+    _hold_mail(packet=str(pdf))
+    result = _reprint(config, pdf, "--pages", "37-72")
+    assert "2026-11-05T17:27:06" in result.output
+    assert "2 message" in result.output
+
+
+def test_a_completed_reprint_retires_the_mail_that_run_recorded(
+    monkeypatch, tmp_path
+) -> None:
+    pdf, config, *_ = _reprint_setup(monkeypatch, tmp_path)
+    _hold_mail(
+        packet=str(pdf),
+        messages=runlog.as_records(
+            [
+                runlog.Message(identifier="<issue@example.com>", uid=4, folder="A"),
+                runlog.Message(identifier="<issue@example.com>", uid=5, folder="B"),
+            ]
+        ),
+        trash="INBOX/Trash",
+    )
+    result = _reprint(config, pdf, "--pages", "37-72")
+    assert result.exit_code == 0, result.output
+    retired = [
+        (box.folder, box.retire_calls) for box in _FakeBox.instances if box.retire_calls
+    ]
+    # Each uid retired from its own folder, never both from one: uid 4 in
+    # folder A and uid 5 in folder B are different messages.
+    assert retired == [("A", [((4,), "INBOX/Trash")]), ("B", [((5,), "INBOX/Trash")])]
+
+
+def test_an_older_record_retires_from_the_one_folder_it_has(
+    monkeypatch, tmp_path
+) -> None:
+    """Every entry in the author's own log is this shape - a flat uids
+    list with no folder beside it - including the one holding 25 messages
+    on the night this was written. With a single folder configured there
+    is only one folder they can have come from."""
+    pdf, config, *_ = _reprint_setup(monkeypatch, tmp_path)
+    _hold_mail()
+    result = _reprint(config, pdf, "--pages", "37-72")
+    assert result.exit_code == 0, result.output
+    retired = [box.retire_calls for box in _FakeBox.instances if box.retire_calls]
+    assert retired == [[((4, 5), "INBOX/Trash")]]
+
+
+def test_an_older_record_is_not_guessed_at_across_several_folders(
+    monkeypatch, tmp_path
+) -> None:
+    """Two folders, and nothing in the record saying which issued uid 4.
+    Guessing moves a real message that happens to share a number, so the
+    reprint prints and the mail stays where it is."""
+    pdf, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path)
+    config.write_text(
+        '[mail]\nhost = "imap.example.com"\nuser = "someone@example.com"\n'
+        'folders = ["INBOX/toprint", "INBOX/later"]\n'
+    )
+    _hold_mail()
+    result = _reprint(config, pdf, "--pages", "37-72")
+    assert spooled == [(pdf.name, "37-72")]
+    assert not [box for box in _FakeBox.instances if box.retire_calls]
+    assert "several folders" in result.output
+
+
+def test_a_message_that_is_no_longer_the_one_recorded_is_left_alone(
+    monkeypatch, tmp_path
+) -> None:
+    """A uid is only a number; the Message-ID is the message. Uid 5 now
+    resolves to something else, so it is reported and not retired, and
+    uid 4 still is."""
+    pdf, config, *_ = _reprint_setup(monkeypatch, tmp_path, box=_MovedOnBox)
+    _hold_mail()
+    result = _reprint(config, pdf, "--pages", "37-72")
+    retired = [box.retire_calls for box in _FakeBox.instances if box.retire_calls]
+    assert retired == [[((4,), "INBOX/Trash")]]
+    assert "1 message" in result.output and "no longer" in result.output
+
+
+def test_a_reprint_can_be_told_to_keep_the_mail(monkeypatch, tmp_path) -> None:
+    pdf, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path)
+    _hold_mail()
+    result = _reprint(config, pdf, "--pages", "37-72", "--no-retire", answers="y\n")
+    assert spooled == [(pdf.name, "37-72")]
+    assert not [box for box in _FakeBox.instances if box.retire_calls]
+    assert "starred" in result.output
+
+
+def test_declining_the_retirement_keeps_the_mail(monkeypatch, tmp_path) -> None:
+    pdf, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path)
+    _hold_mail()
+    result = _reprint(config, pdf, "--pages", "37-72", answers="y\nn\n")
+    assert spooled == [(pdf.name, "37-72")]
+    assert not [box for box in _FakeBox.instances if box.retire_calls]
+    assert result.exit_code == 0
+
+
+def test_a_reprint_with_no_record_of_the_mail_still_prints(
+    monkeypatch, tmp_path
+) -> None:
+    pdf, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path)
+    result = _reprint(config, pdf, "--pages", "37-72")
+    assert spooled == [(pdf.name, "37-72")]
+    assert result.exit_code == 0
+    assert "no run" in result.output.lower()
+
+
+def test_a_record_for_a_different_packet_is_offered_but_flagged(
+    monkeypatch, tmp_path
+) -> None:
+    """The fallback, and why it has to be visible: every record written
+    before this release names no packet at all, so the newest run still
+    holding mail is the best guess available - and a guess about mail is
+    something to be asked about, not acted on."""
+    pdf, config, *_ = _reprint_setup(monkeypatch, tmp_path)
+    _hold_mail(packet="/somewhere/else.pdf")
+    result = _reprint(config, pdf, "--pages", "37-72")
+    assert "else.pdf" in result.output
+    assert "newest" in result.output
+
+
+def test_a_retired_reprint_can_be_undone(monkeypatch, tmp_path) -> None:
+    """--unretire reads `folders` out of the retirement entry, so a
+    reprint's retirement has to write one in the same shape an ordinary
+    run does."""
+    pdf, config, *_ = _reprint_setup(monkeypatch, tmp_path)
+    _hold_mail()
+    entries: list[dict] = []
+    real_record = runlog.record
+    monkeypatch.setattr(
+        "newsprint.runlog.record",
+        lambda entry, **kw: (entries.append(entry), real_record(entry, **kw))[1],
+    )
+    _reprint(config, pdf, "--pages", "37-72")
+    retirement = next(e for e in entries if e["outcome"] == "retired")
+    assert retirement["folders"] == {"INBOX/toprint": ["<issue@example.com>"] * 2}
+    assert retirement["trash"] == "INBOX/Trash"
+
+
+def test_a_short_reprint_names_sides_of_the_original_packet(
+    monkeypatch, tmp_path
+) -> None:
+    """A reprint of 37-72 that itself stops after 20 sides has printed up
+    to side 56 of the packet, so the advice has to say 57 - a number
+    inside the range would mean nothing to anyone holding the paper."""
+    outcome = PrintOutcome(
+        job="Printer-1",
+        state=JobState(7, ("job-canceled-at-device",), 20, 10),
+        expected=36,
+        sent=36,
+        printer_job=99,
+    )
+    pdf, config, *_ = _reprint_setup(monkeypatch, tmp_path, outcome=outcome)
+    _hold_mail()
+    result = _reprint(config, pdf, "--pages", "37-72")
+    assert result.exit_code != 0
+    assert "--pages 57-72" in result.output
+    assert not [box for box in _FakeBox.instances if box.retire_calls]
+
+
+def test_a_reprint_can_skip_the_wait(monkeypatch, tmp_path) -> None:
+    pdf, config, spooled, waited = _reprint_setup(monkeypatch, tmp_path)
+    result = _reprint(config, pdf, "--pages", "37-72", "--no-wait", answers="y\nn\n")
+    assert spooled == [(pdf.name, "37-72")]
+    assert waited == []
+    assert result.exit_code == 0
+
+
+class _AllMovedOnBox(_RetiringBox):
+    """A folder where none of the record's uids are its messages now."""
+
+    def fetch_many(self, uids, items: str = "(UID RFC822)") -> dict[int, bytes]:
+        self.fetch_many_calls.append((tuple(uids), items))
+        return {uid: _OTHER_RAW for uid in uids}
+
+
+def test_a_folder_whose_mail_has_all_moved_on_is_left_alone(
+    monkeypatch, tmp_path
+) -> None:
+    """Nothing in the folder is what the record names any more - most
+    likely retired by hand. Printing still happened; no mail is touched,
+    and the count says so rather than the command claiming a retirement."""
+    pdf, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path, box=_AllMovedOnBox)
+    _hold_mail()
+    result = _reprint(config, pdf, "--pages", "37-72")
+    assert spooled == [(pdf.name, "37-72")]
+    assert not [box for box in _FakeBox.instances if box.retire_calls]
+    assert "Retired 0 message(s)" in result.output
+
+
+def test_a_dry_run_checks_the_range_without_printing(monkeypatch, tmp_path) -> None:
+    """Worth having for a reprint specifically: the one thing that cannot
+    be undone is 36 sheets of paper, and this says what would print and
+    which run's mail is waiting without spending any."""
+    pdf, config, spooled, waited = _reprint_setup(monkeypatch, tmp_path)
+    _hold_mail()
+    result = _reprint(config, pdf, "--pages", "37-72", "--dry-run", answers="")
+    assert spooled == [] and waited == []
+    assert result.exit_code == 0
+    assert "36 sides on 18 sheets" in result.output
+    assert "nothing printed" in result.output
+
+
+def test_a_reprint_the_queue_refuses_keeps_the_mail(monkeypatch, tmp_path) -> None:
+    pdf, config, *_ = _reprint_setup(monkeypatch, tmp_path)
+
+    def refusing_spool(path, config, pages=""):
+        raise PrintError("lp: The printer is not responding.")
+
+    monkeypatch.setattr("newsprint.cli.spool", refusing_spool)
+    _hold_mail()
+    result = _reprint(config, pdf, "--pages", "37-72")
+    assert result.exit_code != 0
+    assert "not responding" in result.output
+    assert "Mail untouched" in result.output
+    assert not [box for box in _FakeBox.instances if box.retire_calls]
+
+
+def test_a_reprint_reports_a_broken_config_like_any_other_run(tmp_path) -> None:
+    pdf = _packet_pdf(tmp_path / "packet.pdf", 4)
+    config = tmp_path / "config.toml"
+    config.write_text('[print]\nprinter_uri = "http://printer.local"\n')
+    result = _reprint(config, pdf, "--pages", "1-4")
+    assert result.exit_code != 0
+    assert "printer_uri" in result.output
+
+
+def test_a_packet_already_on_paper_can_retire_its_mail_alone(
+    monkeypatch, tmp_path
+) -> None:
+    """2026-11-05's actual ending: the packet was finished by hand, so
+    there is nothing left to print and 25 messages left starred. --no-print
+    means the same here as it does on an ordinary run - the paper came out
+    somewhere else, so go straight to the mail."""
+    pdf, config, spooled, waited = _reprint_setup(monkeypatch, tmp_path)
+    _hold_mail()
+    result = _reprint(config, pdf, "--no-print", answers="y\n")
+    assert result.exit_code == 0, result.output
+    assert spooled == [] and waited == []
+    retired = [box.retire_calls for box in _FakeBox.instances if box.retire_calls]
+    assert retired == [[((4, 5), "INBOX/Trash")]]
+
+
+def test_retiring_alone_still_asks_first(monkeypatch, tmp_path) -> None:
+    pdf, config, *_ = _reprint_setup(monkeypatch, tmp_path)
+    _hold_mail()
+    result = _reprint(config, pdf, "--no-print", answers="n\n")
+    assert not [box for box in _FakeBox.instances if box.retire_calls]
+    assert "Mail untouched" in result.output
+
+
+def test_not_printing_and_not_retiring_leaves_nothing_to_do(
+    monkeypatch, tmp_path
+) -> None:
+    pdf, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path)
+    _hold_mail()
+    result = _reprint(config, pdf, "--no-print", "--no-retire", answers="")
+    assert spooled == []
+    assert not [box for box in _FakeBox.instances if box.retire_calls]
+    assert result.exit_code == 0
+    assert "Nothing to do" in result.output
+
+
+def test_retiring_alone_with_no_record_says_there_is_nothing_to_retire(
+    monkeypatch, tmp_path
+) -> None:
+    pdf, config, spooled, _ = _reprint_setup(monkeypatch, tmp_path)
+    result = _reprint(config, pdf, "--no-print", answers="")
+    assert spooled == []
+    assert result.exit_code == 0
+    assert "no run" in result.output.lower()
+
+
+def test_a_reprint_that_retires_nothing_leaves_the_last_retirement_alone(
+    monkeypatch, tmp_path
+) -> None:
+    """--unretire undoes the newest `retired` entry in the log. A reprint
+    that found nothing left to retire must not write one of those, or it
+    hides the real retirement that --unretire was going to undo."""
+    runlog.record(
+        {
+            "outcome": "retired",
+            "at": "2026-10-30T12:58:00+00:00",
+            "folder": "INBOX/toprint",
+            "folders": {"INBOX/toprint": ["<old@example.com>"]},
+            "retired_ids": ["<old@example.com>"],
+            "trash": "INBOX/Trash",
+        }
+    )
+    pdf, config, *_ = _reprint_setup(monkeypatch, tmp_path, box=_AllMovedOnBox)
+    _hold_mail()
+    _reprint(config, pdf, "--pages", "37-72")
+    last = runlog.last_retirement()
+    assert last is not None
+    assert last["retired_ids"] == ["<old@example.com>"]
