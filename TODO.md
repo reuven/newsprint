@@ -77,5 +77,6 @@ but they are worth a look.
 - [ ] `--cov-fail-under=100` lives in the CI workflow rather than
       `pyproject.toml`, so a local `make test` does not enforce it.
 - [ ] Versions 0.19.0 through 0.22.0 are tagged but were never published
-      to PyPI, which stops at 0.18.0. Only the newest matters to anyone
-      installing, so this is a decision to make rather than a gap to fill.
+      to PyPI, which went 0.18.0 straight to 0.23.0 on 2026-11-06. Only
+      the newest matters to anyone installing, so this is a decision to
+      make rather than a gap to fill.
