@@ -27,21 +27,24 @@ wait is still right - giving up early hands back exactly the uncertainty the
 function exists to remove, and Ctrl-C is already safe - but silence is not.
 A counter that has not moved in ten minutes is information.
 
-- [ ] Count consecutive polls with no change in the impression count. No
+- [x] Count consecutive polls with no change in the impression count. No
       clock: at `interval` seconds a threshold of N polls is N*interval,
       and keeping time out of the loop is what made `progress.py` testable.
-- [ ] `on_stall` callback, fired once when the threshold is crossed, then
+- [x] `on_stall` callback, fired once when the threshold is crossed, then
       re-armed so a second stall after real progress is reported again.
-- [ ] Both loops - tonight's stall was in the queueing stage, with CUPS
+- [x] Both loops - tonight's stall was in the queueing stage, with CUPS
       still `processing`, but `_follow_on_printer` can stall the same way.
-- [ ] The warning says what to check, because "is it printing or not?" was
+- [x] The warning says what to check, because "is it printing or not?" was
       the actual question: paper, then whether the queue shows a frozen
       count, then that cancelling is the fix and Ctrl-C is safe.
-- [ ] Once stalled, annotate the progress line itself so the condition
-      stays on screen instead of scrolling away.
-- [ ] Correct the `await_completion` docstring: record what a paper-out
+- [~] Dropped in favor of repeating the warning on every further whole
+      multiple of the threshold. Annotating the repainting line would have
+      meant threading the stall through `on_progress`, and a warning that
+      scrolls back into view every ten minutes serves an unattended run
+      better than one that can only be seen by watching.
+- [x] Correct the `await_completion` docstring: record what a paper-out
       actually does on this printer.
-- [ ] README: how to tell a wedged job from a slow one, and that a
+- [x] README: how to tell a wedged job from a slow one, and that a
       cancelled job can leave an orphaned backend holding the queue
       ("now printing <queue>-0"), cleared by restarting cupsd.
 

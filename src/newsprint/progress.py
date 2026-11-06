@@ -111,3 +111,32 @@ def printed_line(total: int, duplex: str) -> str:
     sheets = sheets_for(total, duplex)
     sheets_word = "sheet" if sheets == 1 else "sheets"
     return f"Printed {_sides(total)} on {sheets} {sheets_word}."
+
+
+def stall_lines(done: int, total: int, seconds: float) -> tuple[str, ...]:
+    """The warning for a count that has stopped moving, as separate lines.
+
+    Separate lines rather than one block so the caller owns the prefixes,
+    and so none of the prose has to carry indentation of its own.
+
+    This exists because of 2026-11-05, when the tray ran dry at side 37 of
+    72 and newsprint then waited two hours and nine minutes in silence.
+    Everything a person can easily look at said the run was healthy: the
+    queue claimed to be printing, the printer called itself idle with no
+    reasons and paper ready, and CUPS held the job in `processing`. The
+    only honest signal was a send queue frozen at 130,160 bytes, which is
+    not somewhere anybody should have to look. So the warning names the
+    checks that would have gotten there in a minute instead.
+    """
+    return (
+        (
+            f"No change for {format_elapsed(seconds)} - stuck at "
+            f"{min(done, total)} of {_sides(total)}."
+        ),
+        "The printer may have taken the job and then dropped it. Running",
+        "out of paper does exactly that, and it leaves the connection open,",
+        "so the queue, the printer and CUPS all go on reporting health.",
+        "Check the tray, then `lpstat -p`. A count still frozen there means",
+        "the job is gone, and cancelling it is the only way forward.",
+        "Ctrl-C is safe: no mail has been touched yet.",
+    )

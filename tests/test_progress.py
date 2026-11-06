@@ -16,6 +16,7 @@ from newsprint.progress import (
     queueing_line,
     remaining,
     sheets_for,
+    stall_lines,
 )
 
 DUPLEX = "two-sided-long-edge"
@@ -163,3 +164,54 @@ def test_printed_line_simplex() -> None:
 
 def test_printed_line_singular_sheet() -> None:
     assert printed_line(1, DUPLEX) == "Printed 1 side on 1 sheet."
+
+
+# --- the stall warning --------------------------------------------------
+
+
+def test_stall_lines_lead_with_the_frozen_count() -> None:
+    """The 2026-11-05 run: stuck at 37 of 72 after the tray ran dry. The
+    first line has to carry both numbers and the duration, because it is
+    the line that answers "is it printing or not?"."""
+    assert stall_lines(37, 72, 600)[0] == (
+        "No change for 10m00s - stuck at 37 of 72 sides."
+    )
+
+
+def test_stall_lines_say_one_side_not_one_sides() -> None:
+    assert stall_lines(1, 1, 600)[0] == "No change for 10m00s - stuck at 1 of 1 side."
+
+
+def test_stall_lines_name_what_to_check() -> None:
+    """The warning earns its place only if it shortens the diagnosis. On
+    2026-11-05 the answer took a socket dump; these are the four things
+    that would have gotten there in a minute."""
+    body = " ".join(stall_lines(37, 72, 600)[1:]).lower()
+    assert "paper" in body
+    assert "lpstat" in body
+    assert "cancel" in body
+    assert "ctrl-c" in body
+
+
+def test_stall_lines_promise_the_mail_is_safe() -> None:
+    """Last week an interrupted run left mail to clean up by hand, so the
+    person deciding whether to hit Ctrl-C needs this said out loud."""
+    assert any("no mail" in line.lower() for line in stall_lines(37, 72, 600))
+
+
+def test_stall_lines_are_separate_lines_not_one_blob() -> None:
+    """The caller prefixes each line, so none of them may carry their own
+    newlines or indentation."""
+    lines = stall_lines(37, 72, 600)
+    assert len(lines) > 1
+    assert all("\n" not in line for line in lines)
+    assert all(line == line.strip() for line in lines)
+
+
+def test_stall_lines_clamp_like_every_other_line_here() -> None:
+    """The module's whole premise: never show a fraction over 100%. A
+    stall at the blank back of the last sheet is far-fetched, but the
+    invariant should not have an exception nobody remembers."""
+    assert stall_lines(106, 105, 600)[0] == (
+        "No change for 10m00s - stuck at 105 of 105 sides."
+    )

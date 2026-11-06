@@ -64,6 +64,7 @@ from .progress import (
     queued_line,
     queueing_line,
     sheets_for,
+    stall_lines,
 )
 from .setup import run_setup
 from .stamp import format_packet_date, stamp_packet
@@ -633,6 +634,15 @@ def _wait_for_paper(
             nl=False,
         )
 
+    def stalled(state: JobState, seconds: float) -> None:
+        # The progress line above is mid-repaint, written with nl=False, so
+        # close it before saying anything on lines of its own.
+        click.echo()
+        first, *rest = stall_lines(state.impressions, sides, seconds)
+        click.echo(f"  ! {first}")
+        for line in rest:
+            click.echo(f"    {line}")
+
     try:
         printer = locate_printer(job, override=config.printing.printer_uri)
         outcome = await_completion(
@@ -642,6 +652,7 @@ def _wait_for_paper(
             document=sheets_pdf.name,
             printer=printer,
             on_printed=printed,
+            on_stall=stalled,
         )
     except PrintError as error:
         runlog.record({"outcome": "print-unknown", "job": job, "error": str(error)})

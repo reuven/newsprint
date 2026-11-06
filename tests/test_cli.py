@@ -4730,3 +4730,41 @@ def test_printer_progress_repaints_one_line(monkeypatch, tmp_path) -> None:
     assert output.count("Queued:") == 1
     # Then every printer update repaints in place rather than scrolling.
     assert output.count("\r  Printing: sheet") == 2
+
+
+def test_a_stall_breaks_out_of_the_repainting_progress_line(
+    monkeypatch, tmp_path
+) -> None:
+    """2026-11-05: the count froze at 37 of 72 and newsprint said nothing
+    for two hours and nine minutes. The warning has to close the
+    repainting line and then own every line it writes, or it lands on top
+    of the progress it is interrupting.
+
+    Only the wiring is pinned here - the prefix on the first line and the
+    indent on each continuation. The prose itself is pinned by
+    test_progress.py, which is where it belongs.
+    """
+    _printing_run(monkeypatch, tmp_path, None)
+    frozen = JobState(5, (), 37, 18)
+
+    def fake_await(job, expected, on_progress=None, on_stall=None, **kwargs):
+        on_progress(frozen)
+        on_stall(frozen, 600.0)
+        return _confirmed(116, 116, sent=116)
+
+    monkeypatch.setattr("newsprint.cli.await_completion", fake_await)
+    monkeypatch.setattr("newsprint.runlog.record", lambda entry, **kw: None)
+    result = CliRunner().invoke(
+        main, ["--no-preview", "--config", str(tmp_path / "absent.toml")], input="y\n"
+    )
+    lines = result.output.splitlines()
+    warned = [i for i, line in enumerate(lines) if line.startswith("  ! No change")]
+    assert len(warned) == 1, result.output
+    first = warned[0]
+    # The duration this callback was handed, formatted and clamped against
+    # this run's own side count - 37 of a one-side packet is 1 of 1.
+    assert lines[first] == "  ! No change for 10m00s - stuck at 1 of 1 side."
+    # Every remaining line of the warning is indented under it.
+    assert [line.startswith("    ") for line in lines[first + 1 : first + 7]] == [
+        True
+    ] * 6
