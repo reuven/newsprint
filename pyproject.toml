@@ -104,5 +104,6 @@ source_paths = [
     "src/newsprint/cupsjob.py",
     "src/newsprint/device.py",
     "src/newsprint/printer.py",
+    "src/newsprint/progress.py",
 ]
 also_copy = ["src/newsprint/", "tests/", "README.md"]

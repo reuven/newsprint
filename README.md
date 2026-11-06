@@ -599,11 +599,75 @@ The same happens if the job's state cannot be read at all, or if the
 printer cannot be found or has already forgotten the job — not knowing
 whether it printed is treated as a failure, never as a success.
 
-The wait has no timeout. A printer that is out of paper finishes the job
-when someone puts paper in it, and giving up early would leave exactly the
-uncertainty this exists to remove. Ctrl-C is safe: nothing has been retired
+The wait has no timeout, and giving up early would leave exactly the
+uncertainty it exists to remove. Ctrl-C is safe: nothing has been retired
 yet. For an unattended run, `--no-wait` returns as soon as the job is
 queued, with the old caveat that a short print will still retire the mail.
+
+### When the count stops moving
+
+An earlier version of this section said a printer out of paper finishes the
+job once someone puts paper in it. That is not always true. On 2026-11-05 a
+Brother MFC-L2700DW ran its tray dry at side 37 of 72, **discarded the job
+outright**, and left the connection open; refilling the tray changed
+nothing, because there was no longer a job to resume.
+
+Nothing a person can easily look at showed it. The queue said it was
+printing. The printer called itself `idle` with no state reasons, paper
+ready and toner at 80%, and held no job of its own. CUPS kept the job in
+`processing` with its impression count parked at 37. The only honest signal
+was on the socket:
+
+```
+tcp4  0  130160  192.168.x.x.52810 -> 192.168.x.x.631  ESTABLISHED  ipp:94074
+```
+
+A send queue frozen at 130,160 bytes of a 131,072-byte buffer — the printer
+had stopped reading and never reopened its receive window. A healthy job
+*fills and drains* that queue; a wedged one holds it full and still. Since
+nobody should have to find that out from `netstat`, newsprint now says so
+after ten minutes without a change, and again on every ten minutes after
+that — a run can be left alone, and silence following one warning reads the
+same as having recovered:
+
+```
+  Queueing: 37 of 72 sides...
+  ! No change for 10m00s - stuck at 37 of 72 sides.
+    The printer may have taken the job and then dropped it. Running
+    out of paper does exactly that, and it leaves the connection open,
+    so the queue, the printer and CUPS all go on reporting health.
+    Check the tray, then `lpstat -p`. A count still frozen there means
+    the job is gone, and cancelling it is the only way forward.
+    Ctrl-C is safe: no mail has been touched yet.
+```
+
+To clear a wedged job, cancel it by name — `cancel Brother_..._native-8759`
+— and **not** with `cancel -x`, which purges the job record so newsprint
+can no longer read how far it got and has to report the vaguer "cannot
+report how many reached paper". Cancelling does not kill the blocked
+backend: it survives as an orphan still holding the socket, and CUPS then
+advertises a phantom `now printing <queue>-0` that the next job queues
+behind. `sudo launchctl kickstart -k system/org.cups.cupsd` clears both
+(on Linux, restart `cups.service`).
+
+Then finish the packet from the PDF, which is still on disk. One PDF page
+is one sheet side, so a page range is a side range — but printed on both
+sides, odd pages are fronts and even pages are backs, and CUPS re-imposes
+an extracted range from scratch. **Resume only on an odd page**, at
+`2S + 1` where `S` is the number of sheets printed on *both* sides, and set
+aside any sheet printed on one side only:
+
+```
+lp -d <queue> -o media=A4 -o sides=two-sided-long-edge \
+   -o print-scaling=none -P 37-72 \
+   ~/.local/state/newsprint/packets/...-1926.pdf
+```
+
+Resuming at an even page instead puts every later page on the wrong face of
+its sheet, which is not obvious until the packet is in your hands. And
+because four cells go on a side, the last cell you can find in the stack
+names the break exactly: cell 144 is the fourth cell of side 36, the back
+of sheet 18, so the next side to print is 37.
 
 ## Undoing a retirement
 

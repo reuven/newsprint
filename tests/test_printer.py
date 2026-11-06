@@ -8,6 +8,7 @@ from newsprint.cupsjob import IppError, JobState, PrinterJob
 from newsprint.device import DeviceError
 from newsprint.printer import (
     PrintError,
+    StallWatch,
     await_completion,
     build_command,
     job_number,
@@ -466,3 +467,166 @@ def test_failing_to_find_an_ipp_printer_is_a_print_error(failure: Exception) -> 
 
     with pytest.raises(PrintError, match="Q"):
         locate_printer("Q-1", device=lambda queue: "dnssd://x", resolve=resolve)
+
+
+# --- noticing a count that has stopped moving ---------------------------
+
+
+def stalls(impressions: int, repeats: int, then: JobState):
+    """A fetch that reports the same count `repeats` times, then moves on.
+
+    This is the 2026-11-05 shape: the number stops changing while the job
+    is still nominally processing, and nothing else about it looks wrong.
+    """
+    scripted = [state(5, impressions) for _ in range(repeats)] + [then]
+    return polls(*scripted)
+
+
+def test_a_watch_says_nothing_while_the_count_moves() -> None:
+    watch = StallWatch(interval=1.0, after=4.0)
+    assert [watch.saw(count) for count in (10, 20, 30, 40, 50, 60)] == [None] * 6
+
+
+def test_a_watch_warns_once_when_the_count_stops() -> None:
+    """Once, not on every poll afterwards - a two-second poll would
+    otherwise bury the terminal in the same warning 1,800 times an hour."""
+    watch = StallWatch(interval=1.0, after=4.0)
+    assert [watch.saw(37) for _ in range(6)] == [None, None, None, None, 4.0, None]
+
+
+def test_a_watch_repeats_itself_at_the_next_whole_threshold() -> None:
+    """A heartbeat, because a run can be left unattended: silence after
+    the first warning reads the same as the run having recovered."""
+    watch = StallWatch(interval=1.0, after=4.0)
+    seen = [watch.saw(37) for _ in range(13)]
+    assert [value for value in seen if value is not None] == [4.0, 8.0, 12.0]
+
+
+def test_a_watch_rearms_after_real_progress() -> None:
+    """A printer that stalls, recovers and stalls again has to be
+    reported the second time too."""
+    watch = StallWatch(interval=1.0, after=4.0)
+    for _ in range(5):
+        watch.saw(37)
+    assert watch.saw(38) is None
+    assert [watch.saw(38) for _ in range(4)] == [None, None, None, 4.0]
+
+
+def test_a_watch_counts_the_interval_it_was_given() -> None:
+    """The duration is polls times interval, so there is no clock in the
+    loop - the same reason progress.py takes its seconds as an argument."""
+    watch = StallWatch(interval=2.0, after=600.0)
+    assert [watch.saw(37) for _ in range(301)][-1] == 600.0
+
+
+def test_the_wait_reports_a_stall_while_cups_is_still_sending() -> None:
+    """Where 2026-11-05 went wrong: job 8759 sat at 37 of 72 with CUPS
+    still calling the job `processing`, so the terminal stage was never
+    reached and only this first loop could have noticed."""
+    seen: list[tuple[int, float]] = []
+    await_completion(
+        "P-1",
+        72,
+        fetch=stalls(37, 6, state(9, 72)),
+        sleep=lambda _: None,
+        interval=1.0,
+        stall_after=4.0,
+        on_stall=lambda job_state, seconds: seen.append(
+            (job_state.impressions, seconds)
+        ),
+    )
+    assert seen == [(37, 4.0)]
+
+
+def test_the_wait_says_nothing_about_stalls_on_a_healthy_job() -> None:
+    seen: list[float] = []
+    await_completion(
+        "P-1",
+        107,
+        fetch=polls(state(5, 20), state(5, 80), state(9, 107)),
+        sleep=lambda _: None,
+        interval=1.0,
+        stall_after=4.0,
+        on_stall=lambda _job_state, seconds: seen.append(seconds),
+    )
+    assert seen == []
+
+
+def test_the_wait_reports_a_stall_on_the_printer_too() -> None:
+    """The printer's own stage can wedge the same way, and by then CUPS
+    has washed its hands of the job entirely."""
+    seen: list[tuple[int, float]] = []
+    stuck = JobState(state=5, reasons=(), impressions=40, sheets=20)
+    done = JobState(state=9, reasons=(), impressions=72, sheets=36)
+    records = [stuck] * 6 + [done]
+
+    def jobs(printer: str) -> list[PrinterJob]:
+        return [PrinterJob(id=7, name="packet.pdf", state=records.pop(0))]
+
+    await_completion(
+        "P-1",
+        72,
+        fetch=polls(state(9, 72)),
+        sleep=lambda _: None,
+        interval=1.0,
+        stall_after=4.0,
+        document="packet.pdf",
+        printer="ipp://printer/ipp/print",
+        jobs=jobs,
+        on_stall=lambda job_state, seconds: seen.append(
+            (job_state.impressions, seconds)
+        ),
+    )
+    assert seen == [(40, 4.0)]
+
+
+def test_a_stall_is_reported_with_the_count_that_froze() -> None:
+    """The warning is tied to the count, not to the passing of polls.
+
+    A job that climbs and then stops has to be reported at the number it
+    stopped on, with the threshold measured from the freeze rather than
+    from the first poll - otherwise a watch that ignored the count
+    entirely would look exactly the same.
+    """
+    seen: list[tuple[int, float]] = []
+    climbing = [state(5, n) for n in (10, 20, 30, 40, 50)]
+    frozen = [state(5, 50) for _ in range(4)]
+    await_completion(
+        "P-1",
+        72,
+        fetch=polls(*climbing, *frozen, state(9, 72)),
+        sleep=lambda _: None,
+        interval=1.0,
+        stall_after=4.0,
+        on_stall=lambda job_state, seconds: seen.append(
+            (job_state.impressions, seconds)
+        ),
+    )
+    assert seen == [(50, 4.0)]
+
+
+def test_a_stall_on_the_printer_is_reported_with_the_count_that_froze() -> None:
+    """The same guarantee on the printer's own count."""
+    seen: list[tuple[int, float]] = []
+    counts = [10, 20, 30, 40, 50, 50, 50, 50, 50]
+    records = [JobState(state=5, reasons=(), impressions=n, sheets=0) for n in counts]
+    records.append(JobState(state=9, reasons=(), impressions=72, sheets=36))
+
+    def jobs(printer: str) -> list[PrinterJob]:
+        return [PrinterJob(id=7, name="packet.pdf", state=records.pop(0))]
+
+    await_completion(
+        "P-1",
+        72,
+        fetch=polls(state(9, 72)),
+        sleep=lambda _: None,
+        interval=1.0,
+        stall_after=4.0,
+        document="packet.pdf",
+        printer="ipp://printer/ipp/print",
+        jobs=jobs,
+        on_stall=lambda job_state, seconds: seen.append(
+            (job_state.impressions, seconds)
+        ),
+    )
+    assert seen == [(50, 4.0)]
