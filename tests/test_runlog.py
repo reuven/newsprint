@@ -566,3 +566,54 @@ def test_an_incomplete_message_is_not_read_as_mail() -> None:
     assert runlog.messages_in(entry) == [
         runlog.Message(identifier="<a@x>", uid=4, folder="toprint")
     ]
+
+
+def test_each_retirement_settles_its_own_run(tmp_path: Path) -> None:
+    """Two runs, each retired by its own entry, and both are settled.
+
+    The retirements have to accumulate: if only the newest counted, every
+    run retired before it would read as still holding its mail, and
+    --reprint-from would offer to retire mail that is long gone.
+    """
+    for stamp, identifier in (
+        ("2026-10-23T08:55:00+00:00", "<first@x>"),
+        ("2026-10-30T12:46:00+00:00", "<second@x>"),
+    ):
+        runlog.record(
+            {
+                "outcome": "printing",
+                "at": stamp,
+                "documents": [identifier],
+                "uids": [4],
+            },
+            state_dir=tmp_path,
+        )
+        runlog.record(
+            {
+                "outcome": "retired",
+                "at": stamp.replace("T0", "T1"),
+                "retired_ids": [identifier],
+            },
+            state_dir=tmp_path,
+        )
+    assert runlog.pending_mail(state_dir=tmp_path) == []
+
+
+def test_two_entries_stamped_at_the_same_instant_are_both_read(
+    tmp_path: Path,
+) -> None:
+    """A tie on the timestamp must not be broken by comparing the entries
+    themselves - they are dicts, and that raises. A log is a directory of
+    files, and two of them carrying the same `at` is something a restored
+    or hand-edited log can easily do."""
+    for identifier in ("<a@x>", "<b@x>"):
+        runlog.record(
+            {
+                "outcome": "printing",
+                "at": "2026-11-05T17:27:06+00:00",
+                "documents": [identifier],
+                "uids": [4],
+            },
+            state_dir=tmp_path,
+        )
+    assert sorted(pending(tmp_path)) == [["<a@x>"], ["<b@x>"]]
