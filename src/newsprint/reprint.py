@@ -95,15 +95,16 @@ def parse_pages(text: str, total: int, duplex: str) -> Pages:
     written = "".join(text.split())
     if "," in written:
         raise ReprintError(
-            "newsprint reprints one range of sides, not a list of them: a "
-            "scattered list cannot be checked against the sheet rule, since "
-            "every piece of it would start a fresh sheet of its own."
+            "newsprint reprints one range of sides, not a list of them.\n"
+            "A scattered list cannot be checked against the sheet rule at\n"
+            "all, since every piece of it would start a sheet of its own."
         )
     match = _RANGE.match(written)
     if match is None:
         raise ReprintError(
-            f"{text!r} is not a page range. Write it as 37-72, as 37- for "
-            "everything from side 37 on, or as 37 for a single side."
+            f"{text!r} is not a page range.\n"
+            "Write it as 37-72, as 37- for everything from side 37 on, or\n"
+            "as 37 for a single side."
         )
     first = int(match.group(1))
     if match.group(2) is None:
@@ -117,18 +118,18 @@ def parse_pages(text: str, total: int, duplex: str) -> Pages:
         raise ReprintError("A page range starts at page 1, not 0.")
     if first > total or last > total:
         raise ReprintError(
-            f"The packet has only {total} sides, so {first}-{last} runs off "
-            "the end of it."
+            f"The packet has only {total} sides, so {first}-{last} runs\n"
+            "off the end of it."
         )
     if last < first:
         raise ReprintError(f"{first}-{last} ends before it starts.")
     if is_duplex(duplex) and first % 2 == 0:
         raise ReprintError(
-            f"Page {first} is the back of a sheet, and a duplex reprint "
-            "cannot start on a back: CUPS lays out whatever range it is "
-            "given from scratch, so every back would print as a front and "
+            f"Page {first} is the back of a sheet, and a duplex reprint\n"
+            "cannot start on a back: CUPS lays out whatever range it is\n"
+            "given from scratch, so every back would print as a front, and\n"
             "the rest of the packet would come out inside-out.\n"
-            f"Start on an odd side instead - --pages {first - 1}-{last} "
+            f"Start on an odd side instead - --pages {first - 1}-{last}\n"
             "reprints one sheet you already have and gets the rest right."
         )
     return Pages(first=first, last=last)
@@ -144,7 +145,7 @@ def pages_after_cell(cell: int, cells_per_side: int, total: int, duplex: str) ->
     first = resume_after_cell(cell, cells_per_side, duplex)
     if first > total:
         raise ReprintError(
-            f"Cell {cell} is past the end of this packet, which has only "
+            f"Cell {cell} is past the end of this packet, which has only\n"
             f"{total} sides - {total * cells_per_side} cells at "
             f"{cells_per_side} to a side."
         )

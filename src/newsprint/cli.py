@@ -1452,13 +1452,13 @@ def main(
     """Print this week's starred newsletters, four to a side, duplex."""
     if reprint_from is None and (pages_text or after_cell is not None):
         raise click.ClickException(
-            "--pages and --after-cell say which part of a packet to print "
+            "--pages and --after-cell say which part of a packet to print\n"
             "again, so they need --reprint-from to say which packet."
         )
     if pages_text and after_cell is not None:
         raise click.ClickException(
-            "--pages and --after-cell both say where to start printing; pass "
-            "one or the other."
+            "--pages and --after-cell both say where to start printing.\n"
+            "Pass one or the other."
         )
     if setup_mode:
         run_setup(config_path)
