@@ -12,6 +12,8 @@ import pytest
 from newsprint.reprint import (
     Pages,
     ReprintError,
+    describe,
+    pages_after_cell,
     parse_pages,
     resume_after_cell,
     resume_at,
@@ -201,3 +203,51 @@ def test_short_edge_duplex_refuses_an_even_first_page_too() -> None:
 
 def test_an_even_first_page_is_fine_on_a_one_sided_job() -> None:
     assert parse_pages("38-72", 72, SIMPLEX) == Pages(38, 72)
+
+
+# pages_after_cell: the range, checked against the packet it came from.
+
+
+def test_the_cell_144_incident_as_a_range() -> None:
+    assert pages_after_cell(144, 4, 72, DUPLEX) == Pages(37, 72)
+
+
+def test_a_cell_in_the_last_side_still_reprints_its_sheet() -> None:
+    # 287 cells is the whole packet; the last side was interrupted, so
+    # sheet 36 - sides 71 and 72 - goes again.
+    assert pages_after_cell(286, 4, 72, DUPLEX) == Pages(71, 72)
+
+
+def test_a_cell_number_past_the_end_of_the_packet_is_refused() -> None:
+    # A mistyped cell number must not become a range CUPS is entitled to
+    # read as the whole document.
+    with pytest.raises(ReprintError, match="past the end"):
+        pages_after_cell(2870, 4, 72, DUPLEX)
+
+
+def test_the_refusal_says_how_many_cells_the_packet_holds() -> None:
+    with pytest.raises(ReprintError, match="288 cells"):
+        pages_after_cell(2870, 4, 72, DUPLEX)
+
+
+def test_the_last_cell_of_the_packet_leaves_nothing_to_reprint() -> None:
+    # 288 cells at four a side is exactly 72 sides, so there is no side
+    # left - the range would start at 73.
+    with pytest.raises(ReprintError, match="past the end"):
+        pages_after_cell(288, 4, 72, DUPLEX)
+
+
+def test_a_reprint_is_described_in_sides_and_sheets() -> None:
+    assert describe(Pages(37, 72), 72, DUPLEX) == (
+        "Sides 37-72 of 72 - 36 sides on 18 sheets."
+    )
+
+
+def test_a_single_side_is_described_in_the_singular() -> None:
+    assert describe(Pages(1, 1), 1, DUPLEX) == "Sides 1-1 of 1 - 1 side on 1 sheet."
+
+
+def test_one_sided_sheets_are_counted_as_sides() -> None:
+    assert describe(Pages(37, 72), 72, SIMPLEX) == (
+        "Sides 37-72 of 72 - 36 sides on 36 sheets."
+    )

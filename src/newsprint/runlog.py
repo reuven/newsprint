@@ -9,6 +9,8 @@ recovered by hand.
 """
 
 import json
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -30,6 +32,61 @@ def record(entry: dict[str, Any], state_dir: Path | None = None) -> Path:
     path = directory / f"{stamp}.json"
     path.write_text(json.dumps(payload, indent=2, default=str))
     return path
+
+
+@dataclass(frozen=True, slots=True)
+class Message:
+    """A message a run is holding: its Message-ID and its uid in a folder.
+
+    The three travel together because a uid is issued by a folder and
+    means nothing outside it - uid 4 in two folders is two different
+    messages - and because anything retiring from a record afterwards has
+    to prove it is looking at the right message before it touches it,
+    which takes the Message-ID.
+    """
+
+    identifier: str
+    uid: int
+    folder: str
+
+
+def as_records(messages: Sequence[Message]) -> list[dict[str, object]]:
+    """Messages as the log stores them, which is plain JSON objects."""
+    return [
+        {"identifier": message.identifier, "uid": message.uid, "folder": message.folder}
+        for message in messages
+    ]
+
+
+def messages_in(entry: dict[str, Any]) -> list[Message]:
+    """The folder-scoped mail an entry recorded, or nothing.
+
+    Nothing, specifically, for an entry written before this field existed
+    - which is every entry in the author's own log. Those carry a flat
+    `uids` list with no folder beside it, and inventing one here is
+    exactly the guess that moves the wrong mail, so the caller decides
+    whether a fallback is safe: only it knows how many folders the config
+    names.
+    """
+    found = entry.get("messages")
+    if not isinstance(found, list):
+        return []
+    return [
+        Message(identifier=item["identifier"], uid=item["uid"], folder=item["folder"])
+        for item in found
+        if isinstance(item, dict)
+        and isinstance(item.get("identifier"), str)
+        and isinstance(item.get("uid"), int)
+        and isinstance(item.get("folder"), str)
+    ]
+
+
+def by_folder(messages: Sequence[Message]) -> dict[str, list[int]]:
+    """uids grouped by the folder that issued them, in recorded order."""
+    grouped: dict[str, list[int]] = {}
+    for message in messages:
+        grouped.setdefault(message.folder, []).append(message.uid)
+    return grouped
 
 
 def _identifiers(value: Any) -> set[str]:

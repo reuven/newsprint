@@ -507,3 +507,62 @@ def test_a_damaged_retirement_does_not_settle_anything(tmp_path: Path) -> None:
     )
     (tmp_path / "zz-broken.json").write_text('{"outcome": "retired", "at": "nope"}')
     assert pending(tmp_path) == [["<a@x>"]]
+
+
+# --- the mail a record holds, with the folder each uid belongs to ---------
+
+
+def test_messages_round_trip_through_a_record(tmp_path: Path) -> None:
+    messages = [
+        runlog.Message(identifier="<a@x>", uid=4, folder="toprint"),
+        runlog.Message(identifier="<b@x>", uid=4, folder="INBOX"),
+    ]
+    path = runlog.record(
+        {"outcome": "printing", "messages": runlog.as_records(messages)},
+        state_dir=tmp_path,
+    )
+    assert runlog.messages_in(json.loads(path.read_text())) == messages
+
+
+def test_two_folders_can_hold_the_same_uid(tmp_path: Path) -> None:
+    """The whole reason the folder travels with the uid: these are two
+    different messages, and retiring uid 4 against one folder would move
+    the wrong one out of the other."""
+    messages = [
+        runlog.Message(identifier="<a@x>", uid=4, folder="toprint"),
+        runlog.Message(identifier="<b@x>", uid=4, folder="INBOX"),
+    ]
+    assert runlog.by_folder(messages) == {"toprint": [4], "INBOX": [4]}
+
+
+def test_uids_stay_in_the_order_they_were_recorded() -> None:
+    messages = [
+        runlog.Message(identifier="<a@x>", uid=9, folder="toprint"),
+        runlog.Message(identifier="<b@x>", uid=4, folder="toprint"),
+    ]
+    assert runlog.by_folder(messages) == {"toprint": [9, 4]}
+
+
+def test_an_older_record_names_no_folders() -> None:
+    """Every entry in the author's own log is this shape: a flat uids
+    list, with nothing saying which folder issued them. Inventing a
+    folder here is the guess that moves the wrong mail, so this returns
+    nothing and leaves the decision to a caller that knows how many
+    folders the config names."""
+    assert runlog.messages_in({"outcome": "printing", "uids": [4, 5]}) == []
+
+
+def test_a_damaged_messages_field_names_no_folders() -> None:
+    assert runlog.messages_in({"messages": "four"}) == []
+
+
+def test_an_incomplete_message_is_not_read_as_mail() -> None:
+    entry = {
+        "messages": [
+            {"identifier": "<a@x>", "uid": 4, "folder": "toprint"},
+            {"identifier": "<b@x>", "uid": None, "folder": "toprint"},
+        ]
+    }
+    assert runlog.messages_in(entry) == [
+        runlog.Message(identifier="<a@x>", uid=4, folder="toprint")
+    ]

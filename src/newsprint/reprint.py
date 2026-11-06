@@ -25,7 +25,7 @@ from it.
 import re
 from dataclasses import dataclass
 
-from .progress import is_duplex
+from .progress import is_duplex, sheets_for
 
 # One range, not lp's "1,3-5": a scattered list cannot be checked against
 # the sheet rule at all, since every piece of it would need its own.
@@ -132,3 +132,34 @@ def parse_pages(text: str, total: int, duplex: str) -> Pages:
             "reprints one sheet you already have and gets the rest right."
         )
     return Pages(first=first, last=last)
+
+
+def pages_after_cell(cell: int, cells_per_side: int, total: int, duplex: str) -> Pages:
+    """The range that finishes a `total`-side packet, given the last cell.
+
+    Checked against the packet because a mistyped cell number is easy and
+    the consequence is not: a range starting past the end is one CUPS is
+    entitled to read as the whole document.
+    """
+    first = resume_after_cell(cell, cells_per_side, duplex)
+    if first > total:
+        raise ReprintError(
+            f"Cell {cell} is past the end of this packet, which has only "
+            f"{total} sides - {total * cells_per_side} cells at "
+            f"{cells_per_side} to a side."
+        )
+    return Pages(first=first, last=total)
+
+
+def describe(pages: Pages, total: int, duplex: str) -> str:
+    """One line for what a reprint is about to put on paper.
+
+    In sides and sheets both, because the range is in sides and the tray
+    is in sheets, and the reader is about to count the tray.
+    """
+    sheets = sheets_for(pages.count, duplex)
+    return (
+        f"Sides {pages} of {total} - "
+        f"{pages.count} {'side' if pages.count == 1 else 'sides'} on "
+        f"{sheets} {'sheet' if sheets == 1 else 'sheets'}."
+    )
